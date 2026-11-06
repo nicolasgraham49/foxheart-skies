@@ -1,0 +1,358 @@
+// People mesh builder: turns the sculpted SDF anatomy into skinned LOD layers (body, head, hands, eyes,
+// layered garments, shoes, hair styles, beards, accessories and props). Built once, cached per quality.
+import * as THREE from 'three';
+import { P, Shape, polygonize, axis, clip, hem, merge, offset, setAttr, bakeAO, bakeCurv, morph, skinWeights, constWeights, ensure, vcount, field, transform } from './ppl-sdf.js';
+import { B, NB, J, LM, HF, EO, lidUp, lidLo, bodyPrims, headPrims, handPrims, craniumPrims, eyeOpening, headSide, ARM, LEG, nrm, sub, add, mul, dot, cross, lerp, mx } from './ppl-body.js';
+
+const ATTRS = [['skinIndex', 4], ['skinWeight', 4], ['aM0', 3], ['aM1', 3], ['aM2', 3], ['aAO', 1], ['aReg', 4], ['aExt', 4], ['uv', 2]];
+const ramp = (x, a, b, fine, coarse, k = 0.3) => { const d = x < a ? a - x : x > b ? x - b : 0; return Math.min(coarse, fine + d * k); };
+const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+function toGeo(m) {
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(m.P, 3)); g.setAttribute('normal', new THREE.BufferAttribute(m.N, 3));
+  for (const [k, s] of ATTRS) { const name = k === 'aAO' ? 'ao' : k; const a = m.A[name]; g.setAttribute(k, new THREE.BufferAttribute(a ? a.data : new Float32Array(vcount(m) * s).fill(k === 'aAO' ? 1 : 0), s)); }
+  g.setIndex(new THREE.BufferAttribute(vcount(m) > 65535 ? m.I : new Uint16Array(m.I), 1)); g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 1, 0), 2); return g;
+}
+const bonesOf = (m, i) => { const SI = m.A.skinIndex.data, SW = m.A.skinWeight.data; return [0, 1, 2, 3].map(c => [SI[i * 4 + c], SW[i * 4 + c]]); };
+function boneSum(m, i, set) { let s = 0; for (const [b, w] of bonesOf(m, i)) if (set.has(b)) s += w; return s; }
+const ARMB = new Set([B.armL, B.foreL, B.handL, B.fingL, B.armR, B.foreR, B.handR, B.fingR]), LEGB = new Set([B.thighL, B.shinL, B.footL, B.thighR, B.shinR, B.footR]);
+// neck holes (positive inside the hole)
+export function crewHole(x, y, z, big = 0) { const r = Math.hypot(x / (0.083 + big), (z + 0.012) / (0.074 + big * 0.6)); const fr = sstep(-0.01, 0.05, z), bk = sstep(-0.01, -0.07, z); return Math.min((1 - r) * 0.08, y - (1.452 - 0.014 * fr + 0.01 * bk - big * 0.15)); } // bodies pass: fr/bk were piecewise-linear — their slope kinks sat right where the cut crosses the clavicle/trapezius, printing a scalloped collar edge; same endpoints, smooth ramps
+export function vHole(x, y, z) { return Math.max(crewHole(x, y, z, 0.012), Math.min(z + 0.02, (y - 1.255) * 0.42 - Math.abs(x))); }
+function regionBody(m) { // aReg = (arm t, leg t, crew hole, v hole) from bind position + weights
+  return setAttr(m, 'aReg', 4, (x, y, z, i, o) => { const p = [x, y, z]; const aw = boneSum(m, i, ARMB), lw = boneSum(m, i, LEGB);
+    o[0] = -0.12 + (ARM(p) + 0.12) * sstep(0.3, 0.7, aw); o[1] = -0.12 + (LEG(p) + 0.12) * sstep(0.3, 0.7, lw); o[2] = crewHole(x, y, z); o[3] = vHole(x, y, z); }); }
+
+// ---------------------------------------------------------------- shapes (cached)
+let SH = null;
+function shapes() { if (SH) return SH; const body = bodyPrims({}), head = headPrims({}), hands = [...handPrims(-1), ...handPrims(1)];
+  SH = { body, head, hands, sBody: new Shape(body), sHead: new Shape(head), sHands: new Shape(hands), all: new Shape([...body, ...head.filter(p => !['neck', 'trap', 'clav'].includes(p.tag)), ...hands]),
+    fBody: new Shape(bodyPrims({ fem: 1 })).fn, hBody: new Shape(bodyPrims({ heavy: 1 })).fn, fHead: new Shape(headPrims({ fem: 1 })).fn, wHead: new Shape(headPrims({ wide: 1 })).fn, nHead: new Shape(headPrims({ nose: 1 })).fn,
+    fHands: new Shape([...handPrims(-1, { fem: 1 }), ...handPrims(1, { fem: 1 })]).fn, hHands: new Shape([...handPrims(-1, { heavy: 1 }), ...handPrims(1, { heavy: 1 })]).fn };
+  SH.fAll = (x, y, z) => { let d = SH.sBody.eval(x, y, z); for (const s of [SH.sHead, SH.sHands]) if (s.bound(x, y, z) < d) d = Math.min(d, s.eval(x, y, z)); return d; }; return SH; }
+const AO_BODY = { steps: [[0.015, 1], [0.04, 0.7], [0.09, 0.4], [0.16, 0.2]], k: 1.5 };
+const AO_FACE = { steps: [[0.003, 1], [0.008, 0.8], [0.018, 0.5], [0.04, 0.3]], k: 1.6 };
+// wrist cut: >0 keeps the forearm side (only near the forearm axis)
+function wristKeep(x, y, z) { const s = x < 0 ? -1 : 1, W = mx(s, LM.WR), A = mx(s, nrm(sub(LM.WR, LM.EL))); const d = [x - W[0], y - W[1], z - W[2]], u = dot(d, A); const rad = Math.hypot(d[0] - A[0] * u, d[1] - A[1] * u, d[2] - A[2] * u); return Math.max(-0.03 - u, rad - 0.055); }
+
+// ---------------------------------------------------------------- body
+// bodies pass: bakeAO can floor a SINGLE vertex where its sample ray dives into a neighbouring prim at a tight
+// blend junction (forearm farm/fmus/wrist, palm box/thenar/wrist cone) — the vertex shades as a black diamond/disc
+// on otherwise clean skin or cloth. Reject only outliers: a vertex far darker than its ring of neighbours is pulled
+// up toward them; broad genuine AO (armpit, crotch, under-bust) has dark neighbours too and is untouched.
+function aoDenoise(m) { const A = m.A && m.A.ao; if (!A) return m; const n = vcount(m), d = A.data, nb = Array.from({ length: n }, () => []);
+  for (let t = 0; t < m.I.length; t += 3) { const a = m.I[t], b = m.I[t + 1], c = m.I[t + 2]; nb[a].push(b, c); nb[b].push(a, c); nb[c].push(a, b); }
+  const out = new Float32Array(d);
+  for (let i = 0; i < n; i++) { if (!nb[i].length) continue; let s = 0; for (const j of nb[i]) s += d[j]; const avg = s / nb[i].length; if (d[i] < avg * 0.55) out[i] = Math.min(avg, d[i] + (avg - d[i]) * 0.85); }
+  A.data.set(out); return m; }
+function bodyMesh(h) { const S = shapes();
+  let m = polygonize(S.sBody.fn, [-0.34, 0.055, -0.2, 0.34, 1.545, 0.21], h);
+  m = clip(m, (x, y, z) => Math.min(0.0012 - headSide(x, y, z), y - 0.07, wristKeep(x, y, z) + 0.003)); // v2b: narrower head/body overlap band (the coincident surfaces z-fought as a dashed seam)
+  skinWeights(m, S.body, { nbones: NB, tau: 0.012 }); bakeAO(m, S.fAll, AO_BODY); aoDenoise(m); morph(m, S.fBody, 'aM0'); morph(m, S.hBody, 'aM1'); regionBody(m);
+  tuck(m, (x, y, z) => 0.0026 * Math.max(sstep(-0.006, 0.003, headSide(x, y, z)), sstep(-0.006, 0.003, -wristKeep(x, y, z)))); return m; }
+function tuck(m, fn) { for (let i = 0; i < vcount(m); i++) { const k = fn(m.P[i * 3], m.P[i * 3 + 1], m.P[i * 3 + 2]); if (k > 0) for (let c = 0; c < 3; c++) m.P[i * 3 + c] -= m.N[i * 3 + c] * k; } }
+function figureMesh(h) { // LOD2: whole figure (body + head + hands + feet), clothes painted in the shader
+  const S = shapes(); const prims = [...S.body, ...S.head.filter(p => !['neck', 'trap', 'clav'].includes(p.tag) && !p.sub), ...S.hands]; const sh = new Shape(prims);
+  const m = polygonize(sh.fn, [-0.36, -0.01, -0.2, 0.36, 1.79, 0.2], h);
+  skinWeights(m, prims, { nbones: NB, tau: 0.016 }); bakeAO(m, sh.fn, AO_BODY); aoDenoise(m); morph(m, S.fBody, 'aM0', { mask: (x, y) => y < 1.48 ? 1 : 0 }); morph(m, S.hBody, 'aM1', { mask: (x, y) => y < 1.48 ? 1 : 0 }); regionBody(m);
+  setAttr(m, 'uv', 2, (x, y, z, i, o) => { o[0] = 0.5 + x / 0.2; o[1] = (y - 1.49) / 0.29; }); return m; }
+function headMesh(fine, coarse) { const S = shapes();
+  const ef = Math.min(fine, 0.0032), xs = axis(-0.11, 0.11, x => ramp(Math.abs(x), 0, 0.075, Math.abs(x) < 0.05 ? Math.max(ef, fine * 0.7) : fine, coarse * 0.85)), ys = axis(1.476, 1.775, y => y > 1.62 && y < 1.664 ? ef : ramp(y, 1.55, 1.70, fine, coarse)), zs = axis(-0.13, 0.125, z => z > 0.05 ? Math.max(ef, fine * 0.7) : ramp(z, -0.035, 0.2, fine, coarse));
+  let m = polygonize(S.sHead.fn, null, fine, { xs, ys, zs });
+  ensure(m, 'hem', 1, 0); m = clip(m, eyeOpening); m = hem(m, 0.0026, { round: 0.12, attr: (k, c, v, inner) => k === 'hem' ? (inner ? 1 : 0.5) : v });
+  m = clip(m, (x, y, z) => headSide(x, y, z) + 0.0008); // v2b: narrower overlap band (see bodyMesh)
+  skinWeights(m, S.head, { nbones: NB, tau: 0.01 }); bakeAO(m, S.sHead.fn, AO_FACE); { const a = m.A.ao.data, b = bakeAO({ P: m.P, N: m.N, A: {} }, S.fAll, AO_BODY).A.ao.data; for (let i = 0; i < a.length; i++) { const k = sstep(1.5, 1.545, m.P[i * 3 + 1]); a[i] = (1 + (a[i] - 1) * k) * b[i]; } }
+  morph(m, S.fHead, 'aM0', { max: 0.02 }); morph(m, S.wHead, 'aM1', { max: 0.02 }); morph(m, S.nHead, 'aM2', { max: 0.02 });
+  setAttr(m, 'uv', 2, (x, y, z, i, o) => { o[0] = 0.5 + x / 0.2; o[1] = (y - 1.49) / 0.29; });
+  tuck(m, (x, y, z) => 0.0012 * sstep(0.003, -0.003, headSide(x, y, z)));
+  const hm = m.A.hem.data; setAttr(m, 'aReg', 4, (x, y, z, i, o) => { o[0] = hm[i]; o[1] = scalpMask(x, y, z); o[2] = beardMask(x, y, z); o[3] = 0; });
+  const cv = bakeCurv(m, S.sHead.fn); setAttr(m, 'aExt', 4, (x, y, z, i, o) => { o[0] = cv[i]; o[1] = o[2] = o[3] = 0; }); return m; }
+export function scalpMask(x, y, z) { const th = Math.atan2(x, z + 0.01); const a = Math.abs(th); const yl = a < 0.6 ? 1.703 - a * 0.012 : a < 1.3 ? 1.696 - (a - 0.6) * 0.09 : a < 2.0 ? 1.633 - (a - 1.3) * 0.02 : 1.619 - (a - 2.0) * 0.035;
+  let v = sstep(-0.004, 0.006, y - yl); const ear = Math.hypot((Math.abs(x) - 0.078) * 0.6, y - 1.636, z + 0.012) - 0.031; v *= sstep(-0.004, 0.006, ear); return v; }
+export function beardMask(x, y, z) { if (z < -0.02) return 0; const th = Math.atan2(x, z + 0.01), a = Math.abs(th); let v = sstep(1.64, 1.615, y) * sstep(1.45, 0.9, a) * sstep(-0.015, 0.01, z);
+  const lip = Math.hypot(x / 0.027, (y - 1.582) / 0.011); v *= sstep(0.95, 1.25, lip); const sideburn = sstep(1.62, 1.6, y) ? 0 : 0; return Math.min(1, v + sideburn); } // v3: lip exclusion follows the raised mouth
+const palmMask = (x, y, z) => { const d = Math.hypot(Math.abs(x) - 0.2875, y - 0.84, z - 0.006); return Math.min(1, Math.max(0, (d - 0.014) / 0.02)); }; // 0 at the palm centre, 1 beyond ~34 mm
+function handsMesh(h) { const S = shapes();
+  let m = polygonize(S.sHands.fn, [-0.37, 0.69, -0.09, 0.37, 0.96, 0.12], h, { xs: axis(-0.37, 0.37, x => Math.abs(x) < 0.21 ? 0.03 : h) });
+  m = clip(m, (x, y, z) => -wristKeep(x, y, z) + 0.003);
+  tuck(m, (x, y, z) => 0.0012 * sstep(0.003, -0.003, -wristKeep(x, y, z))); skinWeights(m, S.hands, { nbones: NB, tau: 0.006 }); bakeAO(m, S.sHands.fn, { steps: [[0.004, 1], [0.01, 0.7], [0.025, 0.4], [0.06, 0.2]], k: 1.3 }); aoDenoise(m); morph(m, S.fHands, 'aM0', { max: 0.01, mask: palmMask }); morph(m, S.hHands, 'aM1', { max: 0.01, mask: palmMask }); // bodies pass ii: hands bake against the hands shape only — against fAll, the palm centre sampled the thigh it hangs beside in bind pose and baked a permanent dark disc onto every palm. pass iii: morphs masked out at the palm centre — the fem/heavy projection saddles there and could dent a palm vertex into a speck
+  const cv = bakeCurv(m, S.sHands.fn, { eps: 0.003 }); setAttr(m, 'aExt', 4, (x, y, z, i, o) => { o[0] = cv[i]; o[1] = o[2] = o[3] = 0; }); return m; }
+
+// ---------------------------------------------------------------- eyes: eyeballs + blink lids (aReg.x: 0 eyeball, 1 lid; aReg.y side)
+// aReg.x kind: 0 eyeball (gaze-rotated), 1 blink lid (rotates down about the eye's x axis), 2 upper lashes (ride on the lid), 3 lower lashes, 4 corner filler
+// (static conjunctiva/caruncle that fills the fissure corners beyond the eyeball). uv: lid/lash coordinates (u along the lid, v from the margin).
+function eyesMesh(seg, lashes = true) { const parts = [], R = LM.EYER, RS = R + EO.LID, RI = R + 0.0003, RO = R + 0.001, LXB = 1.12, Sh = shapes().sHead;
+  const rho = (r, lx, k = EO.LX) => r * Math.sqrt(Math.max(0.04, 1 - (lx / (r * k)) ** 2)); // radius of the x-slice of an x-stretched ellipsoid (revolution about x)
+  const elev = (y, lx) => { const rs = rho(RS, lx); return Math.atan2(y, Math.sqrt(Math.max(1e-10, rs * rs - y * y))); };
+  const grid = (nu, nv, f, kind, s) => { const P = [], N = [], U = [], I = []; // f(u, v) → [lx, y, z, nx, ny, nz, v]
+    for (let j = 0; j <= nv; j++) for (let i = 0; i <= nu; i++) { const o = f(i / nu, j / nv); P.push(s * o[0], o[1], o[2]); const l = Math.hypot(o[3], o[4], o[5]) || 1; N.push(s * o[3] / l, o[4] / l, o[5] / l); U.push(i / nu, o[6] ?? j / nv); }
+    for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const a = j * (nu + 1) + i, b = a + 1, c = a + nu + 1, d = c + 1; if (s > 0) I.push(a, c, b, b, c, d); else I.push(a, b, c, b, d, c); }
+    const n = P.length / 3; return { P: new Float32Array(P), N: new Float32Array(N), I: new Uint32Array(I), A: { aReg: { data: new Float32Array(Array.from({ length: n }, () => [kind, s, 0, 0]).flat()), size: 4 }, uv: { data: new Float32Array(U), size: 2 } } }; };
+  const at = (r, lx, e, k = EO.LX) => { const rh = rho(r, lx, k); return [lx, rh * Math.sin(e), rh * Math.cos(e), lx / (k * k), rh * Math.sin(e), rh * Math.cos(e)]; };
+  for (const s of [-1, 1]) { const c = mx(s, LM.EYE), off = m => { for (let i = 0; i < m.P.length; i += 3) { m.P[i] += c[0]; m.P[i + 1] += c[1]; m.P[i + 2] += c[2]; } return m; };
+    const skinR = (lx, e) => { let r = 0.024; const rh = k => Math.sqrt(Math.max(0.04, 1 - (lx / (k * EO.LX)) ** 2)); while (r > R && Sh.eval(c[0] + s * lx, c[1] + r * rh(r) * Math.sin(e), c[2] + r * rh(r) * Math.cos(e)) > 0) r -= 0.0002; return r; };
+    const eb = new THREE.SphereGeometry(R, seg, Math.round(seg * 0.75)).rotateX(Math.PI / 2); // pole forward (+z) for clean iris rings
+    parts.push(fromThree(eb, (p, n) => { p[0] += c[0]; p[1] += c[1]; p[2] += c[2]; }, [0, s]));
+    const fl = new THREE.SphereGeometry(1, Math.max(8, seg), Math.max(6, Math.round(seg * 0.6)), 0, Math.PI * 2, 0, Math.PI * 0.62).rotateX(Math.PI / 2); // front cap only
+    parts.push(fromThree(fl, (p, n) => { p[0] = p[0] * R * 1.17 + c[0]; p[1] = p[1] * R * 0.955 + c[1]; p[2] = p[2] * R * 0.955 + c[2]; n[0] /= 1.225; }, [4, s]));
+    const nu = Math.max(8, Math.round(seg * 0.9)), lxOf = u => EO.C0 + (u * 2 - 1) * (EO.W + 0.0004);
+    // blink lid: a 1 mm margin band (inner edge on the eyeball) then the lid surface; at rest the margin sits just above (behind) the skin lid margin,
+    // the shader rotates it down by closure * EO.CLOSE. v: 0 inner margin, 0.04 outer margin, 1 top.
+    parts.push(off(grid(nu, 6, (u, v) => { const lx = lxOf(u), e0 = elev(lidUp(lx), lx) + 0.035;
+      if (v === 0) { const o = at(RI, lx, e0, LXB); return [o[0], o[1], o[2], 0, -Math.sin(e0) * 0.6 - 0.4, Math.cos(e0) * 0.2, 0]; }
+      const e = e0 + 0.01 + (v - 1 / 6) * 1.5; return [...at(RO, lx, e, LXB), 0.04 + (v - 1 / 6) * 1.15]; }, 1, s)));
+    if (lashes) { const nl = 22;
+      // upper lashes ride on the lid (rotate with it), rooted on its outer margin: mostly forward, curling up; longer and denser at the outer third
+      parts.push(off(grid(nl, 3, (u, v) => { const lx = EO.C0 - EO.W * 0.94 + 1.88 * EO.W * u, e = elev(lidUp(lx), lx) + 0.045, t = (lx - EO.C0) / EO.W, L = (0.0048 + 0.0028 * Math.max(0, Math.min(1, (t + 0.2) / 0.9))) * Math.pow(Math.max(0, 1 - t * t), 0.3);
+        const r0 = at(RO + 0.0003, lx, e, LXB), ln = Math.hypot(r0[3], r0[4], r0[5]), n = [r0[3] / ln, r0[4] / ln, r0[5] / ln], f = [n[0] * 0.35, n[1] * 0.35, n[2] * 0.35 + 0.65], fl = Math.hypot(...f);
+        const out = L * 0.85 * v, up = L * 0.5 * v * v; return [r0[0] + f[0] / fl * out, r0[1] + f[1] / fl * out + up, r0[2] + f[2] / fl * out, 0, -0.3, 1]; }, 2, s)));
+      // lower lashes: static, rooted on the skin's lower lid margin, short and sparse, forward and down
+      parts.push(off(grid(nl, 1, (u, v) => { const lx = EO.C0 - EO.W * 0.8 + 1.6 * EO.W * u, t = (lx - EO.C0) / EO.W, e = elev(lidLo(lx), lx) - 0.03, L = 0.0026 * Math.pow(Math.max(0, 1 - t * t), 0.4);
+        const r = skinR(lx, e) - 0.0004, r0 = at(r, lx, e); return [r0[0], r0[1] - L * 0.45 * v, r0[2] + L * 0.85 * v, 0, -0.2, 1]; }, 3, s))); }
+  }
+  const m = merge(parts); constWeights(m, B.head); return m; }
+function fromThree(g, tf, reg = [0, 0, 0, 0], ext) { const gi = g.index ? g : g; const P0 = g.attributes.position, N0 = g.attributes.normal, n = P0.count; const Pp = new Float32Array(n * 3), Nn = new Float32Array(n * 3), R = new Float32Array(n * 4), U = new Float32Array(n * 2);
+  const p = [0, 0, 0], q = [0, 0, 0]; for (let i = 0; i < n; i++) { p[0] = P0.getX(i); p[1] = P0.getY(i); p[2] = P0.getZ(i); q[0] = N0.getX(i); q[1] = N0.getY(i); q[2] = N0.getZ(i); const rr = typeof reg === 'function' ? reg(p, q) : reg; tf && tf(p, q); Pp.set(p, i * 3); Nn.set(q, i * 3); R.set([rr[0] || 0, rr[1] || 0, rr[2] || 0, rr[3] || 0], i * 4); if (g.attributes.uv) U.set([g.attributes.uv.getX(i), g.attributes.uv.getY(i)], i * 2); }
+  const I = g.index ? new Uint32Array(g.index.array) : new Uint32Array(Array.from({ length: n }, (_, i) => i));
+  return { P: Pp, N: Nn, I, A: { aReg: { data: R, size: 4 }, uv: { data: U, size: 2 } } }; }
+
+// ---------------------------------------------------------------- garments (shells of the body mesh)
+// slot ids for the cloth shader: 0 top, 1 bottom, 2 shoe upper, 3 sole, 4 accent (tie/scarf), 5 shirt, 6 hat, 7 prop A, 8 prop B, 9 hi-vis
+function shellSmooth(m, keep) { const n = vcount(m), nb = Array.from({ length: n }, () => []); // bodies pass ii: Taubin pair weighted by the keep field — full strength in open panels, zero within 25 mm of any cut
+  for (let t = 0; t < m.I.length; t += 3) { const a = m.I[t], b = m.I[t + 1], c = m.I[t + 2]; nb[a].push(b, c); nb[b].push(a, c); nb[c].push(a, b); }
+  const P = m.P, tmp = new Float32Array(P.length);
+  for (let it = 0; it < 2; it++) { const f = it % 2 ? -0.34 : 0.32;
+    for (let i = 0; i < n; i++) { const w = Math.max(0, Math.min(1, keep[i] / 0.025)); if (!nb[i].length || !w) { tmp.set([P[i * 3], P[i * 3 + 1], P[i * 3 + 2]], i * 3); continue; }
+      let sx = 0, sy = 0, sz = 0; for (const j of nb[i]) { sx += P[j * 3]; sy += P[j * 3 + 1]; sz += P[j * 3 + 2]; }
+      const c = nb[i].length, g = f * w; tmp[i * 3] = P[i * 3] + g * (sx / c - P[i * 3]); tmp[i * 3 + 1] = P[i * 3 + 1] + g * (sy / c - P[i * 3 + 1]); tmp[i * 3 + 2] = P[i * 3 + 2] + g * (sz / c - P[i * 3 + 2]); }
+    P.set(tmp); } return m; }
+function shell(bm, o) { const R = bm.A.aReg.data;
+  let m = offset(bm, (x, y, z, i) => o.off(x, y, z, R[i * 4], R[i * 4 + 1]));
+  const keep = field(m, (x, y, z, i) => o.keep(x, y, z, R[i * 4], R[i * 4 + 1], R[i * 4 + 2], R[i * 4 + 3]));
+  shellSmooth(m, keep); // bodies pass: shells displaced along the coarse body mesh's wobbling vertex normals were the ruching at collars and scallops at hems; the first cut smoothed everywhere and dipped edges at the neck/V cuts, letting the layer beneath spike through — hence the keep weighting
+  { const SI = m.A.skinIndex.data; for (let i = 0; i < SI.length; i++) if ((SI[i] === B.thighL || SI[i] === B.thighR) && (o.top || m.P[(i >> 2) * 3 + 1] > 0.905)) SI[i] = B.pelvis; } // tops / waistbands hang from the hips, not the thighs
+  ensure(m, 'hem', 1, 0); setAttr(m, 'edge', 1, (x, y, z, i, out) => { out[0] = keep[i]; });
+  m = clip(m, keep); m = hem(m, o.hemDepth || 0.01, { round: 0.22, attr: (k, c, v, inner) => k === 'hem' ? (inner ? 1 : 0.6) : k === 'edge' ? 0 : v }); // bodies pass: rounder→0.22, the 0.3 roll piped every opening edge like a stuffed tube
+  const H = m.A.hem.data, E = m.A.edge.data; const R2 = m.A.aReg.data;
+  setAttr(m, 'aExt', 4, (x, y, z, i, out) => { out[0] = o.slot; out[1] = H[i]; out[2] = E[i]; out[3] = o.kind || 0; });
+  setAttr(m, 'aReg', 4, (x, y, z, i, out) => { out[0] = R2[i * 4]; out[1] = R2[i * 4 + 1]; out[2] = R2[i * 4 + 2]; out[3] = R2[i * 4 + 3]; });
+  bakeAO(m, shapes().fAll, { steps: [[0.025, 1], [0.06, 0.6], [0.12, 0.3]], k: 0.9 }); aoDenoise(m); return m; }
+const TOPS = {
+  tee: { off: (x, y, z, a) => 0.0085 + (a > 0 ? 0.004 * sstep(0, 0.15, a) : 0) + sstep(1.0, 0.86, y) * 0.0035 + sstep(1.05, 0.95, y) * 0.0025 + 0.08 * Math.max(0, y - 1.40), keep: (x, y, z, a, l, c) => Math.min(0.175 - a, y - 0.885, -crewHole(x, y, z, -0.004)), hemDepth: 0.0065 }, // bodies pass ii: +2.5 mm through the waist overlap (tee and trousers shells were near-coplanar at the belt line and the dark belt showed through in a wavy band) and a neck lift so the shell clears the clavicle hollow instead of letting skin slit through at the collar sides. pass iii: neckline cut tightened (big −0.004) — the sliver of shell between the neck and sleeve cuts could tear open under morph displacement, leaving a skin diamond at the shoulder point
+  long: { off: (x, y, z, a) => 0.009 + (a > 0 ? 0.004 : 0) + sstep(1.0, 0.86, y) * 0.0035 + sstep(1.05, 0.95, y) * 0.0025 + 0.08 * Math.max(0, y - 1.40), keep: (x, y, z, a, l, c) => Math.min(0.5 - a, y - 0.88, -crewHole(x, y, z, -0.004)), hemDepth: 0.0065 },
+  jacket: { off: (x, y, z, a) => 0.011 + (a > 0 ? 0.002 : 0) + sstep(1.0, 0.8, y) * 0.0035 + 0.08 * Math.max(0, y - 1.40), keep: (x, y, z, a, l, c, v) => Math.min(0.505 - a, y - 0.775, -v), hemDepth: 0.009 },
+  hoodie: { off: (x, y, z, a) => 0.016 + (a > 0 ? 0.006 * sstep(0.1, 0.45, a) : 0) + 0.05 * Math.max(0, y - 1.40), keep: (x, y, z, a, l, c) => Math.min(0.495 - a, y - 0.86, -crewHole(x, y, z, -0.006)), hemDepth: 0.010 },
+  vest: { off: () => 0.024, keep: (x, y, z, a, l, c, v) => Math.min(-0.01 - a, y - 0.86, -v), hemDepth: 0.006 },
+};
+const BOTTOMS = {
+  trousers: { off: (x, y, z, a, l) => 0.009 + sstep(0.2, 0.83, l) * 0.009, keep: (x, y, z, a, l) => Math.min(1.0 - y, 0.822 - l, -0.02 - a), hemDepth: 0.012 },
+  jeans: { off: (x, y, z, a, l) => 0.007 + sstep(0.3, 0.83, l) * 0.005, keep: (x, y, z, a, l) => Math.min(0.985 - y, 0.82 - l, -0.02 - a), hemDepth: 0.009 },
+  shorts: { off: (x, y, z, a, l) => 0.01 + sstep(0.0, 0.3, l) * 0.012, keep: (x, y, z, a, l) => Math.min(0.99 - y, 0.31 - l, -0.02 - a), hemDepth: 0.012 },
+};
+function skirtMesh(h, len = 0.5) { // lofted skirt around a female body, flared, weights blend pelvis → thighs
+  const S = shapes(), fb = S.fBody, hv = new Shape(bodyPrims({ fem: 1, heavy: 1 })).fn; const yTop = 1.0, yBot = 1.0 - len; const rings = Math.max(6, Math.round(len / h)), segs = Math.max(16, Math.round(1.1 / h));
+  const radAt = (f, y, th) => { const dx = Math.sin(th), dz = Math.cos(th); let r = 0.02; for (let i = 0; i < 40 && r < 0.4; i++) { const d = f(dx * r, y, -0.01 + dz * r); if (d > 0) { r -= 0.004; for (let k = 0; k < 8; k++) { r += 0.0005; if (f(dx * r, y, -0.01 + dz * r) > 0) break; } return r; } r += Math.max(0.004, -d * 0.8); } return r; };
+  const Pp = [], Ii = [], M1 = []; const maxR = new Float32Array(segs);
+  for (let j = 0; j <= rings; j++) { const t = j / rings, y = yTop - len * t;
+    for (let i = 0; i < segs; i++) { const th = i / segs * Math.PI * 2; const woff = 0.004 + 0.008 * sstep(0.04, 0.30, t); let r = radAt(fb, y, th) + woff + t * t * 0.02; maxR[i] = Math.max(maxR[i] * (1 - 0.0), r); r = Math.max(r, maxR[i] - 0.004 * t) + Math.max(0, t - 0.15) * 0.07 * (0.75 + 0.25 * Math.cos(th)); const rh = radAt(hv, y, th) + woff + t * t * 0.02; // bodies pass: the waist used to sit at body+0.012 — OUTSIDE the tops (0.009–0.011) — so the skirt's top rings punched through the top in a jagged shell-intersection ring with a see-through slit; now it tucks UNDER the top (+0.004) and ramps out to full flare below the hem line
+      Pp.push(Math.sin(th) * r, y, -0.01 + Math.cos(th) * r + t * 0.012); M1.push(Math.sin(th) * Math.max(0, rh - r) * 0.8, 0, Math.cos(th) * Math.max(0, rh - r) * 0.8); } }
+  for (let j = 0; j < rings; j++) for (let i = 0; i < segs; i++) { const a = j * segs + i, b = j * segs + (i + 1) % segs, c = a + segs, d = b + segs; Ii.push(a, c, b, b, c, d); }
+  const n = Pp.length / 3, N = new Float32Array(n * 3);
+  for (let j = 0; j <= rings; j++) for (let i = 0; i < segs; i++) { const k = j * segs + i, l = j * segs + (i + 1) % segs, r = j * segs + (i + segs - 1) % segs, u = Math.max(0, j - 1) * segs + i, d = Math.min(rings, j + 1) * segs + i;
+    const tx = Pp[l * 3] - Pp[r * 3], ty = Pp[l * 3 + 1] - Pp[r * 3 + 1], tz = Pp[l * 3 + 2] - Pp[r * 3 + 2], vx = Pp[u * 3] - Pp[d * 3], vy = Pp[u * 3 + 1] - Pp[d * 3 + 1], vz = Pp[u * 3 + 2] - Pp[d * 3 + 2];
+    let nx = ty * vz - tz * vy, ny = tz * vx - tx * vz, nz = tx * vy - ty * vx; const L = Math.hypot(nx, ny, nz) || 1; N.set([-nx / L, -ny / L, -nz / L], k * 3); }
+  let m = { P: new Float32Array(Pp), N, I: new Uint32Array(Ii), A: { aM1: { data: new Float32Array(M1), size: 3 } } };
+  // fix outward normals
+  for (let i = 0; i < n; i++) if (N[i * 3] * Pp[i * 3] + N[i * 3 + 2] * (Pp[i * 3 + 2] + 0.01) < 0) { N[i * 3] *= -1; N[i * 3 + 1] *= -1; N[i * 3 + 2] *= -1; }
+  { let agree = 0; for (let t = 0; t < Ii.length; t += 3) { const a = Ii[t] * 3, b = Ii[t + 1] * 3, c = Ii[t + 2] * 3; const ux = Pp[b] - Pp[a], uy = Pp[b + 1] - Pp[a + 1], uz = Pp[b + 2] - Pp[a + 2], wx = Pp[c] - Pp[a], wy = Pp[c + 1] - Pp[a + 1], wz = Pp[c + 2] - Pp[a + 2]; const nx = uy * wz - uz * wy, nz = ux * wy - uy * wx; agree += (nx * Pp[a] + nz * (Pp[a + 2] + 0.01)) > 0 ? 1 : -1; } if (agree < 0) for (let t = 0; t < m.I.length; t += 3) { const x = m.I[t + 1]; m.I[t + 1] = m.I[t + 2]; m.I[t + 2] = x; } }
+  ensure(m, 'hem', 1, 0); m = hem(m, 0.008, { round: 0.22, attr: (k, c, v, inner) => k === 'hem' ? (inner ? 1 : 0.6) : v });
+  // weights
+  const SI = new Float32Array(vcount(m) * 4), SW = new Float32Array(vcount(m) * 4);
+  for (let i = 0; i < vcount(m); i++) { const x = m.P[i * 3], y = m.P[i * 3 + 1]; const down = sstep(0.95, 0.62, y) * 0.92, side = sstep(-0.07, 0.07, x); const wl = down * (1 - side), wr = down * side; SI.set([B.pelvis, B.thighL, B.thighR, B.spine], i * 4); SW.set([1 - down, wl, wr, 0], i * 4); }
+  m.A.skinIndex = { data: SI, size: 4 }; m.A.skinWeight = { data: SW, size: 4 };
+  const H = m.A.hem.data; setAttr(m, 'aExt', 4, (x, y, z, i, o) => { o[0] = 1; o[1] = H[i]; o[2] = 1; o[3] = 3; }); setAttr(m, 'aReg', 4, (x, y, z, i, o) => { o[0] = -0.1; o[1] = (1.0 - y) * 0.8; o[2] = -1; o[3] = -1; });
+  bakeAO(m, S.fAll, { steps: [[0.025, 1], [0.06, 0.6], [0.12, 0.3]], k: 0.6 }); aoDenoise(m); // (body is male here; mild)
+  return m; }
+function hoodMesh(h) { const S = shapes(); const sh = new Shape([P.ell([0, 1.47, -0.105], [0.11, 0.055, 0.06], { k: 0.04 }), ...[-1, 1].map(s => P.cap([s * 0.075, 1.46, -0.085], [s * 0.058, 1.435, 0.045], 0.020, { k: 0.04 })), P.ell([0, 1.43, -0.12], [0.08, 0.06, 0.045], { k: 0.03 })]); // bodies pass v: the drape capsules ended at (±0.06, 1.42, 0.06) with r 0.026 — two round "buttons" printed on the chest; ends raised/tucked and slimmed so the hood reads as a drape, not knobs
+  let m = polygonize(sh.fn, [-0.16, 1.32, -0.2, 0.16, 1.56, 0.12], h); m = clip(m, (x, y, z) => S.sBody.eval(x, y, z) - 0.014);
+  skinWeights(m, [P.fn(() => 0, [-1, -1, -1], [1, 1, 1], { bones: [[B.chest, 0.8], [B.neck, 0.2]] })], { nbones: NB }); setAttr(m, 'aExt', 4, (x, y, z, i, o) => { o[0] = 0; o[1] = 0; o[2] = 1; o[3] = 4; }); setAttr(m, 'aReg', 4, (x, y, z, i, o) => { o[0] = -0.1; o[1] = -0.1; o[2] = -1; o[3] = -1; });
+  bakeAO(m, (x, y, z) => Math.min(S.fAll(x, y, z), sh.eval(x, y, z)), { steps: [[0.01, 1], [0.03, 0.6], [0.06, 0.3]], k: 1.0 }); return m; }
+
+// ---------------------------------------------------------------- shoes (both feet)
+function shoeMesh(h, kind) { const L = [];
+  for (const s of [-1, 1]) { const S = s < 0 ? 'L' : 'R', fb = [[B['foot' + S], 1]], x = s * 0.103; const dress = kind === 'dress';
+    const soleH = dress ? 0.014 : 0.028, len = dress ? 0.135 : 0.13;
+    const foot = (px, pz) => { // 2D footprint (heel circle → forefoot circle)
+      const ax = x, az = -0.07, bx = x + s * 0.008, bz = 0.165, ra = 0.036, rb = dress ? 0.036 : 0.044; const ux = bx - ax, uz = bz - az, l = Math.hypot(ux, uz); const qx = px - ax, qz = pz - az; const t = Math.max(0, Math.min(1, (qx * ux + qz * uz) / (l * l))); const r = ra + (rb - ra) * t; let d = Math.hypot(qx - ux * t, qz - uz * t) - r;
+      if (dress) { const tip = Math.hypot(px - bx, pz - (bz + 0.03)) - 0.018; d = Math.min(d, tip + 0.005); } return d; };
+    L.push(P.fn((px, py, pz) => { const d2 = foot(px, pz), dy = Math.abs(py - soleH / 2) - soleH / 2; return Math.hypot(Math.max(d2, 0), Math.max(dy, 0)) + Math.min(Math.max(d2, dy), 0) - 0.003; }, [x - 0.07, -0.01, -0.12], [x + 0.07, soleH + 0.01, 0.24], { k: 0.004, bones: fb, tag: 'sole' }));
+    L.push(P.ell([x + s * 0.004, soleH + 0.022, 0.08], [0.043 - (dress ? 0.004 : 0), 0.03 - (dress ? 0.004 : 0), len * 0.75], { k: 0.02, bones: fb, tag: 'upper' }));
+    L.push(P.ell([x, soleH + 0.04, -0.035], [0.041, 0.05, 0.05], { k: 0.02, bones: fb, tag: 'heel' }));
+    L.push(P.cap([x, soleH + 0.03, -0.03], [x, dress ? 0.095 : 0.115, -0.022], dress ? 0.038 : 0.043, { k: 0.015, bones: [[B['foot' + S], 0.8], [B['shin' + S], 0.2]], tag: 'collar' }));
+    if (!dress) L.push(P.ell([x, soleH + 0.05, 0.035], [0.034, 0.025, 0.06], { k: 0.015, rot: [0.5, 0, 0], bones: fb, tag: 'tongue' }));
+  }
+  const sh = new Shape(L); let m = polygonize(sh.fn, [-0.18, -0.02, -0.13, 0.18, 0.15, 0.26], h); m = clip(m, (x, y, z) => (kind === 'dress' ? 0.088 : 0.108) - y + 0.0 * z);
+  skinWeights(m, L, { nbones: NB, tau: 0.01 }); ensure(m, 'hem', 1, 0); m = hem(m, 0.006, { round: 0.2, attr: (k, c, v, inner) => k === 'hem' ? 1 : v });
+  const soleH = kind === 'dress' ? 0.014 : 0.028, H = m.A.hem.data;
+  setAttr(m, 'aExt', 4, (x, y, z, i, o) => { o[0] = y < soleH + 0.003 ? 3 : 2; o[1] = H[i]; o[2] = 1; o[3] = kind === 'dress' ? 5 : 6; }); setAttr(m, 'aReg', 4, (x, y, z, i, o) => { o[0] = y; o[1] = z; o[2] = soleH; o[3] = 0; });
+  bakeAO(m, (x, y, z) => Math.min(sh.eval(x, y, z), y + 0.0), { steps: [[0.008, 1], [0.02, 0.6], [0.05, 0.3]], k: 0.9 }); return m; }
+
+// ---------------------------------------------------------------- hair: a sculpted base volume 1-1.5 cm off the skull (painted strand texture, soft hairline),
+// plus strand cards that follow the scalp curve (LOD0 25-60, LOD1 8-15). aExt = flow tangent xyz + edge (0 at the hairline); cards: aReg.x = 1, uv across / along.
+// cards: [count LOD0, count LOD1, length min, length max, width]
+const curl = (x, y, z, k) => Math.sin(x * k) * Math.sin(y * k * 0.96 + 1.3) * Math.sin(z * k * 1.04 + 0.7);
+const HAIR = {
+  short: { T: (x, y, z) => 0.0065 + 0.004 * sstep(1.66, 1.74, y), line: { front: 1.704 }, flow: (x, y, z) => [x * 0.3, -0.25, -1], cards: [30, 10, 0.045, 0.07, 0.02] }, // v3: thicker shells everywhere (clean solid silhouette)
+  side: { T: (x, y, z) => 0.0075 + 0.011 * sstep(1.66, 1.75, y) * sstep(-0.06, 0.06, z), line: { front: 1.708 }, flow: (x, y, z) => [x > 0.025 ? 1 : -0.6, -0.35, -0.35], extra: [P.ell([0.012, 1.733, 0.032], [0.058, 0.03, 0.062], { k: 0.03 })], cards: [36, 12, 0.06, 0.095, 0.022] },
+  long: { T: (x, y, z) => 0.0095 + 0.005 * sstep(1.65, 1.74, y), line: { front: 1.712, long: 1.40, ears: false }, flow: (x, y, z) => [Math.sign(x) * 0.5 * sstep(1.6, 1.75, y), -1, -0.2 * sstep(1.6, 1.74, y)],
+    extra: [P.box([0, 1.52, -0.1], [0.078, 0.14, 0.03], 0.026, { k: 0.06, rot: [0.12, 0, 0] }), ...[-1, 1].map(s => P.box([s * 0.076, 1.57, -0.02], [0.019, 0.1, 0.048], 0.016, { k: 0.04, rot: [0.0, 0, s * 0.06] }))], cards: [54, 14, 0.12, 0.3, 0.024] },
+  bob: { T: (x, y, z) => 0.0105 + 0.004 * sstep(1.65, 1.74, y), line: { front: 1.69, long: 1.565, ears: false, fringe: true }, flow: (x, y, z) => [Math.sign(x) * 0.3, -1, 0.15],
+    extra: [P.ell([0, 1.625, -0.028], [0.091, 0.07, 0.1], { k: 0.04 }), P.box([0, 1.7, 0.073], [0.058, 0.026, 0.017], 0.014, { k: 0.03, rot: [-0.5, 0, 0] })], cards: [48, 14, 0.08, 0.13, 0.024] },
+  pony: { T: (x, y, z) => 0.0072 + 0.002 * sstep(1.66, 1.74, y), line: { front: 1.71 }, flow: (x, y, z) => [x * 0.2, 0.15, -1], extra: [P.cone([0, 1.68, -0.12], [0, 1.52, -0.165], 0.022, 0.012, { k: 0.02 }), P.sph([0, 1.675, -0.118], 0.02, { k: 0.01 })], ponyLong: true, cards: [32, 10, 0.05, 0.09, 0.02] }, // v3: thicker still (v2 began this)
+  bun: { T: (x, y, z) => 0.0068 + 0.002 * sstep(1.66, 1.74, y), line: { front: 1.71 }, flow: (x, y, z) => [x * 0.2, 0.4, -1], extra: [P.ell([0, 1.74, -0.085], [0.04, 0.034, 0.036], { k: 0.012 })], cards: [28, 9, 0.05, 0.075, 0.02] }, // v3: thicker still
+  curly: { T: (x, y, z) => 0.016 + 0.01 * sstep(1.66, 1.76, y) + 0.003 * curl(x, y, z, 240), line: { front: 1.70 }, flow: (x, y, z) => [Math.sin(y * 300), Math.cos(z * 280), Math.sin(x * 290)], curly: 1 },
+  coily: { T: (x, y, z) => 0.0075 + 0.004 * sstep(1.66, 1.75, y) + 0.0018 * curl(x, y, z, 320), line: { front: 1.703 }, flow: (x, y, z) => [Math.sin(y * 420 + z * 90), Math.cos(z * 400 + x * 70), Math.sin(x * 410)], curly: 1 },
+  afro: { T: (x, y, z) => 0.024 + 0.016 * sstep(1.6, 1.75, y) + 0.004 * curl(x, y, z, 150), line: { front: 1.70, ears: true }, flow: (x, y, z) => [Math.sin(y * 260 + z * 50), Math.cos(z * 240 + x * 60), Math.sin(x * 250)], curly: 1 },
+  buzz: { T: (x, y, z) => 0.0022, line: { front: 1.703 }, flow: (x, y, z) => [x * 0.3, -0.3, -1] },
+  bald: { T: (x, y, z) => 0.003, line: { front: 1.64, crown: true }, flow: (x, y, z) => [0, -1, -0.3] },
+};
+export const HAIR_STYLES = Object.keys(HAIR);
+function hairLine(x, y, z, L) { // >0 inside the hair region
+  const th = Math.atan2(x, z + 0.01), a = Math.abs(th); const f = L.front;
+  let yl = a < 0.55 ? f - a * a * 0.03 : a < 1.25 ? f - 0.009 - (a - 0.55) * 0.085 : a < 2.0 ? f - 0.069 - (a - 1.25) * 0.03 : f - 0.091 - (a - 2.0) * 0.03;
+  let v = y - yl;
+  if (L.ears !== false) { const ear = Math.hypot((Math.abs(x) - 0.08) * 0.7, (y - 1.637) * 0.9, z + 0.012) - 0.028; v = Math.min(v, ear + 0.003); }
+  if (L.long) v = Math.max(v, Math.min(y - L.long, (a - 1.05) * 0.06));
+  if (L.fringe) v = Math.max(v, Math.min(y - 1.684, (0.95 - a) * 0.06));
+  if (L.crown) v = Math.min(v, 1.70 - y, (a - 1.1) * 0.05); // male pattern: ring around the sides/back
+  return v; }
+function hairWeights(m) { const SI = new Float32Array(vcount(m) * 4), SW = new Float32Array(vcount(m) * 4);
+  for (let i = 0; i < vcount(m); i++) { const y = m.P[i * 3 + 1], z = m.P[i * 3 + 2]; const lw = sstep(1.58, 1.46, y) * (z < -0.04 || Math.abs(m.P[i * 3]) > 0.07 ? 0.85 : 0.5); SI.set([B.head, B.chest, B.neck, 0], i * 4); SW.set([1 - lw, lw * 0.7, lw * 0.3, 0], i * 4); }
+  m.A.skinIndex = { data: SI, size: 4 }; m.A.skinWeight = { data: SW, size: 4 }; }
+function hairShape(H) { const cr = new Shape(craniumPrims());
+  return new Shape([P.fn((x, y, z) => cr.eval(x, y, z) - H.T(x, y, z) * sstep(-0.004, 0.012, hairLine(x, y, z, H.line)) - 0.0012, [-0.14, 1.5, -0.17], [0.14, 1.82, 0.13], { k: 0.0 }), ...(H.extra || [])]); }
+const inHair = (H, x, y, z) => { let v = hairLine(x, y, z, H.line); if (H.extra) for (const e of H.extra) if (e.f(x, y, z) < 0.006) v = Math.max(v, 0.01); return v; };
+// strand cards lying on the hair volume (+2..5 mm), grown along the style's flow field from roots spread over the hair region
+function hairCards(H, sh, n, seed) {
+  const [, , l0, l1, w0] = H.cards, f = (x, y, z) => sh.eval(x, y, z); let rs = seed; const rnd = () => (rs = (rs * 16807) % 2147483647) / 2147483647;
+  const grad = p => { const e = 0.0007; const g = [f(p[0] + e, p[1], p[2]) - f(p[0] - e, p[1], p[2]), f(p[0], p[1] + e, p[2]) - f(p[0], p[1] - e, p[2]), f(p[0], p[1], p[2] + e) - f(p[0], p[1], p[2] - e)]; const l = Math.hypot(...g) || 1; return g.map(v => v / l); };
+  const proj = (p, lift) => { for (let k = 0; k < 5; k++) { const d = f(p[0], p[1], p[2]) - lift, g = grad(p); p[0] -= g[0] * d; p[1] -= g[1] * d; p[2] -= g[2] * d; } return p; };
+  const Pp = [], Nn = [], Uu = [], Ee = [], Rg = [], Ii = []; let made = 0;
+  for (let k = 0; made < n && k < n * 40; k++) {
+    const yv = 1 - rnd() * 1.35, r = Math.sqrt(Math.max(0, 1 - yv * yv)), ph = rnd() * Math.PI * 2, dir = [Math.cos(ph) * r, yv, Math.sin(ph) * r];
+    const p = proj([dir[0] * 0.14, 1.67 + dir[1] * 0.14, -0.015 + dir[2] * 0.14], 0.002); if (inHair(H, ...p) < (p[2] > 0.02 ? 0.02 : 0.012) || p[2] > 0.1) continue; // v2: front roots must sit >= 20 mm inside the hairline so card widths never spill onto the forehead
+    const len = l0 + (l1 - l0) * rnd(), segs = Math.max(4, Math.round(len / 0.012)), st = len / segs, w = w0 * (0.75 + 0.5 * rnd()), id = rnd();
+    let d = H.flow(...p); if (p[1] > 1.70 && d[1] > 0) d[1] = 0; // v3: crown roots NEVER stream upward (v2b's 0.25 damping still let bun/pony cards spike over the crown)
+    let base = Pp.length / 3; const pts = [];
+    for (let j = 0; j <= segs; j++) { const v = j / segs; if (j) { p[0] += d[0] * st; p[1] += d[1] * st; p[2] += d[2] * st; proj(p, 0.0022 + 0.003 * v); if (inHair(H, ...p) < -0.006) break; }
+      const g = grad(p), fl = H.flow(...p); let nd = [d[0] * 0.55 + fl[0] * 0.45, d[1] * 0.55 + fl[1] * 0.45, d[2] * 0.55 + fl[2] * 0.45]; const dn = nd[0] * g[0] + nd[1] * g[1] + nd[2] * g[2]; nd = [nd[0] - g[0] * dn, nd[1] - g[1] * dn, nd[2] - g[2] * dn]; const dl = Math.hypot(...nd) || 1; d = nd.map(q => q / dl); if (p[1] > 1.70 && d[1] > 0) d[1] = 0; // v3: crown clamp along the whole strand, not just the root
+      pts.push([p[0], p[1], p[2], g, d.slice(), v]); }
+    if (pts.length < 3) continue; made++;
+    for (const [x, y, z, g, dd, v] of pts) { const b = [g[1] * dd[2] - g[2] * dd[1], g[2] * dd[0] - g[0] * dd[2], g[0] * dd[1] - g[1] * dd[0]], hw = w * 0.5 * (1 - v * 0.55);
+      for (const sd of [-1, 1]) { Pp.push(x + b[0] * hw * sd + g[0] * 0.0012 * (1 - Math.abs(sd)), y + b[1] * hw * sd, z + b[2] * hw * sd); Nn.push(g[0], g[1], g[2]); Uu.push(sd < 0 ? 0 : 1, v); Ee.push(dd[0], dd[1], dd[2], 1); Rg.push(1, id, 0, 0); } }
+    for (let j = 0; j < pts.length - 1; j++) { const a = base + j * 2; Ii.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); } }
+  return { P: new Float32Array(Pp), N: new Float32Array(Nn), I: new Uint32Array(Ii), A: { uv: { data: new Float32Array(Uu), size: 2 }, aExt: { data: new Float32Array(Ee), size: 4 }, aReg: { data: new Float32Array(Rg), size: 4 } } }; }
+function hairMesh(style, fine, coarse, lod = 0) { const H = HAIR[style]; const S = shapes(); const sh = hairShape(H);
+  const lo = H.line.long ? Math.min(H.line.long, 1.5) - 0.03 : H.ponyLong ? 1.49 : 1.56;
+  const xs = axis(-0.14, 0.14, () => fine), ys = axis(lo, 1.82, y => ramp(y, 1.6, 1.74, fine, coarse)), zs = axis(-0.2, 0.14, z => ramp(z, 0.0, 0.2, fine, coarse));
+  let m = polygonize(sh.fn, null, fine, { xs, ys, zs });
+  const keep = field(m, (x, y, z) => Math.min(inHair(H, x, y, z) + 0.004, S.sHead.eval(x, y, z) + 0.0006));
+  m = clip(m, keep);
+  setAttr(m, 'aExt', 4, (x, y, z, i, o, nx, ny, nz) => { let f = H.flow(x, y, z); const d = f[0] * nx + f[1] * ny + f[2] * nz; f = [f[0] - nx * d, f[1] - ny * d, f[2] - nz * d]; const l = Math.hypot(...f) || 1; o[0] = f[0] / l; o[1] = f[1] / l; o[2] = f[2] / l;
+    o[3] = sstep(-0.002, 0.016, inHair(H, x, y, z) + (H.extra && H.extra.some(q => q.f(x, y, z) < 0.006) ? 0.01 : 0)); });
+  ensure(m, 'aReg', 4, 0); ensure(m, 'uv', 2, 0);
+  const cardK = (style === 'bun' || style === 'pony') ? 0.3 : lod === 0 ? 0.45 : 0.6; // v3: the thickened sculpted shell carries the silhouette now; cards are a garnish (at full count they caused the crown spikes and hairline notches)
+  const nc = H.cards && lod < 2 ? Math.max(4, Math.round(H.cards[lod] * cardK)) : 0; if (nc) m = merge([m, hairCards(H, sh, nc, 9001 + style.length * 31 + lod)]);
+  hairWeights(m); bakeAO(m, (x, y, z) => Math.min(sh.eval(x, y, z), S.fAll(x, y, z)), { steps: [[0.006, 1], [0.015, 0.7], [0.04, 0.4], [0.08, 0.2]], k: 1.1 }); return m; }
+function beardMesh(kind, fine) { const S = shapes(); const msk = kind === 'moustache' ? (x, y, z) => sstep(1.607, 1.600, y) * sstep(1.590, 1.596, y) * sstep(0.034, 0.02, Math.abs(x)) * sstep(0.05, 0.08, z) : beardMask; // v3: moustache band sits between the raised nose base and lip
+  const T = kind === 'moustache' ? 0.004 : 0.0052; const sh = new Shape([P.fn((x, y, z) => { const k = msk(x, y, z); return k < 0.06 ? 0.01 : S.sHead.eval(x, y, z) - T * k - 0.0008; }, [-0.1, 1.5, -0.05], [0.1, 1.66, 0.13], { k: 0 })]);
+  let m = polygonize(sh.fn, [-0.09, 1.51, -0.04, 0.09, 1.65, 0.125], fine); m = clip(m, (x, y, z) => msk(x, y, z) - 0.12);
+  constWeights(m, B.head); setAttr(m, 'aExt', 4, (x, y, z, i, o, nx, ny, nz) => { let f = [0, -1, 0.2]; const d = f[0] * nx + f[1] * ny + f[2] * nz; f = [f[0] - nx * d, f[1] - ny * d, f[2] - nz * d]; const l = Math.hypot(...f) || 1; o[0] = f[0] / l; o[1] = f[1] / l; o[2] = f[2] / l; o[3] = -Math.max(0.02, sstep(0.12, 0.6, msk(x, y, z))); });
+  bakeAO(m, S.sHead.fn, AO_FACE); morph(m, S.fHead, 'aM0', { max: 0.02 }); morph(m, S.wHead, 'aM1', { max: 0.02 }); return m; }
+
+// ---------------------------------------------------------------- accessories & props (rigid)
+function threeMesh(g, bone, slot, kind = 0, tf) { const m = fromThree(g.index ? g : g, tf, [-0.1, -0.1, -1, -1]); constWeights(m, bone); setAttr(m, 'aExt', 4, (x, y, z, i, o) => { o[0] = slot; o[1] = 0; o[2] = 1; o[3] = kind; }); ensure(m, 'ao', 1, 1); return m; }
+function rbox(w, h, d, r, seg = 2) { const g = new THREE.BoxGeometry(w, h, d, seg * 2 + 2, seg * 2 + 2, seg * 2 + 2); const p = g.attributes.position, n = g.attributes.normal, hw = w / 2 - r, hh = h / 2 - r, hd = d / 2 - r;
+  for (let i = 0; i < p.count; i++) { const x = p.getX(i), y = p.getY(i), z = p.getZ(i); const cx = Math.max(-hw, Math.min(hw, x)), cy = Math.max(-hh, Math.min(hh, y)), cz = Math.max(-hd, Math.min(hd, z)); let dx = x - cx, dy = y - cy, dz = z - cz; const l = Math.hypot(dx, dy, dz) || 1; dx /= l; dy /= l; dz /= l; p.setXYZ(i, cx + dx * r, cy + dy * r, cz + dz * r); n.setXYZ(i, dx, dy, dz); }
+  return g; }
+function accessories() {
+  const tie = (() => { const s = new THREE.Shape(); s.moveTo(-0.017, 0); s.lineTo(0.017, 0); s.lineTo(0.034, -0.2); s.lineTo(-0.034, -0.2); s.closePath(); const g = new THREE.ExtrudeGeometry(s, { depth: 0.006, bevelEnabled: true, bevelThickness: 0.002, bevelSize: 0.002, bevelSegments: 1, curveSegments: 1 }).toNonIndexed(); g.computeVertexNormals();
+    const knot = rbox(0.04, 0.032, 0.02, 0.009, 2).translate(0, 0.006, 0.004); return merge([threeMesh(g, B.chest, 4, 7, (p, n) => { const t = -p[1]; p[2] += 0.104 - t * 0.03; p[1] += 1.418; }), threeMesh(knot, B.chest, 4, 7, (p) => { p[1] += 1.418; p[2] += 0.106; })]); })();
+  const scarf = (() => { const k = new THREE.TorusGeometry(0.06, 0.0145, 8, 22).rotateX(Math.PI / 2).scale(1.06, 1, 1.02); const knot = new THREE.SphereGeometry(0.017, 10, 8).scale(1.3, 0.72, 0.85); const tail = rbox(0.034, 0.115, 0.009, 0.004, 1); const tail2 = rbox(0.028, 0.072, 0.009, 0.004, 1);
+    // PILOT REDESIGN: a knotted neckerchief, not a choker + luggage tag — slimmer wrap on the neck, knot at the
+    // throat, two tails lying on the chest following its curve (z grows as the tail descends, like the tie).
+    return merge([threeMesh(k, B.chest, 4, 7, p => { p[1] += 1.458; p[2] += -0.01; }), threeMesh(knot, B.chest, 4, 7, p => { p[0] += 0.012; p[1] += 1.442; p[2] += 0.096; }),
+      threeMesh(tail, B.chest, 4, 7, p => { p[0] += 0.012 - p[1] * 0.1; p[2] += 0.107 - p[1] * 0.05; p[1] += 1.372; }), threeMesh(tail2, B.chest, 4, 7, p => { p[0] += 0.044 + p[1] * 0.18; p[2] += 0.104 - p[1] * 0.05; p[1] += 1.398; })]); })();
+  const hat = (() => { const crown = new THREE.LatheGeometry([[0, 0.0], [0.098, 0.0], [0.103, 0.028], [0.109, 0.056], [0.105, 0.068], [0.0, 0.07]].map(([r, y]) => new THREE.Vector2(r, y)), 24).scale(1, 1, 1.12);
+    const band = new THREE.CylinderGeometry(0.099, 0.099, 0.032, 24, 1, true).scale(1, 1, 1.12).translate(0, 0.016, 0); const visor = new THREE.CylinderGeometry(0.1, 0.1, 0.006, 20, 1, false, -Math.PI * 0.42, Math.PI * 0.84).scale(1, 1, 1.25).rotateX(-0.25).translate(0, 0.004, 0.035);
+    // PILOT REDESIGN: lower, less flared crown; the band is kind 20 (near-black + gold fox-heart badge painted in
+    // FS_CLOTH) and the visor kind 21 (patent black + gold front trim) — was: plain navy band (kind 9), grey visor.
+    const tf = p => { p[0] *= 1.05; p[2] *= 1.05; p[1] += 1.733; p[2] += -0.018; }; return merge([threeMesh(crown, B.head, 6, 8, tf), threeMesh(band, B.head, 4, 20, tf), threeMesh(visor, B.head, 3, 21, tf)]); })();
+  const wings = (() => { const parts = []; // PILOT REDESIGN: gold wings pin on the wearer's left chest (pilots only) — geometry, because the coarse jacket shell smears shader paint
+    parts.push(threeMesh(rbox(0.009, 0.011, 0.004, 0.002, 1), B.chest, 7, 23, p => { p[0] += -0.08; p[1] += 1.32; p[2] += 0.102; }));
+    for (const s of [-1, 1]) parts.push(threeMesh(rbox(0.027, 0.0055, 0.0035, 0.0015, 1), B.chest, 7, 23, p => { const a = s * 0.30, x = p[0], y = p[1]; p[0] = x * Math.cos(a) - y * Math.sin(a) - 0.08 + s * 0.0165; p[1] = x * Math.sin(a) + y * Math.cos(a) + 1.3225; p[2] += 0.1015; }));
+    return merge(parts); })();
+  const lanyard = (() => { const parts = []; // PILOT REDESIGN: crew ID lanyard — two straps to a chest card (white card, orange header strip, photo, metal clip)
+    for (const s of [-1, 1]) parts.push(threeMesh(rbox(0.011, 0.25, 0.004, 0.002, 1), B.chest, 7, 7, p => { const a = -s * 0.2, x = p[0], y = p[1]; p[0] = x * Math.cos(a) - y * Math.sin(a) + s * 0.024; p[1] = x * Math.sin(a) + y * Math.cos(a) + 1.345; p[2] += 0.12; }));
+    parts.push(threeMesh(rbox(0.014, 0.018, 0.006, 0.002, 1), B.chest, 7, 17, p => { p[1] += 1.226; p[2] += 0.121; }));
+    parts.push(threeMesh(rbox(0.06, 0.092, 0.005, 0.002, 1), B.chest, 7, 19, p => { p[1] += 1.174; p[2] += 0.124; }));
+    parts.push(threeMesh(rbox(0.06, 0.018, 0.006, 0.002, 1), B.chest, 8, 0, p => { p[1] += 1.211; p[2] += 0.1245; }));
+    parts.push(threeMesh(rbox(0.024, 0.03, 0.006, 0.002, 1), B.chest, 7, 7, p => { p[0] += -0.013; p[1] += 1.178; p[2] += 0.1245; }));
+    return merge(parts); })();
+  // props in their own frames (bound to prop bones)
+  const phone = merge([threeMesh(rbox(0.072, 0.148, 0.0085, 0.006, 2), B.prop1, 7, 10)]);
+  const book = merge([threeMesh(rbox(0.15, 0.215, 0.026, 0.004, 1), B.prop1, 8, 11)]);
+  const backpack = (() => { const bag = rbox(0.26, 0.36, 0.12, 0.045, 2), pocket = rbox(0.18, 0.14, 0.045, 0.018, 1); const st = []; for (const s of [-1, 1]) { const c = new THREE.CatmullRomCurve3([[0.075, 1.38, -0.15], [0.095, 1.475, -0.045], [0.11, 1.42, 0.075], [0.125, 1.28, 0.095], [0.155, 1.17, 0.02], [0.1, 1.11, -0.15]].map(([x, y, z]) => new THREE.Vector3(s * x, y, z))); st.push(new THREE.TubeGeometry(c, 24, 0.011, 5, false).scale(1, 1, 1)); }
+    const tf = p => { p[1] += 1.24; p[2] += -0.19; }; return merge([threeMesh(bag, B.chest, 8, 12, tf), threeMesh(pocket, B.chest, 8, 12, p => { p[1] += 1.17; p[2] += -0.265; }), ...st.map(g => threeMesh(g, B.chest, 8, 12))]); })();
+  const suitcase = (() => { const c = rbox(0.38, 0.54, 0.22, 0.03, 2).translate(0, 0.32, 0); const rods = [-1, 1].map(s => new THREE.CylinderGeometry(0.008, 0.008, 0.42, 6).translate(s * 0.07, 0.79, -0.08)); const grip = rbox(0.17, 0.025, 0.03, 0.01, 1).translate(0, 1.0, -0.08);
+    const wheels = [-1, 1].map(s => new THREE.CylinderGeometry(0.03, 0.03, 0.025, 10).rotateZ(Math.PI / 2).translate(s * 0.15, 0.03, -0.08));
+    return merge([threeMesh(c, B.prop2, 8, 13), ...rods.map(g => threeMesh(g, B.prop2, 7, 10)), threeMesh(grip, B.prop2, 7, 10), ...wheels.map(g => threeMesh(g, B.prop2, 7, 10))]); })();
+  // flight deck: headset (head) and shirt epaulettes (clavicles), sitting on the shoulder top of a shirt
+  const headset = (() => { const band = new THREE.TorusGeometry(0.094, 0.0065, 6, 28, Math.PI).scale(1, 1.48, 1.15); const cup = new THREE.CylinderGeometry(0.033, 0.035, 0.026, 18).rotateZ(Math.PI / 2); const pad = new THREE.TorusGeometry(0.026, 0.009, 6, 16).rotateY(Math.PI / 2);
+    const boom = new THREE.CylinderGeometry(0.003, 0.003, 0.125, 6), mic = new THREE.SphereGeometry(0.011, 10, 8);
+    const parts = [threeMesh(band, B.head, 7, 18, p => { p[1] += 1.636; p[2] += -0.012; })];
+    for (const s of [-1, 1]) { parts.push(threeMesh(cup, B.head, 7, 18, p => { p[0] += s * 0.094; p[1] += 1.633; p[2] += -0.012; })); parts.push(threeMesh(pad, B.head, 7, 18, p => { p[0] += s * 0.081; p[1] += 1.633; p[2] += -0.012; })); }
+    const a0 = new THREE.Vector3(-0.1, 1.615, 0.004), a1 = new THREE.Vector3(-0.034, 1.574, 0.096), mid = a0.clone().add(a1).multiplyScalar(0.5), dir = a1.clone().sub(a0).normalize(); const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    parts.push(threeMesh(boom.applyQuaternion(q), B.head, 7, 18, p => { p[0] += mid.x; p[1] += mid.y; p[2] += mid.z; })); parts.push(threeMesh(mic, B.head, 7, 18, p => { p[0] += a1.x; p[1] += a1.y; p[2] += a1.z; })); return merge(parts); })();
+  const epaulettes = (() => { const S = shapes(); const parts = []; for (const s of [-1, 1]) { const g = rbox(0.12, 0.007, 0.05, 0.003, 1); const x = s * 0.135, z = -0.034; let y = 1.6; for (let i = 0; i < 200 && S.sBody.eval(x, y, z) > 0; i++) y -= 0.002; y += 0.0115;
+      parts.push(threeMesh(g, B['clav' + (s < 0 ? 'L' : 'R')], 4, 14, p => { const px = p[0], py = p[1]; const a = -s * 0.2; p[0] = px * Math.cos(a) - py * Math.sin(a) + x; p[1] = px * Math.sin(a) + py * Math.cos(a) + y; p[2] += z; })); } return merge(parts); })();
+  // cabin service: tray in hand (prop1), cup in hand (prop1), meal on a tray table (prop2), trolley (prop2), jump seat (prop2)
+  const tray = merge([threeMesh(rbox(0.36, 0.018, 0.25, 0.006, 1), B.prop1, 7, 15), threeMesh(rbox(0.15, 0.03, 0.1, 0.008, 1).translate(0.06, 0.022, 0.02), B.prop1, 7, 16), threeMesh(new THREE.CylinderGeometry(0.03, 0.026, 0.08, 12).translate(-0.12, 0.05, 0.06), B.prop1, 7, 19), threeMesh(new THREE.SphereGeometry(0.03, 10, 8).scale(1, 0.7, 1).translate(-0.06, 0.03, -0.06), B.prop1, 7, 16)]);
+  const cup = merge([threeMesh(new THREE.CylinderGeometry(0.034, 0.028, 0.092, 14), B.prop1, 7, 19)]);
+  const meal = merge([threeMesh(rbox(0.42, 0.016, 0.27, 0.006, 1).translate(0, 0, 0), B.prop2, 7, 15), threeMesh(rbox(0.36, 0.016, 0.24, 0.006, 1).translate(0, 0.016, 0), B.prop2, 7, 18),
+    threeMesh(rbox(0.15, 0.032, 0.11, 0.009, 1).translate(0.05, 0.04, 0.02), B.prop2, 7, 16), threeMesh(rbox(0.08, 0.025, 0.07, 0.008, 1).translate(-0.1, 0.035, -0.06), B.prop2, 7, 16), threeMesh(new THREE.SphereGeometry(0.03, 10, 8).scale(1, 0.75, 1).translate(-0.1, 0.045, 0.06), B.prop2, 7, 16),
+    threeMesh(new THREE.CylinderGeometry(0.032, 0.027, 0.09, 12).translate(0.14, 0.07, -0.07), B.prop2, 7, 19), threeMesh(rbox(0.012, 0.004, 0.15, 0.002, 1).translate(0.15, 0.027, 0.04), B.prop2, 7, 17)]);
+  const trolley = (() => { const parts = [threeMesh(rbox(0.3, 0.92, 0.76, 0.02, 2).translate(0, 0.52, 0), B.prop2, 7, 17), threeMesh(rbox(0.32, 0.03, 0.04, 0.012, 1).translate(0, 1.0, -0.4), B.prop2, 7, 18), threeMesh(rbox(0.31, 0.03, 0.78, 0.01, 1).translate(0, 0.995, 0), B.prop2, 7, 18)];
+    for (const [x, z] of [[-0.1, -0.25], [0.1, -0.25], [-0.1, 0.25], [0.1, 0.25]]) parts.push(threeMesh(new THREE.CylinderGeometry(0.03, 0.03, 0.03, 10).rotateZ(Math.PI / 2).translate(x, 0.03, z), B.prop2, 7, 18));
+    for (let k = 0; k < 6; k++) parts.push(threeMesh(new THREE.CylinderGeometry(0.028, 0.028, k < 3 ? 0.12 : 0.25, 10).translate(-0.08 + (k % 3) * 0.08, 1.07 + (k < 3 ? 0 : 0.065), k < 3 ? 0.18 : 0.3), B.prop2, 7, k < 3 ? 19 : 16));
+    return merge(parts); })();
+  const jumpseat = merge([threeMesh(rbox(0.42, 0.07, 0.36, 0.02, 1).translate(0, 0.44, 0.05), B.prop2, 7, 18), threeMesh(rbox(0.44, 0.62, 0.07, 0.025, 1).translate(0, 0.86, -0.14), B.prop2, 7, 18), threeMesh(rbox(0.44, 0.12, 0.08, 0.02, 1).translate(0, 1.27, -0.12), B.prop2, 7, 18),
+    ...[-1, 1].map(s => threeMesh(rbox(0.045, 0.5, 0.008, 0.002, 1).translate(s * 0.09, 0.94, -0.09), B.prop2, 7, 14))]);
+  return { tie, scarf, hat, lanyard, wings, phone, book, backpack, suitcase, headset, epaulettes, tray, cup, meal, trolley, jumpseat }; }
+
+// ---------------------------------------------------------------- build all layers
+// layer: { geo, kind: 'skin'|'cloth'|'hair'|'eye', part }
+let CACHE = {};
+export function buildLayers(q = 'high') {
+  if (CACHE[q]) return CACHE[q]; const t0 = performance.now(); const lowQ = q === 'low';
+  const L = {}; let tl = performance.now(); const put = (name, m, kind, part = 0, extra = {}) => { const t = performance.now(); L[name] = { geo: toGeo(m), kind, part, tris: m.I.length / 3, ms: Math.round(t - tl), ...extra }; tl = performance.now(); };
+  const b0 = bodyMesh(lowQ ? 0.027 : 0.022), b1 = bodyMesh(0.042);
+  put('body0', b0, 'skin', 0); put('body1', b1, 'skin', 0); put('fig2', figureMesh(0.058), 'skin', 3);
+  put('head0', headMesh(lowQ ? 0.0065 : 0.0055, 0.011), 'skin', 1); put('head1', headMesh(0.015, 0.022), 'skin', 1);
+  put('hands0', handsMesh(lowQ ? 0.0085 : 0.0068), 'skin', 2); put('hands1', handsMesh(0.017), 'skin', 2);
+  put('eyes0', eyesMesh(lowQ ? 14 : 20), 'eye'); put('eyes1', eyesMesh(8, false), 'eye');
+  for (const [k, o] of Object.entries(TOPS)) { put(k + '0', shell(b0, { ...o, top: true, slot: k === 'vest' ? 9 : 0, kind: { tee: 0, long: 0, jacket: 1, hoodie: 2, vest: 9 }[k] }), 'cloth'); put(k + '1', shell(b1, { ...o, top: true, slot: k === 'vest' ? 9 : 0, kind: { tee: 0, long: 0, jacket: 1, hoodie: 2, vest: 9 }[k] }), 'cloth'); }
+  for (const [k, o] of Object.entries(BOTTOMS)) { put(k + '0', shell(b0, { ...o, slot: 1, kind: 3 }), 'cloth'); put(k + '1', shell(b1, { ...o, slot: 1, kind: 3 }), 'cloth'); }
+  put('skirt0', skirtMesh(0.016, 0.5), 'cloth'); put('skirt1', skirtMesh(0.05, 0.5), 'cloth');
+  put('hood0', hoodMesh(0.012), 'cloth'); put('hood1', hoodMesh(0.024), 'cloth');
+  for (const k of ['sneaker', 'dress']) { put(k + '0', shoeMesh(lowQ ? 0.011 : 0.0092, k), 'cloth'); put(k + '1', shoeMesh(0.024, k), 'cloth'); }
+  for (const k of HAIR_STYLES) { put('hair_' + k + '0', hairMesh(k, lowQ ? 0.009 : 0.0068, 0.012, 0), 'hair'); put('hair_' + k + '1', hairMesh(k, 0.016, 0.024, 1), 'hair'); put('hair_' + k + '2', hairMesh(k, 0.03, 0.036, 2), 'hair'); }
+  put('beard0', beardMesh('beard', 0.005), 'hair'); put('beard1', beardMesh('beard', 0.013), 'hair'); put('moustache0', beardMesh('moustache', 0.0042), 'hair');
+  const A = accessories(); for (const [k, m] of Object.entries(A)) put(k, m, 'cloth');
+  // hair fur shells: duplicate LOD0 hair with a layer index in aExt? (layer in skinWeight slot unused) → separate attribute
+  for (const k of Object.keys(L)) if (L[k].shells > 1) { const g = L[k].geo, n = g.attributes.position.count, sh = L[k].shells; const ng = new THREE.BufferGeometry();
+    for (const [name, a] of Object.entries(g.attributes)) { const arr = new Float32Array(a.array.length * sh); for (let s = 0; s < sh; s++) arr.set(a.array, s * a.array.length); ng.setAttribute(name, new THREE.BufferAttribute(arr, a.itemSize)); }
+    const lay = new Float32Array(n * sh); for (let s = 0; s < sh; s++) lay.fill(s, s * n, (s + 1) * n); ng.setAttribute('aLayer', new THREE.BufferAttribute(lay, 1));
+    const idx = g.index.array, ni = new Uint32Array(idx.length * sh); for (let s = 0; s < sh; s++) for (let i = 0; i < idx.length; i++) ni[s * idx.length + i] = idx[i] + s * n; ng.setIndex(new THREE.BufferAttribute(ni, 1)); ng.boundingSphere = g.boundingSphere; L[k].geo = ng; L[k].tris *= sh; }
+  L._ms = Math.round(performance.now() - t0); CACHE[q] = L; return L;
+}
+export { J, B, NB };
