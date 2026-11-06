@@ -8,6 +8,7 @@ import { World, loadWorld, Geo, airportGeometry, search, nearestAirports, havers
 import { Sky, ATM } from './sky.js';
 import { Terrain, City, genericSurroundings } from './terrain.js';
 import { REGIONS, FEATURED_INFO, climateFor } from './surroundings.js';
+import { identityFor } from './env-identity.js';
 import { buildAirport, ilsFor, ilsDeviation, LIGHT_U } from './airport.js';
 import { buildAircraft, animateAircraft, foxHeart, DIM } from './aircraft.js';
 import { FDM, FLAPS } from './fdm.js';
@@ -24,7 +25,7 @@ import { Failures, FAILS } from './failures.js';
 import { Rescue } from './rescue.js';
 import { Speech } from './speech.js';
 import { GroundCrew } from './groundcrew.js';
-import { LandingAids, fdGuide, coachLine } from './landing.js';
+import { LandingAids, fdGuide } from './landing.js';
 import { Music, moodFor } from './music.js';
 import { ServicePanel } from './env-svcpanel.js';
 import { buildCabin } from './interiors.js';
@@ -37,7 +38,7 @@ import { Roads } from './wld-roads.js';
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
 const errors = []; window.addEventListener('error', e => errors.push(String(e.message))); window.addEventListener('unhandledrejection', e => errors.push(String(e.reason)));
 const store = { get(k, d) { try { const v = localStorage.getItem('foxheart.' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('foxheart.' + k, JSON.stringify(v)); } catch (e) { } } };
-const settings = Object.assign({ quality: 'high', res: 'auto', units: 'aviation', law: 'fbw', invert: '0', mouseSens: 1, vol: 0.7, voice: true, hud: true, padAssist: 'easy', padSens: 1, padDz: 0.15, padInvert: '0', cabinLights: 'auto', padRumble: true, failRand: 'off', landBoxes: true, landAutoSpd: true, extHud: 'min', music: true, musicVol: 0.5, termMusic: true }, store.get('settings', {}));
+const settings = Object.assign({ quality: 'high', res: 'auto', units: 'aviation', law: 'fbw', invert: '0', mouseSens: 1, vol: 0.7, voice: true, hud: true, padAssist: 'easy', padSens: 1, padDz: 0.15, padInvert: '0', cabinLights: 'auto', padRumble: true, failRand: 'off', extHud: 'min', music: true, musicVol: 0.5, termMusic: true }, store.get('settings', {}));
 const TODAY = new Date(Date.UTC(2026, 9, 27));
 
 // ---------------------------------------------------------------- renderer
@@ -92,7 +93,7 @@ const crew = new GroundCrew(scene); // tug, chocks, cones, GPU and ramp crew at 
 crew.autoServices = settings.autoTurn ?? true; // ground services: automatic turnaround, or call / dismiss each one (I / GND / PA panel)
 const svcPanel = ServicePanel(crew, { toast, onAuto: v => { settings.autoTurn = v; store.set('settings', settings); } });
 function toggleSvc(v) { const o = v ?? !svcPanel.open; if (o) { if (radioOpen) toggleRadio(false); if (paOpen) togglePA(false); } svcPanel.toggle(o); }
-const aids = new LandingAids(scene); // PAPI + glide path boxes for hand-flown landings
+const aids = new LandingAids(scene); // PAPI lights beside the touchdown zone
 const pa = new PA(audio);
 // one speech queue for PA, ATC, ATIS, chatter and callouts, with subtitles and a PA-live indicator
 const speech = new Speech(); atc.speech = speech; pa.speech = speech; audio.speech = speech;
@@ -263,8 +264,7 @@ function activeRunwayEnd(b) { // into the wind, longest
 // ---------------------------------------------------------------- flights
 const PHASE = { gate: 'gate', runway: 'takeoff', final: 'approach' };
 async function startFlight(cfg) {
-  if (/^hand/.test(cfg.start)) cfg = Object.assign({}, cfg, { start: 'final', hand: true, finalNm: cfg.start === 'hand5' ? 5 : 10 }); // "Land it yourself"
-  W.cfg = cfg; W.hand = !!cfg.hand && !cfg.menu; W.mode = cfg.mode || 'free'; W.menuMode = !!cfg.menu;
+  W.cfg = cfg; W.mode = cfg.mode || 'free'; W.menuMode = !!cfg.menu;
   const A = cfg.apt; const g = airportGeometry(A);
   let E = g.ends.find(e => e.ident === cfg.end) || g.ends[0];
   showLoad(true, 'Building ' + A.icao + ' and surroundings…');
@@ -282,14 +282,12 @@ async function startFlight(cfg) {
     if (cfg.start === 'final') { const d = (cfg.finalNm || 10) * NM; pos = W.ils.thr.clone().addScaledVector(dir, -d); alt = elev + 15 + (d + 286) * Math.tan(3 * D2R); hdg = E.hdg; }
     else if (any) { pos = new THREE.Vector3(W.geo.x(cfg.lon), 0, W.geo.z(cfg.lat)); hdg = cfg.hdg ?? 90; alt = Math.max((cfg.altFt ?? 15000) * FT, ground(pos.x, pos.z).h + 2000 * FT); }
     else { const r = cfg.route; const s = r.start; pos = new THREE.Vector3(W.geo.x(s.lon), 0, W.geo.z(s.lat)); alt = s.alt * FT; hdg = s.hdg; }
-    if (W.hand) spd = Math.round(sp.vapp); // hand-flown: fully configured at approach speed
-    const V = spd * KT; const flaps = W.hand ? 4 : cfg.start === 'final' ? 2 : 0;
-    fdm.reset({ x: pos.x, y: alt, z: pos.z, hdg, speed: V, vs: cfg.start === 'final' ? -V * Math.tan(3 * D2R) : 0, pitch: W.hand ? 0.6 : cfg.start === 'final' ? 1 : 2.5, gear: W.hand, flaps, tl: W.hand ? HAND_TL : cfg.start === 'final' ? 0.42 : 0.62, n1: cfg.start === 'final' ? 52 : 68, onGround: false, spdSel: spd, altSel: Math.round(alt / FT / 100) * 100 });
+    const V = spd * KT; const flaps = cfg.start === 'final' ? 2 : 0;
+    fdm.reset({ x: pos.x, y: alt, z: pos.z, hdg, speed: V, vs: cfg.start === 'final' ? -V * Math.tan(3 * D2R) : 0, pitch: cfg.start === 'final' ? 1 : 2.5, gear: false, flaps, tl: cfg.start === 'final' ? 0.42 : 0.62, n1: cfg.start === 'final' ? 52 : 68, onGround: false, spdSel: spd, altSel: Math.round(alt / FT / 100) * 100 });
     fdm.qInt = 0.075; fdm.ap.on = true; fdm.ap.athr = true; fdm.ap.hdg = Math.round(hdg); fdm.ap.alt = Math.round(alt / FT / 100) * 100;
     if (cfg.start === 'final') { fdm.ap.ils = W.ils; fdm.ap.locArmed = true; fdm.ap.gsArmed = true; fdm.ap.lat = 'HDG'; fdm.ap.vert = 'ALT'; fdm.ap.alt = Math.max(2000, Math.round((elev / FT + 2000) / 100) * 100); fdm.ap.appr = true; }
     else if (any) { fdm.ap.lat = 'HDG'; fdm.ap.vert = 'ALT'; fdm.ap.alt = Math.round(alt / FT / 100) * 100; W.route = fdm.ap.route = null; }
     else { fdm.ap.route = W.route = cfg.route.wps.map(([lat, lon, name]) => ({ lat, lon, name, x: W.geo.x(lon), z: W.geo.z(lat) })); fdm.ap.wp = 0; fdm.ap.lat = 'NAV'; fdm.ap.vert = 'ALT'; fdm.ap.alt = cfg.route.alt; }
-    if (W.hand) { fdm.ap.on = false; fdm.ap.ils = W.ils; fdm.ap.locArmed = fdm.ap.gsArmed = fdm.ap.appr = false; fdm.ap.spd = spd; fdm.ap.athr = landHelpers() && settings.landAutoSpd; fdm.spoilersArmed = true; fdm.autobrake = 2; }
     W.phase = 'approach';
   } else if ((cfg.start === 'gate' || cfg.start === 'terminal') && W.primary.b.stands.length) {
     const st = pickStand(W.primary); placeAtStand(W.primary, st);
@@ -328,23 +326,13 @@ async function startFlight(cfg) {
     setView(cfg.view || (cfg.start === 'final' ? 'cockpit' : 'chase'));
     showNote(A);
     if (any) toast(`Free flight over ${fmtLL(cfg.lat, cfg.lon)}. Autopilot holds heading and altitude. Shift N: direct to ${W.dest.icao} (${Math.round(haversine(cfg.lat, cfg.lon, W.dest.lat, W.dest.lon) / NM)} nm) · . and , time acceleration.`, 8000); else
-    toast(cfg.start === 'runway' ? 'Parking brake set. Space releases it; Page Up / Shift adds thrust. T opens the radio.' : cfg.start === 'gate' ? 'At gate ' + W.stand.gateName + '. Press T for the radio: clearance, then pushback (or K to push without ATC).' : cfg.start === 'final' ? (W.hand ? handMsg() : 'Autopilot flying the ILS. Press Z to take over, T for the radio.') : 'Autopilot on NAV. Use . and , for time acceleration. T opens the radio.', 6500);
+    toast(cfg.start === 'runway' ? 'Parking brake set. Space releases it; Page Up / Shift adds thrust. T opens the radio.' : cfg.start === 'gate' ? 'At gate ' + W.stand.gateName + '. Press T for the radio: clearance, then pushback (or K to push without ATC).' : cfg.start === 'final' ? 'Autopilot flying the ILS. Press Z to take over, T for the radio.' : 'Autopilot on NAV. Use . and , for time acceleration. T opens the radio.', 6500);
     // a departure at a gate starts with an EMPTY aircraft: the load waits in the lounge and boards in
     // groups as part of the turnaround (boardingStep conducts; see beginBoarding)
     if ((cfg.start === 'gate' || cfg.start === 'terminal') && !cfg.menu) W.boarding = { phase: 'pending', t: 0, group: 0, callT: 0, gate: String(W.stand?.gateName || 7) };
     if (cfg.start === 'terminal') enterFoot('dep');
   }
   return true;
-}
-// ---------------------------------------------------------------- hand-flown landing ("Land it yourself")
-const HAND_TL = 0.5; // approximate approach thrust, full flaps + gear at VAPP
-function landHelpers() { return fdm.assist !== 'realistic'; } // boxes in the sky + auto-speed: off in Realistic assist
-function handMsg() { const pad1 = pad.active; return 'Your aircraft! Follow the green flight director bars' + (settings.landBoxes && landHelpers() ? ' and fly through the magenta boxes' : '') + '. PAPI: two red, two white = on the glide path. ' + (fdm.ap.athr ? 'Auto-speed holds the speed for you.' : (pad1 ? 'RT / LT' : 'Page Up / Page Down') + ' for thrust.'); }
-function handFlyAvailable() { if (fdm.onGround || !W.ils || W.hand) return false; const d = ilsDeviation(W.ils, fdm.pos); return d.valid && d.thrDist > 1.5 * NM && d.thrDist < 18 * NM && W.ils !== W.depIls || (W.cfg?.start === 'final' && d.valid && d.thrDist > 1.5 * NM); }
-function handFly() {
-  if (!handFlyAvailable()) return false; W.hand = true; fdm.disconnectAP('hand-fly'); fdm.ap.autoConfig = true; fdm.ap.ils = W.ils;
-  fdm.ap.athr = landHelpers() && settings.landAutoSpd; if (fdm.ap.athr) fdm.ap.spd = Math.round(Math.max(fdm.speeds().vapp, fdm.ias > 160 ? 160 : 0));
-  fdm.spoilersArmed = true; fdm.autobrake = fdm.autobrake || 2; fdm.gammaHold = null; toast(handMsg(), 7000); return true;
 }
 // ---------------------------------------------------------------- gates, pushback, taxi routes, on foot, ATC context
 function pickStand(b) { const all = b.b.stands; all.forEach((s, i) => { s.gateName = String(i + 1); }); const free = all.filter(s => !s.used); return free[(free.length / 2) | 0] || all[(all.length / 2) | 0]; }
@@ -709,7 +697,6 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyY') { togglePA(); return; }
   if (e.code === 'KeyT' && !e.shiftKey) { toggleRadio(); return; }
   if (e.code === 'Enter') { parkPromptAction(); return; }
-  if (e.code === 'KeyU') { if (!W.onFoot && !handFly()) toast(W.hand ? 'You are already hand-flying' : 'Hand-flying is offered on an ILS approach (inside 18 nm)'); return; }
   if (e.code === 'KeyK') { if (W.standB && fdm.onGround && !W.push) startPushback(); return; }
   const ap = fdm.ap;
   switch (e.code) {
@@ -857,7 +844,6 @@ function nextStep() {
     const d = ilsDeviation(W.ils, f.pos), nm = d.thrDist / NM;
     if (nm > 0 && nm < 30 && W.ils !== W.depIls || (W.cfg?.start === 'final' && nm > 0)) {
       if (f.ap.on && !(f.ap.appr || f.ap.lat === 'LOC')) return { label: 'Arm the ILS approach', run: () => armAppr() };
-      if (f.ap.on && nm < 14 && handFlyAvailable()) return { label: 'Hand-fly the landing (AP off)', run: handFly };
       if (nm < 15 && f.flapIdx < 4 && f.ias < FLAPS[f.flapIdx + 1].vfe - 6) return { label: 'Flaps ' + FLAPS[f.flapIdx + 1].name, run: () => { f.setFlaps(f.flapIdx + 1); toast('Flaps ' + FLAPS[f.flapIdx].name); } };
       if (nm < 9 && !f.gearDown) return { label: 'Gear down', run: () => f.setGear(true) };
       if (nm < 12 && !f.spoilersArmed) return { label: 'Arm ground spoilers', run: () => { f.spoilersArmed = true; toast('Ground spoilers armed'); } };
@@ -953,7 +939,7 @@ function rebase(lat, lon, primary) { // pre-streaming: rebuild the world around 
   if (W.primary) { const act = activeRunwayEnd(W.primary); traffic.setup(W.primary.apt, new THREE.Vector3(W.primary.x, W.primary.elev, W.primary.z), W.primary.geom.ends, act); }
   sky.envAge = 1e9; flyby.set = false;
 }
-function maxAccel() { if (!FLY_ANYWHERE) return 16; const agl = fdm.pos.y - (fdm.gnd?.h || 0); return !fdm.onGround && fdm.ap.on && agl > 3000 && !W.hand ? 64 : 16; }
+function maxAccel() { if (!FLY_ANYWHERE) return 16; const agl = fdm.pos.y - (fdm.gnd?.h || 0); return !fdm.onGround && fdm.ap.on && agl > 3000 ? 64 : 16; }
 function directTo(A) {
   A = A || atc.arr || W.dest; if (!A || fdm.onGround) { toast(fdm.onGround ? 'Direct-to works in the air' : 'No destination set'); return false; }
   W.dct = { apt: A }; W.descending = false; W.route = [{ lat: A.lat, lon: A.lon, name: A.icao, x: W.geo.x(A.lon), z: W.geo.z(A.lat) }];
@@ -1061,7 +1047,7 @@ function snapshot() {
   const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z);
   return { fdm, e, speeds: fdm.speeds(), ap: fdm.ap, altFt: fdm.pos.y / FT, groundFt: gh / FT, raFt: fdm.ra / FT, ils: W.ils, ilsDev: dev, track: (Math.atan2(fdm.vel.x, -fdm.vel.z) * R2D + 360) % 360, route: W.route,
     airports: W.built.map(b => ({ x: b.x, z: b.z, geom: b.geom, icao: b.icao })), navaids: W.navs, traffic: traffic.list, windFrom: W.windFrom, windKt: W.windKt, localMin: W.tod, phase: W.phase,
-    ndRange: W.ndRange || (fdm.pos.y / FT - gh / FT < 4000 ? 10 : fdm.pos.y / FT < 12000 ? 20 : 40), warnings: warnings(e, dev), elecEmer: sys.emerElec, fd: fdm.ap.on || !(W.hand || W.ils !== W.depIls || W.cfg?.start === 'final') ? null : fdGuide(fdm, W.ils, dev, e), lat: ll.lat, lon: ll.lon };
+    ndRange: W.ndRange || (fdm.pos.y / FT - gh / FT < 4000 ? 10 : fdm.pos.y / FT < 12000 ? 20 : 40), warnings: warnings(e, dev), elecEmer: sys.emerElec, fd: fdm.ap.on || !(W.ils !== W.depIls || W.cfg?.start === 'final') ? null : fdGuide(fdm, W.ils, dev, e), lat: ll.lat, lon: ll.lon };
 }
 function warnings(e, dev) {
   const m = fails.ecam([]); const f = fdm; const sp = f.speeds();
@@ -1112,10 +1098,10 @@ function simulate(dtReal) {
 }
 // first-officer assistance on approach when the autopilot flies (gear/flaps/speed)
 function autoConfig(dt) {
-  const ap = fdm.ap; if (!ap.autoConfig || !(ap.on || W.hand) || fdm.onGround) return;
+  const ap = fdm.ap; if (!ap.autoConfig || !ap.on || fdm.onGround) return;
   const sp = fdm.speeds(); const dev = W.ils ? ilsDeviation(W.ils, fdm.pos) : null; if (!dev || !dev.valid) return;
   const nm = dev.thrDist / NM;
-  if (ap.vert === 'G/S' || ap.vert === 'FLARE' || (W.hand && !ap.on && nm < 12)) {
+  if (ap.vert === 'G/S' || ap.vert === 'FLARE') {
     if (nm < 7 && fdm.flapIdx < 3) { fdm.setFlaps(3); }
     if (nm < 6.5 && !fdm.gearDown) { fdm.setGear(true); }
     if (nm < 5 && fdm.flapIdx < 4) { fdm.setFlaps(4); }
@@ -1168,7 +1154,7 @@ function showScore() {
   const s = scoreLanding(); if (!s) return; lastScore = s;
   const log = store.get('log', []); log.unshift({ date: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: W.mode, apt: s.apt, rwy: s.rwy, fpm: s.fpm, score: s.score, grade: s.grade, wx: W.wx, tod: fmtTime(W.tod) }); store.set('log', log.slice(0, 200));
   if (W.mode === 'challenge' && W.cfg.chId) { const best = store.get('best', {}); if (!best[W.cfg.chId] || best[W.cfg.chId] < s.score) { best[W.cfg.chId] = s.score; store.set('best', best); } }
-  if (W.mode !== 'challenge' && !W.hand) { toast(`Landing ${s.grade} · ${s.score}/100 · ${s.fpm} fpm · ${s.lat} m off centreline`, 7000); return; }
+  if (W.mode !== 'challenge') { toast(`Landing ${s.grade} · ${s.score}/100 · ${s.fpm} fpm · ${s.lat} m off centreline`, 7000); return; }
   const bar = (n, v, max, t) => `<div class="b"><span>${n}</span><span class="t"><i style="width:${Math.round(v / max * 100)}%"></i></span><span>${t}</span></div>`;
   $('#resultBox').innerHTML = `<span class="eyebrow">${s.apt} · Runway ${s.rwy} · ${W.cfg.title || 'Landing'}</span>
     <div class="score"><div class="big">${s.score}</div><div><div class="gr">Grade ${s.grade}</div><div style="color:var(--mute);font:12px var(--f-mono)">${s.onRwy ? 'Touchdown on the runway' : 'Touchdown off the runway surface'}</div></div></div>
@@ -1248,7 +1234,7 @@ function renderRest(dt, night) {
   const gh = ground(fdm.pos.x, fdm.pos.z).h; const agl = fdm.pos.y - gh; blob.visible = settings.quality !== 'ultra' && agl < 80 && ATM.uNight.value < 0.95;
   if (blob.visible) { blob.position.set(fdm.pos.x, gh + 0.12, fdm.pos.z); const e = fdm.euler(); blob.rotation.y = -e.hdg * D2R; blob.scale.set(30, 1, 38); blob.material.opacity = (1 - agl / 80) * (1 - W.sky_oc) * 0.9; }
   W.sky_oc = sky.weather.overcast;
-  if (!W.menuMode && W.ils) aids.update(W.ils, fdm.pos, { boxes: W.hand && settings.landBoxes && landHelpers() && !fdm.ap.on && !fdm.onGround, px: renderer.getPixelRatio() }, ground); aids.g.visible = !W.menuMode && !!W.ils;
+  if (!W.menuMode && W.ils) aids.update(W.ils, fdm.pos, { px: renderer.getPixelRatio() }, ground); aids.g.visible = !W.menuMode && !!W.ils;
   composer.render(dt);
   // instruments at ~20 Hz, spread across frames
   dispT += dt; if (dispT > (W.view === 'cockpit' ? 0.05 : 0.08)) { dispT = 0; const S = snapshot(); const order = W.view === 'cockpit' ? [['pfd'], ['nd'], ['ewd', 'sd']] : [['pfd'], ['pfd', 'nd']]; displays.draw(S, order[dispIdx++ % order.length]); W.S = S; }
@@ -1257,7 +1243,7 @@ function renderRest(dt, night) {
   audio.update({ fdm, apuN: sys.apuN, paused: W.paused || W.menuMode, ground: fdm.onGround, camDist: camera.position.distanceTo(aircraft.position), rain: W.wx === 'rain', nearAirport: true, groundH: gh, flapTarget: FLAPS[fdm.flapIdx].flap }, dt, W.view);
   music.update(dt, musicWant()); musicNowUI(); if (svcPanel.open) svcPanel.update(dt);
   if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
-  if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); updateCoach(); } else if (!$('#coach').hidden) $('#coach').hidden = true;
+  if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
 }
 // boarding / deplaning music in the cabin while parked with power on; ambient music in the terminal halls
 const MOOD_NAME = { bossa: 'bossa nova', pentatonic: 'pentatonic', lounge: 'lounge jazz' };
@@ -1280,13 +1266,6 @@ function musicWant() {
   if (W.onFoot) { const tag = foot.zoneTag(); if (tag === 'hall' || !tag) return { kind: 'terminal', mood, level: 0.9 }; if (tag === 'bridge' || tag === 'gatedoor') return { kind: 'cabin', mood, level: 0.3 }; return { kind: 'cabin', mood, level: tag === 'cockpit' || tag === 'ckdoor' ? 0.5 : 1 }; }
   const parked = fdm.onGround && Math.hypot(fdm.vel.x, fdm.vel.z) < 0.5 && sys.ac && ((W.stand && !W.push && !fdm.engRun[0] && !fdm.engRun[1]) || W.parkedAt);
   const lv = !parked ? 0 : W.view === 'cabin' ? 1 : W.view === 'cockpit' ? 0.3 : 0; return lv ? { kind: 'cabin', mood, level: lv } : null;
-}
-// approach coach for hand-flown landings: glide path, centreline and speed in plain words, then the flare cue
-let coachN = 0;
-function updateCoach() {
-  if (coachN++ % 6) return; const el = $('#coach'); let c = null;
-  if (W.hand && !fdm.ap.on && W.ils && fdm.assist !== 'realistic' && !(fdm.onGround && W.scored)) { const d = ilsDeviation(W.ils, fdm.pos); if (d.valid || fdm.onGround) c = coachLine(fdm, d, fdm.ap.athr ? fdm.ap.spd : fdm.speeds().vapp, fdm.ap.athr, pad.active); }
-  const txt = c?.text || '', k = txt + (c?.cls || ''); if (el._k !== k) { el._k = k; el.textContent = txt; el.className = c?.cls || ''; el.hidden = !txt; }
 }
 // ---------------------------------------------------------------- flight deck: per-frame update, shadows, reflections
 let deckEnvT = 1e9, deckEnvKey = '', exteriorCasters = null;
@@ -1390,7 +1369,6 @@ function updateParkPrompt() {
   const gs = Math.hypot(fdm.vel.x, fdm.vel.z) / KT;
   if (W.parkedAt && !W.onFoot) txt = 'Enter  Stand up and walk out with the passengers';
   else if (fdm.onGround && gs < 4 && !W.push && W.mode !== 'challenge' && fdm.td) { const st = nearestFreeStand(120); if (st) txt = 'Enter  Park at gate ' + (st.gateName || '') + ' and shut down'; }
-  if (!txt && fdm.ap.on && !fdm.onGround && (W.ptT = (W.ptT || 0) + 1) && (W.ptT % 20 === 0 ? (W.ptHand = handFlyAvailable()) : W.ptHand)) txt = 'U  Hand-fly the landing (autopilot off)';
   if (el.textContent !== txt) el.textContent = txt; el.hidden = !txt;
 }
 function parkPromptAction() {
@@ -1512,7 +1490,7 @@ function buildMenu() {
   $('#stA').textContent = World.stats.airports.toLocaleString(); $('#stR').textContent = World.stats.runways.toLocaleString(); $('#stN').textContent = World.stats.navaids.toLocaleString();
   const cards = $('#cards'); cards.innerHTML = '';
   for (const A of featured()) {
-    const g = airportGeometry(A); const b = document.createElement('button'); b.className = 'card'; b.setAttribute('aria-pressed', 'false');
+    const g = airportGeometry(A); const b = document.createElement('button'); b.className = 'card'; b.setAttribute('aria-pressed', 'false'); const idnC = identityFor(A); b.style.setProperty('--acc', idnC.stripe2 || (idnC.hall && idnC.hall.signFg) || '#f29a4c');
     b.innerHTML = `<canvas width="420" height="236"></canvas><span class="pill">${A.icao === 'MPTO' ? 'Panamá' : 'Featured'}</span><div class="meta"><div class="code"><b>${A.iata}</b><span>${A.icao}</span></div><div class="nm">${A.name}</div><div class="sub">${A.city}, ${A.country} · ${g.runways.length} rwy · ${Math.round(g.elevFt)} ft</div></div>`;
     drawDiagram(b.querySelector('canvas'), A, null, { small: true, pad: 30 }); b.onclick = () => selectAirport(A); cards.appendChild(b);
   }
@@ -1527,7 +1505,6 @@ function buildMenu() {
   const tod = $('#tod'), wd = $('#wdir'), ws = $('#wspd'); const upd = () => { $('#todv').textContent = fmtTime(+tod.value); $('#wdirv').textContent = String(wd.value).padStart(3, '0') + '°'; $('#wspdv').textContent = ws.value + ' kt'; };
   tod.oninput = upd; wd.oninput = upd; ws.oninput = upd; upd();
   $('#fly').onclick = () => { audio.start(); const g = airportGeometry(sel.apt); go({ apt: sel.apt, end: sel.end, start: sel.start, dest: sel.dest && sel.dest !== sel.apt ? sel.dest.icao : undefined, tod: +tod.value, wx: sel.wx || 'clear', windFrom: +wd.value, windKt: +ws.value, gusts: $('#gusts').checked, mode: 'free', cold: $('#coldDark').checked }); };
-  for (const k of ['landBoxes', 'landAutoSpd']) { const el = $('#' + k); el.checked = settings[k] !== false; el.onchange = () => { settings[k] = el.checked; store.set('settings', settings); }; }
   // start anywhere: world map (procedural land, airport dots), position, altitude, heading, speed; starts airborne on autopilot
   $('#nav button[data-sec=anywhere]').hidden = !FLY_ANYWHERE;
   if (FLY_ANYWHERE) { const cv = $('#wmap'), any = { lat: 45.5, lon: -35 }, num = id => $('#' + id); let wx = 'clear';
@@ -1609,6 +1586,8 @@ function selectAirport(A, quiet) {
   const add = (label, m) => { if (m == null) return; const c = document.createElement('button'); c.className = 'chip'; c.textContent = label + ' ' + fmtTime(m); c.onclick = () => { $('#tod').value = Math.round(m / 5) * 5; $('#tod').oninput(); }; chips.appendChild(c); };
   add('Sunrise', st.rise); add('Morning', st.rise != null ? st.rise + 150 : 540); add('Noon', 750); add('Golden hour', st.set != null ? st.set - 40 : 1080); add('Dusk', st.set != null ? st.set + 18 : 1150); add('Night', 1290);
   $('#tod').value = Math.round(((st.set ?? 1120) - 40) / 5) * 5; $('#tod').oninput();
+  const idnH = identityFor(A); $('#menu').style.setProperty('--acc', idnH.stripe2 || (idnH.hall && idnH.hall.signFg) || '#f29a4c');
+  const hI = $('#heroIata'); if (hI) { hI.textContent = A.iata || A.icao; $('#heroName').textContent = A.name; $('#heroSub').textContent = (A.city ? A.city + ' · ' : '') + A.country + ' · ' + A.icao; $('#heroChips').innerHTML = '<span>' + g.runways.length + ' runways</span><span>' + Math.round(g.elevFt).toLocaleString() + ' ft elevation</span><span>sunset ' + (st.set != null ? fmtTime(st.set) : '—') + '</span><span>' + (FEATURED_INFO[A.icao] ? 'hand-made surroundings' : 'world-data surroundings') + '</span>'; }
   if (!quiet) { $('#results').hidden = true; $('#q').value = ''; $('#setupWrap').scrollIntoView({ block: 'start', behavior: 'smooth' }); }
 }
 function renderLog() {
@@ -1657,7 +1636,7 @@ const KEYS = [['W S / ↑ ↓', 'Pitch (↑ nose down)'], ['A D / ← →', 'Rol
   ['Start engines', 'Button at the top while parked (automatic start); or do it yourself on the overhead and pedestal'],
   ['T', 'Radio (ATC): while open, 1–6 pick a call, Esc closes'], ['Y', 'Cabin PA: while open, 1–9 announce, 0 seat belt sign, Esc closes'], ['K / Enter', 'Pushback / park at gate'], ['I / GND', 'Ground services at the gate: call or dismiss fuel, catering, baggage, water, toilets, cleaning, power (also in the PA panel)'], ['J', 'Next step: checklists, ECAM actions after a failure, ATC calls (same as A on a controller)'], ['Shift Enter', 'Auto-taxi along the magenta route'],
   ['F / V', 'Flaps extend / retract'], ['G', 'Landing gear'], ['B', 'Wheel brakes (hold)'], ['Space', 'Parking brake'], ['R', 'Reversers (on ground)'], ['/', 'Speed brake'], ['[ ]', 'Pitch trim (direct law)'],
-  ['Z', 'Autopilot on / off'], ['Shift Z', 'Autothrust on / off'], ['O', 'Arm ILS approach (LOC + G/S)'], ['U', 'Hand-fly the landing (autopilot off, flight director on)'], ['L', 'Landing lights'], ['C / 1–7', 'Camera: deck, chase, orbit, tower, runway, fly-by, cabin'], ['8 / 9 / 0', 'Flight deck only: look at pedestal / overhead / side window (again: ahead)'], ['Mouse on the deck', 'Hover a switch for its name, click to operate, scroll on knobs'],
+  ['Z', 'Autopilot on / off'], ['Shift Z', 'Autothrust on / off'], ['O', 'Arm ILS approach (LOC + G/S)'], ['L', 'Landing lights'], ['C / 1–7', 'Camera: deck, chase, orbit, tower, runway, fly-by, cabin'], ['8 / 9 / 0', 'Flight deck only: look at pedestal / overhead / side window (again: ahead)'], ['Mouse on the deck', 'Hover a switch for its name, click to operate, scroll on knobs'],
   ['Mouse drag', 'Look / orbit camera'], ['Wheel', 'Zoom'], ['M', 'Mouse yoke'], ['N', 'Navigation display overlay'], ['H', 'Outside views: clean HUD ↔ full HUD + PFD'], ['. ,', 'Time acceleration'], ['P / Esc', 'Pause / menu'], ['?', 'This help'],
   ['On foot', 'WASD walk, Shift run, mouse look / orbit, wheel zoom, V third / first person, E interact, J skip ahead, Y PA'],
   ['Xbox controller', 'Left stick flies (Easy assist: let go and it levels) and steers on the ground; right stick looks, R3 recentres; RT / LT thrust (LT on the landing roll: reverse); A next step (shown on screen); B brakes (hold); X ATC menu; Y PA menu; LB / RB flaps up / down; hold LB + A gear, + X autopilot, + B spoilers, + Y lights; D-pad views; View camera, hold View for help; Menu pause'],
@@ -1697,7 +1676,7 @@ window.__sim = {
     const base = o.hall ? Math.atan2(-t.zAxis.x, -t.zAxis.z) : 0; if (o.yaw != null) foot.yaw = base + o.yaw; if (o.pitch != null) foot.pitch = o.pitch; foot.bodyYaw = o.body != null ? base + o.body : foot.yaw; if (o.dist) foot.camDist = o.dist;
     foot.vel.set(0, 0, 0); foot.camE = 9; for (let i = 0; i < (o.steps ?? 12); i++) foot.update(1 / 30, { fwd: o.fwd || 0, side: 0, run: !!o.run, dyaw: 0, dpitch: 0 }, sky.exposure); return { ...this.footCam(), tag: foot.zoneTag(), cam: camera.position.toArray().map(v => +v.toFixed(2)) }; },
   radio(v) { toggleRadio(v); return atc.options().map(o => o.id); },
-  say(id) { atc.choose(id); }, fd() { const dev = W.ils ? ilsDeviation(W.ils, fdm.pos) : null; return fdGuide(fdm, W.ils, dev, fdm.euler()); }, coach() { coachN = 0; updateCoach(); const d = W.ils && ilsDeviation(W.ils, fdm.pos); return { text: $('#coach').textContent, cls: $('#coach').className, hidden: $('#coach').hidden, papi: aids.papiText(), papiState: aids.papiState.slice(), gsDots: d && +d.gsDots.toFixed(2), locDots: d && +d.locDots.toFixed(2), nm: d && +(d.thrDist / NM).toFixed(2), boxes: aids.boxes.filter(b => b.visible).length }; }, handFly() { return handFly(); }, startPushback() { startPushback(); }, pushDone() { return !!(W.push && W.push.done); }, crewState: () => atcCtx.crewState(), atcState() { return { phase: atc.phase, log: atc.log.map(l => (l.who === 'ME' ? 'ME: ' : l.fac + ': ') + l.text), opts: atc.options().map(o => o.id), errors: atc.errors, push: W.push && { done: W.push.done } }; },
+  say(id) { atc.choose(id); }, fd() { const dev = W.ils ? ilsDeviation(W.ils, fdm.pos) : null; return fdGuide(fdm, W.ils, dev, fdm.euler()); }, coach() { const d = W.ils && ilsDeviation(W.ils, fdm.pos); return { text: '', cls: '', hidden: true, papi: aids.papiText(), papiState: aids.papiState.slice(), gsDots: d && +d.gsDots.toFixed(2), locDots: d && +d.locDots.toFixed(2), nm: d && +(d.thrDist / NM).toFixed(2), boxes: 0 }; }, startPushback() { startPushback(); }, pushDone() { return !!(W.push && W.push.done); }, crewState: () => atcCtx.crewState(), atcState() { return { phase: atc.phase, log: atc.log.map(l => (l.who === 'ME' ? 'ME: ' : l.fac + ': ') + l.text), opts: atc.options().map(o => o.id), errors: atc.errors, push: W.push && { done: W.push.done } }; },
   traffic, sys, speech, startEngines, padHud() { updatePadHUD(true); }, atcCtx, W, fdm, toggleRadio, fails, rescue, evacuate, fail(id, o) { return fails.trigger(id, o); }, rescueStep(sec) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); for (let i = 0; i < sec * 10; i++) rescue.update(0.1, aircraft, { scrape: 0, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: true }); return rescue.trucks.map(t => ({ parked: t.parked, d: Math.round(t.obj.position.distanceTo(fdm.pos)) })); }, warnings() { return W.S ? W.S.warnings : null; },
   air(o) { // test: put the aircraft in the air (o: { agl, kt, hdg, x, z, ap }) relative to the departure runway when x/z are omitted
     const E = W.end, b = W.primary, P = W.depIls ? W.depIls.thr : fdm.pos; const hdg = o.hdg ?? E.hdg; const x = o.x ?? P.x + E.dir.x * 2500, z = o.z ?? P.z + E.dir.z * 2500;
