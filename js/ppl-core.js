@@ -23,7 +23,12 @@ const hash = (a, b) => { let x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; r
 let QUALITY = null;
 function quality() { if (QUALITY) return QUALITY; try { const o = JSON.parse(localStorage.getItem('foxheart.settings') || '{}'); return o.quality || 'high'; } catch (e) { return 'high'; } }
 const TASK = new Set(['pilot', 'phone', 'read', 'eat', 'drink', 'buckle', 'baby', 'sleep', 'lift', 'demo', 'push', 'serve', 'take', 'give', 'grip', 'clap']);
-export const LOD_R = { low: [1.6, 4.5, 2, 10], medium: [2.5, 8, 4, 20], high: [3.0, 10, 8, 40], ultra: [3.5, 12, 10, 48] }; // [lod0 radius, lod1 radius, max lod0, max lod1] (DESIGN.md section 4 budget; medium halves the counts)
+export const LOD_R = { low: [1.6, 4.5, 2, 10, 16, 48], medium: [2.5, 8, 4, 20, 25, 80], high: [3.0, 11, 8, 44, 28, 128], ultra: [3.5, 12, 10, 48, 32, 160] }; // [lod0 radius, lod1 radius, max lod0, max lod1, face-tier radius, face-tier max]
+// Tier order (p._lodP): 0 full, 1 modelled, 2 FACE TIER (headless painted figure fig2b + modelled head1 / eyes1 / hair1),
+// 3 painted figure (fig2). Faces pass (owner playtest): the old table swapped everyone past 10 m to the painted figure,
+// whose painted eyes are sub-pixel at hall distances — faces read blank and the swap popped. The face tier keeps a real
+// modelled head to ~25 m; the savings move to the body (painted figure, no garment shells / hands / fingers), pose-update
+// throttling and the far tier, never to the head. (DESIGN.md section 4 budget; medium halves the counts)
 
 // ---------------------------------------------------------------- 3x4 affine helpers (row-major)
 const M12 = () => new Float64Array(12);
@@ -166,17 +171,25 @@ export class PeopleHD {
   commit(t, camPos) {
     this.frame++; if (camPos) { this.camPos.copy(camPos); this.hasCam = true; } if (this.dir) this.dir.step(t);
     this.parent.updateMatrixWorld(); const e = this.parent.matrixWorld.elements; this.U.uObj.value.set(e[0], e[4], e[8], e[1], e[5], e[9], e[2], e[6], e[10]);
-    const R = LOD_R[this.q] || LOD_R.high, r0 = R[0] * R[0], r1 = R[1] * R[1];
+    const R = LOD_R[this.q] || LOD_R.high, r0 = R[0] * R[0], r1 = R[1] * R[1], rF = R[4] * R[4];
     for (const k in this.layers) this.layers[k].list.length = 0;
     const add = (name, i) => { const L = this.layers[name]; if (L) L.list.push(i); };
     const vis = this._vis || (this._vis = []); vis.length = 0;
     for (const p of this.p) { if (p.hidden || p.y < -50) continue; p._d2 = this.hasCam ? this.camPos.distanceToSquared(this.V.set(p.x, p.y + 1, p.z)) : 25; vis.push(p); }
-    vis.sort((a, b) => a._d2 - b._d2); let n0 = 0, n1 = 0;
+    // Faces pass (owner playtest): capped-tier slot races run on an incumbency-discounted distance, so a
+    // person who already holds a tier keeps it against near-equals — with the old raw distance sort, walking
+    // through a crowd churned neighbours between modelled and painted tiers frame to frame (visible pop /
+    // "people disappear"), and everyone past the LOD1 radius was a painted figure with no modelled head at
+    // all (blank faces at hall range: 197 of 201 visible crowd at the gate standpoint measured LOD2-painted).
+    const dis = p => p._d2 * (p._lodP === 0 ? 0.72 : p._lodP === 1 ? 0.78 : p._lodP === 2 ? 0.85 : 1);
+    vis.sort((a, b) => dis(a) - dis(b)); let n0 = 0, n1 = 0, nF = 0;
     for (const p of vis) {
-      const d2 = p._d2, h0 = p._lodP === 0 ? 1.3225 : 1, h1 = p._lodP <= 1 ? 1.3225 : 1; let lod = d2 < r0 * h0 && n0 < R[2] ? 0 : d2 < r1 * h1 && n1 < R[3] ? 1 : 2; p._lodP = lod; if (lod === 0) n0++; else if (lod === 1) n1++;
-      const far = d2 > 900; if (!(far && (this.frame + p.i) % 3 && p._init)) { this.pose(p, t); p._init = true; }
+      const d2 = p._d2, pv = p._lodP, h0 = pv === 0 ? 1.3225 : 1, h1 = pv != null && pv <= 1 ? 1.3225 : 1, hF = pv != null && pv <= 2 ? 1.3225 : 1;
+      let lod = d2 < r0 * h0 && n0 < R[2] ? 0 : d2 < r1 * h1 && n1 < R[3] ? 1 : d2 < rF * hF && nF < R[5] ? 2 : 3; p._lodP = lod; if (lod === 0) n0++; else if (lod === 1) n1++; else if (lod === 2) nF++;
+      const far = d2 > Math.max(900, rF * 1.3225); if (!(far && (this.frame + p.i) % 3 && p._init)) { this.pose(p, t); p._init = true; }
       const T = p._t, i = p.i;
-      if (lod === 2) { add('fig2', i); if (T.hair !== 'none') add('hair_' + T.hair + '2', i); if (T.bot === 'skirt') add('skirt1', i); if (T.hat) add('hat', i); }
+      if (lod === 3) { add('fig2', i); if (T.hair !== 'none') add('hair_' + T.hair + '2', i); if (T.bot === 'skirt') add('skirt1', i); if (T.hat) add('hat', i); }
+      else if (lod === 2) { add('fig2b', i); add('head1', i); add('eyes1', i); if (T.hair !== 'none') add('hair_' + T.hair + '1', i); if (T.beard === 'beard') add('beard1', i); if (T.bot === 'skirt') add('skirt1', i); if (T.hat) add('hat', i); }
       else { const s = String(lod); add('body' + s, i); add('head' + s, i); add('hands' + s, i); add('eyes' + s, i); add(T.top + s, i); if (T.vest) add('vest' + s, i); if (T.top === 'hoodie') add('hood' + s, i);
         add(T.bot + s, i); add(T.shoe + s, i); if (T.hair !== 'none') add('hair_' + T.hair + s, i); if (T.beard === 'beard') add('beard' + s, i); else if (T.beard === 'moustache' && lod === 0) add('moustache0', i);
         if (T.acc) add(T.acc, i); if (T.hat) add('hat', i);
