@@ -6,7 +6,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ATM, ATM_GLSL, NOISE_GLSL, atmos } from './sky.js';
 import { airportGeometry, FT, D2R, ilsFreq } from './data.js';
 import { TERMINAL_HINTS } from './surroundings.js';
-import { trafficAirliner, TRAFFIC_LIVERIES, pickTrafficVariant, trafficGlassMaterial } from './ac-traffic.js';
+import { trafficAirliner, TRAFFIC_LIVERIES, pickTrafficVariant, trafficGlassMaterial, trafficParkedFinMaterial, trafficParkedTitlesMaterial } from './ac-traffic.js';
 import { rng } from './terrain.js';
 import { Site, obb, overlap, runwayBox } from './env-site.js';
 import { apronMaterial } from './env-apron.js';
@@ -405,11 +405,19 @@ export function buildAirport(apt, opts) {
     const byVar = new Map(); for (const p of parked) { const a = byVar.get(p.var); if (a) a.push(p); else byVar.set(p.var, [p]); }
     for (const [v, list] of byVar) {
       let pg; try { pg = trafficAirliner('high', v); } catch (e) { pg = parkedAirlinerGeometry(); }
-      const ib = new THREE.InstancedMesh(pg.body, bm, list.length), iF = new THREE.InstancedMesh(pg.fin, fm, list.length);
+      // tail logos + fuselage titles (ac-traffic): when the detailed fin carries logo space,
+      // clone it per airport and stamp each instance's airline into an aTile attribute —
+      // the cached source geometry is shared with other airports and must stay untouched.
+      const detailed = !!(pg.fin && pg.fin.attributes && pg.fin.attributes.aLogoUv);
+      const tiles = new Float32Array(list.length); list.forEach((p, i) => tiles[i] = p.liv);
+      const finGeo = detailed ? pg.fin.clone() : pg.fin; if (detailed) finGeo.setAttribute('aTile', new THREE.InstancedBufferAttribute(tiles, 1));
+      const ib = new THREE.InstancedMesh(pg.body, bm, list.length), iF = new THREE.InstancedMesh(finGeo, detailed ? trafficParkedFinMaterial() : fm, list.length);
       const iG = pg.glass && pg.glass.attributes.position.count ? new THREE.InstancedMesh(pg.glass, gm, list.length) : null;
-      list.forEach((p, i) => { Q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rot); S.setScalar(p.s); Pv.set(p.x, 3.6 * p.s, p.z); M.compose(Pv, Q, S); ib.setMatrixAt(i, M); iF.setMatrixAt(i, M); if (iG) iG.setMatrixAt(i, M); const L = TRAFFIC_LIVERIES[p.liv]; C.setRGB(L.body[0], L.body[1], L.body[2]); ib.setColorAt(i, C); C.setRGB(L.fin[0], L.fin[1], L.fin[2]); iF.setColorAt(i, C); });
-      ib.castShadow = iF.castShadow = quality === 'ultra'; ib.frustumCulled = iF.frustumCulled = false; if (iG) iG.frustumCulled = false;
-      group.add(ib, iF); if (iG) group.add(iG);
+      let iT = null;
+      if (detailed && pg.titles) { const tg = pg.titles.clone(); tg.setAttribute('aTile', new THREE.InstancedBufferAttribute(tiles.slice(), 1)); iT = new THREE.InstancedMesh(tg, trafficParkedTitlesMaterial(), list.length); iT.renderOrder = 2; }
+      list.forEach((p, i) => { Q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), p.rot); S.setScalar(p.s); Pv.set(p.x, 3.6 * p.s, p.z); M.compose(Pv, Q, S); ib.setMatrixAt(i, M); iF.setMatrixAt(i, M); if (iG) iG.setMatrixAt(i, M); if (iT) iT.setMatrixAt(i, M); const L = TRAFFIC_LIVERIES[p.liv]; C.setRGB(L.body[0], L.body[1], L.body[2]); ib.setColorAt(i, C); C.setRGB(L.fin[0], L.fin[1], L.fin[2]); iF.setColorAt(i, C); });
+      ib.castShadow = iF.castShadow = quality === 'ultra'; ib.frustumCulled = iF.frustumCulled = false; if (iG) iG.frustumCulled = false; if (iT) iT.frustumCulled = false;
+      group.add(ib, iF); if (iG) group.add(iG); if (iT) group.add(iT);
     }
   }
   // tower and hangar spots through the Site; art in env-buildings.js

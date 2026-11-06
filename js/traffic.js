@@ -1,7 +1,7 @@
 // AI traffic: scripted arrivals and departures on the active runway of the current airport.
 import * as THREE from 'three';
 import { parkedAirlinerGeometry } from './airport.js';
-import { trafficAirliner, TRAFFIC_LIVERIES, pickTrafficVariant, trafficGlassMaterial, VARIANT_KZ } from './ac-traffic.js';
+import { trafficAirliner, TRAFFIC_LIVERIES, pickTrafficVariant, trafficGlassMaterial, trafficFinMaterial, trafficTitlesMaterial, VARIANT_KZ } from './ac-traffic.js';
 import { atmos } from './sky.js';
 import { KT, D2R } from './data.js';
 
@@ -22,7 +22,8 @@ export class Traffic {
     const grp = new THREE.Group();
     const bm = atmos(new THREE.MeshStandardMaterial({ vertexColors: true, color: new THREE.Color(L.body[0], L.body[1], L.body[2]), roughness: 0.4, metalness: 0.15 }));
     grp.add(new THREE.Mesh(geo.body, bm));
-    const fm = atmos(new THREE.MeshStandardMaterial({ color: new THREE.Color(L.fin[0], L.fin[1], L.fin[2]), roughness: 0.4, side: THREE.DoubleSide })); grp.add(new THREE.Mesh(geo.fin, fm));
+    grp.add(new THREE.Mesh(geo.fin, trafficFinMaterial(liv)));
+    if (geo.titles) { const tm = new THREE.Mesh(geo.titles, trafficTitlesMaterial(liv)); tm.renderOrder = 2; grp.add(tm); }
     if (geo.glass && geo.glass.attributes.position.count) grp.add(new THREE.Mesh(geo.glass, this.glassMat));
     const wz = z => -13 + (z + 13) * kz; // light points follow the variant warp
     const lp = [[17, 0.3, wz(4.8)], [-17, 0.3, wz(4.8)], [0, 2.1, wz(-1)], [0, 1.5, wz(19.5)], [4.5, -0.8, wz(-3.5)], [-4.5, -0.8, wz(-3.5)]];

@@ -54,6 +54,19 @@ function colour(g, f) { // non-indexed, per-face colour f(centroid, normal) -> [
   n.setAttribute('color', new THREE.BufferAttribute(C, 3)); return n;
 }
 function plain(g) { const n = g.index ? g.toNonIndexed() : g; for (const k of Object.keys(n.attributes)) if (k !== 'position' && k !== 'normal') n.deleteAttribute(k); return n; }
+// plain() + an aLogoUv attribute carrying tail-logo space: (u = chord fraction 0 LE -> 1 TE,
+// v = span fraction 0 base -> 1 tip) on the fin faces, the sentinel (-1,-1) everywhere else.
+const FIN_TAN = Math.tan(37 * Math.PI / 180);
+function finLogoUV(x, y, z) {
+  const s = Math.min(0.99, Math.max(0.01, (y - 1.3) / 7.0));
+  const c = Math.min(0.99, Math.max(0.01, (z - (11.7 + 7.0 * FIN_TAN * s)) / (6.1 - 4.0 * s)));
+  return [c, s];
+}
+function plainUV(g, uvFn) {
+  const n = plain(g); const P = n.attributes.position, uv = new Float32Array(P.count * 2);
+  for (let i = 0; i < P.count; i++) { const t = uvFn ? uvFn(P.getX(i), P.getY(i), P.getZ(i)) : null; uv[i * 2] = t ? t[0] : -1; uv[i * 2 + 1] = t ? t[1] : -1; }
+  n.setAttribute('aLogoUv', new THREE.BufferAttribute(uv, 2)); return n;
+}
 // lifting surface: sections along a span path; sec(s) -> { le: Vector3, chord, chordDir, thickDir, t }
 const AF = [0, 0.02, 0.07, 0.16, 0.3, 0.48, 0.66, 0.82, 1]; // chord stations (cosine-ish)
 function airfoil(x) { return 5 * (0.2969 * Math.sqrt(x) - 0.126 * x - 0.3516 * x * x + 0.2843 * x ** 3 - 0.1015 * x ** 4); }
@@ -108,7 +121,7 @@ export function airlinerGeometry(lod = 'high', variant = 'std') {
     const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setIndex(I); g.computeVertexNormals(); body.push(colour(orient(g, () => new THREE.Vector3(0, 0, 1)), [0.18, 0.18, 0.2])); }
   // cheatline band under the windows (livery colour), offset just off the skin
   if (true) { const bz = zs.filter(z => z > NOSE + 4.0 && z < 17.3); const bt = [86, 91, 96].map(d => d * Math.PI / 180);
-    for (const sd of [1, -1]) { const g = grid(bz.length, bt.length, (i, j) => fpt(bz[i], sd > 0 ? bt[j] : 2 * Math.PI - bt[j], 0.022)); liv.push(plain(orient(g, m => new THREE.Vector3(m.x, 0, 0)))); } }
+    for (const sd of [1, -1]) { const g = grid(bz.length, bt.length, (i, j) => fpt(bz[i], sd > 0 ? bt[j] : 2 * Math.PI - bt[j], 0.022)); liv.push(plainUV(orient(g, m => new THREE.Vector3(m.x, 0, 0)), null)); } }
   // windows: cockpit panes (bilinear patches in (d from nose, theta)) and the cabin window row
   const patch = (corners, off, n = 2) => { const g = grid(n + 1, n + 1, (i, j) => { const u = j / n, v = i / n; const d = (1 - v) * ((1 - u) * corners[0][0] + u * corners[1][0]) + v * ((1 - u) * corners[3][0] + u * corners[2][0]); const t = (1 - v) * ((1 - u) * corners[0][1] + u * corners[1][1]) + v * ((1 - u) * corners[3][1] + u * corners[2][1]); return fpt(NOSE + d, t * Math.PI / 180, off); }); return g; };
   const panes = [[[1.55, 3], [2.0, 3], [2.32, 33], [1.86, 37]], [[1.95, 40], [2.38, 36], [2.78, 52], [2.3, 58]], [[2.42, 61], [2.88, 55], [3.42, 60], [2.95, 69]]];
@@ -142,7 +155,7 @@ export function airlinerGeometry(lod = 'high', variant = 'std') {
     for (const cg of w.caps) body.push(colour(cg, WING));
     // sharklet: blended winglet rising from the tip (livery-coloured faces)
     const tip = sec(1); const wl = liftSurface(hi ? [0, 0.25, 0.6, 1] : [0, 1], s => { const k = Math.sin(s * Math.PI / 2); return { le: tip.le.clone().add(new THREE.Vector3(S * (0.12 + 0.38 * k), 2.35 * s - 0.05 + 0.3 * (1 - k) * s, 0.25 + 1.1 * s)), chord: 1.45 - 0.98 * s, chordDir: new THREE.Vector3(0, 0, 1), thickDir: new THREE.Vector3(S, 0.1 * (1 - s), 0).normalize(), t: 0.09 }; }, 0);
-    liv.push(plain(wl.g), plain(wl.caps[1]));
+    liv.push(plainUV(wl.g, null), plainUV(wl.caps[1], null));
     // flap-track fairings
     if (hi) for (const s of [0.22, 0.46, 0.64]) { const S0 = sec(s); const zt = S0.le.z + S0.chord * 1.18, z0 = S0.le.z + S0.chord * 0.52; const yb = S0.le.y - 0.05 * S0.chord;
       const prof = [[0.0, z0], [0.12, z0 + 0.25], [0.2, z0 + 0.7], [0.2, (z0 + zt) / 2], [0.14, zt - 0.5], [0.0, zt]];
@@ -150,7 +163,7 @@ export function airlinerGeometry(lod = 'high', variant = 'std') {
     // engine: nacelle (livery), inlet lip, dark fan face, spinner, core and exhaust plug; pylon
     const ex = S * 5.75, ey = -1.95, ez = -6.9;
     const nac = lathe([[0.93, 0.02], [1.04, 0.12], [1.11, 0.5], [1.12, 1.3], [1.08, 2.3], [0.96, 3.0], [0.88, 3.3]], hi ? 16 : 10); nac.translate(ex, ey, ez);
-    liv.push(plain(orient(nac, m => new THREE.Vector3(m.x - ex, m.y - ey, 0))));
+    liv.push(plainUV(orient(nac, m => new THREE.Vector3(m.x - ex, m.y - ey, 0)), null));
     const lip = lathe([[0.86, 0.5], [0.89, 0.12], [0.93, 0.02]], hi ? 16 : 10); lip.translate(ex, ey, ez); body.push(colour(orient(lip, m => new THREE.Vector3(ex - m.x, ey - m.y, -0.4)), METAL));
     const fan = new THREE.CircleGeometry(0.87, hi ? 16 : 10); fan.rotateY(Math.PI); fan.translate(ex, ey, ez + 0.5); body.push(colour(fan, [0.1, 0.11, 0.13]));
     const sp = lathe([[0.0, -0.05], [0.16, 0.18], [0.28, 0.45]], 10); sp.translate(ex, ey, ez); body.push(colour(orient(sp, m => new THREE.Vector3(m.x - ex, m.y - ey, -1)), [0.5, 0.52, 0.55]));
@@ -166,8 +179,8 @@ export function airlinerGeometry(lod = 'high', variant = 'std') {
   }
   // ---- fin + rudder (livery) with a dorsal fillet
   { const sec = s => ({ le: new THREE.Vector3(0, 1.3 + 7.0 * s, 11.7 + 7.0 * s * Math.tan(37 * Math.PI / 180)), chord: 6.1 - 4.0 * s, chordDir: new THREE.Vector3(0, 0, 1), thickDir: new THREE.Vector3(1, 0, 0), t: 0.11 });
-    const f = liftSurface(hi ? [0, 0.35, 0.7, 1] : [0, 1], sec, 0); liv.push(plain(f.g), plain(f.caps[1]));
-    const df = liftSurface([0, 1], s => ({ le: new THREE.Vector3(0, 1.75 + 0.9 * s, 9.0 + 2.9 * s), chord: 3.2 - 1.6 * s, chordDir: new THREE.Vector3(0, 0, 1), thickDir: new THREE.Vector3(1, 0, 0), t: 0.16 }), 0); liv.push(plain(df.g)); }
+    const f = liftSurface(hi ? [0, 0.35, 0.7, 1] : [0, 1], sec, 0); liv.push(plainUV(f.g, finLogoUV), plainUV(f.caps[1], null));
+    const df = liftSurface([0, 1], s => ({ le: new THREE.Vector3(0, 1.75 + 0.9 * s, 9.0 + 2.9 * s), chord: 3.2 - 1.6 * s, chordDir: new THREE.Vector3(0, 0, 1), thickDir: new THREE.Vector3(1, 0, 0), t: 0.16 }), 0); liv.push(plainUV(df.g, null)); }
   // ---- landing gear (down): main legs with twin wheels, nose leg with twin wheels
   const wheel = (x, y, z, r, w) => { const g = new THREE.CylinderGeometry(r, r, w, hi ? 14 : 8, 1); g.rotateZ(Math.PI / 2); g.translate(x, y, z); return colour(g, (c, n) => Math.abs(n.x) > 0.9 ? [0.42, 0.44, 0.46] : TYRE); };
   const strut = (x0, y0, z0, y1, r) => { const g = new THREE.CylinderGeometry(r, r, y0 - y1, 8); g.translate(x0, (y0 + y1) / 2, z0); return colour(g, STRUT); };
@@ -175,16 +188,33 @@ export function airlinerGeometry(lod = 'high', variant = 'std') {
     const ax = new THREE.CylinderGeometry(0.07, 0.07, 1.0, 6); ax.rotateZ(Math.PI / 2); ax.translate(x, -3.04, 1.25); body.push(colour(ax, STRUT));
     const door = new THREE.BoxGeometry(0.05, 1.2, 0.9); door.translate(x + S * 0.2, -1.6, 1.25); body.push(colour(door, WING)); }
   body.push(strut(0, -1.3, -12.9, -3.25, 0.09), wheel(0.24, -3.24, -12.9, 0.38, 0.26), wheel(-0.24, -3.24, -12.9, 0.38, 0.26));
+  // ---- fuselage titles: a curved decal patch per side on the forward fuselage, skinned to the
+  // hull (constant-section zone, clear of the L1 door and the wing root). uv runs along the patch;
+  // which airline's name shows is chosen by the caller's material, never baked into geometry.
+  let titles = null;
+  { const P = [], N = [], U = [], I = []; const z0 = -11.9, z1 = -6.9, yB = 0.59, yT = 1.37, NZ = 6, NY = 2;
+    for (const sd of [1, -1]) { const base = P.length / 3;
+      for (let iz = 0; iz <= NZ; iz++) for (let iy = 0; iy <= NY; iy++) {
+        const z = z0 + (z1 - z0) * iz / NZ, y = yB + (yT - yB) * iy / NY, s = section(z);
+        const th = Math.acos(Math.min(1, Math.max(-1, (y - s.ym) / (s.top - s.ym)))), thU = sd > 0 ? th : 2 * Math.PI - th;
+        const p = fpt(z, thU, 0.025), n = fnrm(z, thU);
+        P.push(p.x, p.y, p.z); N.push(n.x, n.y, n.z); U.push(iz / NZ, iy / NY);
+      }
+      for (let iz = 0; iz < NZ; iz++) for (let iy = 0; iy < NY; iy++) { const a = base + iz * (NY + 1) + iy, b = a + NY + 1; I.push(a, b, a + 1, a + 1, b, b + 1); }
+    }
+    titles = new THREE.BufferGeometry();
+    titles.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); titles.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3)); titles.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2)); titles.setIndex(I); titles.computeBoundingSphere();
+  }
   const merge = parts => { const out = mergeGeometries(parts); out.computeBoundingSphere(); return out; };
   let glass;
   if (gP.length) { glass = new THREE.BufferGeometry(); glass.setAttribute('position', new THREE.Float32BufferAttribute(gP, 3)); glass.setAttribute('normal', new THREE.Float32BufferAttribute(gN, 3)); glass.setAttribute('color', new THREE.Float32BufferAttribute(gC, 3)); glass.setAttribute('uv', new THREE.Float32BufferAttribute(gU, 2)); glass.computeBoundingSphere(); }
   else { glass = new THREE.BufferGeometry(); glass.setAttribute('position', new THREE.Float32BufferAttribute([], 3)); }
-  const out = { body: merge(body), fin: merge(liv), glass };
+  const out = { body: merge(body), fin: merge(liv), glass, titles };
   // airframe variants: affine stretch/shrink of the whole airframe about the L1 door station
   // (z = -13), so the nose and the jet-bridge interface stay put while the hull lengthens or
   // shortens and the wing, engines and gear travel with it; normals corrected analytically
   const kz = VKZ[variant] || 1;
-  if (kz !== 1) for (const g of [out.body, out.fin, out.glass]) {
+  if (kz !== 1) for (const g of [out.body, out.fin, out.glass, out.titles]) {
     const P = g.attributes.position, N = g.attributes.normal; if (!P || !P.count) continue;
     for (let i = 0; i < P.count; i++) { P.setZ(i, -13 + (P.getZ(i) + 13) * kz); if (N) { const nx = N.getX(i), ny = N.getY(i), nz = N.getZ(i) / kz, l = Math.hypot(nx, ny, nz) || 1; N.setXYZ(i, nx / l, ny / l, nz / l); } }
     P.needsUpdate = true; if (N) N.needsUpdate = true; g.computeBoundingSphere(); g.computeBoundingBox();
@@ -209,6 +239,121 @@ export const TRAFFIC_LIVERIES = [
   { name: 'Nocturne Air', fin: [0.72, 0.75, 0.80], body: [0.30, 0.32, 0.38] }, // charcoal fuselage, silver fin
   { name: 'Heritage Air', fin: [0.42, 0.07, 0.11], body: [1.0, 0.96, 0.87] },  // retro cream + burgundy
 ];
+// ---- fleet logos: one canvas atlas (8 tiles of 256px), an invented geometric tail mark per
+// airline, drawn in brand colours to read at apron distance. The fin geometry carries logo
+// space in its aLogoUv attribute; the fin materials below composite the mark over the fin
+// colour in-shader, per instance (parked) or per material (flying). Marks are drawn facing
+// the leading edge; the shader mirrors u on the +x face so they face the nose on both sides.
+let _logoTex = null;
+export function trafficLogoTexture() {
+  if (_logoTex) return _logoTex;
+  const cv = document.createElement('canvas'); cv.width = 2048; cv.height = 256; const c = cv.getContext('2d');
+  const W = '#F7F5EF';
+  const star = (x, y, ro, ri, n = 4, rot = -Math.PI / 2) => { c.beginPath(); for (let k = 0; k < n * 2; k++) { const r = k % 2 ? ri : ro, a = rot + k * Math.PI / n, px = x + Math.cos(a) * r, py = y + Math.sin(a) * r; k ? c.lineTo(px, py) : c.moveTo(px, py); } c.closePath(); c.fill(); };
+  // fin space is taller than it is wide (span ~7 m over a ~3.5 m mid chord), so marks are
+  // drawn pre-squashed vertically (x0.62 about the centre) and read true on the fin.
+  const tile = (i, fn) => { c.save(); c.beginPath(); c.rect(i * 256, 0, 256, 256); c.clip(); c.translate(i * 256 + 128, 128); c.scale(0.94, 0.62); c.translate(-128, -128); fn(); c.restore(); };
+  tile(0, () => { // Solana: white sun, disc + triangular rays, on orange
+    c.fillStyle = W;
+    for (let k = 0; k < 12; k++) { c.save(); c.translate(128, 128); c.rotate(k / 12 * Math.PI * 2); c.beginPath(); c.moveTo(-13, -52); c.lineTo(13, -52); c.lineTo(0, -94); c.closePath(); c.fill(); c.restore(); }
+    c.beginPath(); c.arc(128, 128, 42, 0, Math.PI * 2); c.fill();
+  });
+  tile(1, () => { // Borealis: mint aurora ribbons + white star, on deep blue
+    const band = (y0, amp, ph) => { c.beginPath(); c.moveTo(26, y0 + 18); for (let x = 26; x <= 230; x += 6) c.lineTo(x, y0 + Math.sin((x - 26) / 204 * Math.PI * 1.6 + ph) * -amp); for (let x = 230; x >= 26; x -= 6) c.lineTo(x, y0 + 34 + Math.sin((x - 26) / 204 * Math.PI * 1.6 + ph) * -amp); c.closePath(); c.fill(); };
+    c.fillStyle = '#8FF0CB'; band(118, 24, 0); c.fillStyle = '#38BFA0'; band(172, 18, 0.6); c.fillStyle = W; star(170, 72, 30, 10);
+  });
+  tile(2, () => { // Verde: white leaf, emerald vein, on emerald
+    c.fillStyle = W; c.beginPath(); c.moveTo(128, 38); c.bezierCurveTo(198, 84, 202, 150, 128, 218); c.bezierCurveTo(54, 150, 58, 84, 128, 38); c.fill();
+    c.strokeStyle = '#147642'; c.lineWidth = 8; c.lineCap = 'round'; c.beginPath(); c.moveTo(128, 62); c.quadraticCurveTo(121, 132, 128, 198); c.stroke();
+  });
+  tile(3, () => { // Meridian: gold compass star, white heart, on violet
+    c.fillStyle = '#F4C14E'; star(128, 128, 92, 32, 4); star(128, 128, 58, 20, 4, -Math.PI / 2 + Math.PI / 4);
+    c.fillStyle = W; c.beginPath(); c.arc(128, 128, 17, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#66268C'; c.beginPath(); c.arc(128, 128, 7, 0, Math.PI * 2); c.fill();
+  });
+  tile(4, () => { // Scarlet: white swift slash (crescent + wing tip), on red
+    c.save(); c.translate(128, 128); c.rotate(-0.5); c.fillStyle = W;
+    c.beginPath(); c.arc(0, 0, 74, 0, Math.PI * 2); c.fill();
+    c.globalCompositeOperation = 'destination-out'; c.beginPath(); c.arc(32, -28, 64, 0, Math.PI * 2); c.fill();
+    c.globalCompositeOperation = 'source-over'; c.beginPath(); c.moveTo(50, -64); c.lineTo(98, -90); c.lineTo(68, -38); c.closePath(); c.fill(); c.restore();
+  });
+  tile(5, () => { // Cyan: white drop with a wave cut through its base, on teal
+    c.fillStyle = W; c.beginPath(); c.moveTo(128, 32); c.bezierCurveTo(170, 92, 198, 122, 198, 158); c.bezierCurveTo(198, 199, 166, 224, 128, 224); c.bezierCurveTo(90, 224, 58, 199, 58, 158); c.bezierCurveTo(58, 122, 86, 92, 128, 32); c.fill();
+    c.globalCompositeOperation = 'destination-out'; c.beginPath(); c.moveTo(56, 172); for (let x = 56; x <= 200; x += 6) c.lineTo(x, 172 + Math.sin((x - 56) / 144 * Math.PI * 2) * 10); c.lineTo(200, 200); c.lineTo(56, 200); c.closePath(); c.fill(); c.globalCompositeOperation = 'source-over';
+  });
+  tile(6, () => { // Nocturne: deep-navy crescent + gold star, on the silver fin
+    c.fillStyle = '#16233C'; c.beginPath(); c.arc(116, 130, 68, 0, Math.PI * 2); c.fill();
+    c.globalCompositeOperation = 'destination-out'; c.beginPath(); c.arc(146, 106, 57, 0, Math.PI * 2); c.fill();
+    c.globalCompositeOperation = 'source-over'; c.fillStyle = '#F4C14E'; star(178, 82, 25, 9);
+  });
+  tile(7, () => { // Heritage: cream shield, burgundy H, on burgundy
+    c.fillStyle = '#F3E6CF'; c.beginPath(); c.moveTo(62, 50); c.lineTo(194, 50); c.lineTo(194, 126); c.quadraticCurveTo(194, 184, 128, 216); c.quadraticCurveTo(62, 184, 62, 126); c.closePath(); c.fill();
+    c.fillStyle = '#6B121C'; c.font = '700 98px Georgia, serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('H', 128, 128);
+  });
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.needsUpdate = true; return _logoTex = t;
+}
+// Fuselage titles atlas: 8 rows of 64px on a 1024x512 canvas; airline i is drawn on canvas
+// row (7 - i) because texture v grows upward while canvas y grows downward (flipY).
+let _titlesTex = null;
+export function trafficTitlesTexture() {
+  if (_titlesTex) return _titlesTex;
+  const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 512; const c = cv.getContext('2d');
+  TRAFFIC_LIVERIES.forEach((L, i) => {
+    const y0 = (7 - i) * 64;
+    c.fillStyle = i === 6 ? '#E9EDF3' : i === 7 ? '#6B121C' : '#1D2B3A';
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    let px = 44; c.font = `900 ${px}px Arial, sans-serif`;
+    try { c.letterSpacing = '24px'; } catch (e) { }
+    let w = c.measureText(L.name).width;
+    if (w > 950) { px = Math.max(20, Math.floor(px * 950 / w)); c.font = `900 ${px}px Arial, sans-serif`; w = c.measureText(L.name).width; }
+    else if (w < 860) { try { c.letterSpacing = `${Math.round(24 + (860 - w) / L.name.length)}px`; } catch (e) { } }
+    c.fillText(L.name, 512, y0 + 34);
+  });
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; t.needsUpdate = true; return _titlesTex = t;
+}
+function patchFinLogo(mat, instanced, tile) {
+  mat.userData.key = instanced ? 'finlogoI' : 'finlogo';
+  mat.onBeforeCompile = sh => {
+    sh.uniforms.uLogoAtlas = { value: trafficLogoTexture() };
+    if (!instanced) sh.uniforms.uLogoTile = { value: tile };
+    sh.vertexShader = 'attribute vec2 aLogoUv;\nvarying vec2 vLogoUv;\nvarying float vLogoSide;\nvarying float vLogoTile;\n' + (instanced ? 'attribute float aTile;\n' : 'uniform float uLogoTile;\n') + sh.vertexShader;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n\tvLogoSide = objectNormal.x;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvLogoUv = aLogoUv;\n\tvLogoTile = ' + (instanced ? 'aTile' : 'uLogoTile') + ';');
+    sh.fragmentShader = 'uniform sampler2D uLogoAtlas;\nvarying vec2 vLogoUv;\nvarying float vLogoSide;\nvarying float vLogoTile;\n' + sh.fragmentShader
+      .replace('#include <color_fragment>', `#include <color_fragment>
+	if (vLogoUv.y > -0.5) { float lu = vLogoSide < 0.0 ? vLogoUv.x : 1.0 - vLogoUv.x; vec4 mk = texture2D(uLogoAtlas, vec2((vLogoTile + lu) * 0.125, vLogoUv.y)); diffuseColor.rgb = mix(diffuseColor.rgb, mk.rgb, mk.a); }`);
+  };
+  return mat;
+}
+// Flying traffic: one material per plane, fin colour baked, logo tile as a uniform.
+export function trafficFinMaterial(liv) {
+  const L = TRAFFIC_LIVERIES[liv % TRAFFIC_LIVERIES.length];
+  const m = new THREE.MeshStandardMaterial({ color: new THREE.Color(L.fin[0], L.fin[1], L.fin[2]), roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide });
+  patchFinLogo(m, false, liv % TRAFFIC_LIVERIES.length); return atmos(m);
+}
+// Parked fleet: one shared white material; the fin colour arrives via instance colour and
+// the logo tile via the aTile instanced attribute on a per-airport clone of the fin geometry.
+let _parkFinMat = null;
+export function trafficParkedFinMaterial() {
+  if (_parkFinMat) return _parkFinMat;
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide });
+  patchFinLogo(m, true, 0); return _parkFinMat = atmos(m);
+}
+function patchTitles(mat, instanced, tile) {
+  mat.userData.key = instanced ? 'titlesI' : 'titles';
+  mat.onBeforeCompile = sh => {
+    if (!instanced) sh.uniforms.uTitleTile = { value: tile };
+    sh.vertexShader = (instanced ? 'attribute float aTile;\n' : 'uniform float uTitleTile;\n') + sh.vertexShader
+      .replace('#include <uv_vertex>', '#include <uv_vertex>\n\tvMapUv = vec2(normal.x > 0.0 ? 1.0 - vMapUv.x : vMapUv.x, (' + (instanced ? 'aTile' : 'uTitleTile') + ' + vMapUv.y) * 0.125);');
+  };
+  return mat;
+}
+function titlesBase() { return new THREE.MeshStandardMaterial({ map: trafficTitlesTexture(), transparent: true, roughness: 0.35, metalness: 0.05, polygonOffset: true, polygonOffsetFactor: -2, depthWrite: false, side: THREE.DoubleSide }); }
+export function trafficTitlesMaterial(liv) { const m = titlesBase(); patchTitles(m, false, liv % TRAFFIC_LIVERIES.length); return atmos(m); }
+let _parkTitlesMat = null;
+export function trafficParkedTitlesMaterial() { if (_parkTitlesMat) return _parkTitlesMat; const m = titlesBase(); patchTitles(m, true, 0); return _parkTitlesMat = atmos(m); }
+
 // Night window glow: one shared material for every traffic jet. Emissive comes from a 256-slot
 // strip texture (per-window lit/dark variety baked in) and is scaled by the sky's global night
 // uniform, so parked and flying traffic light up on their own at dusk with no per-frame code.
