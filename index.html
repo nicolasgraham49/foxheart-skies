@@ -1,3 +1,5 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
 <title>Foxheart Skies</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -130,6 +132,40 @@ select{background:rgba(0,0,0,.35);color:var(--ink);border:1px solid var(--line2)
 .toggle{display:flex;align-items:center;gap:10px;cursor:pointer}
 .toggle input{accent-color:var(--fox);width:16px;height:16px}
 
+/* ---------- menu redesign: Foxheart brand pass (hero, accents, dispatch) ---------- */
+:root{--acc:#f29a4c}
+#rail{position:relative;background:linear-gradient(168deg,rgba(13,22,40,.88),rgba(6,10,19,.82) 58%,rgba(9,13,24,.86));box-shadow:0 24px 60px rgba(0,0,0,.5)}
+#rail::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;border-radius:14px 14px 0 0;background:linear-gradient(90deg,var(--fox),var(--acc) 55%,transparent)}
+#sheet{background:linear-gradient(200deg,rgba(11,18,32,.86),rgba(6,10,19,.8) 55%);box-shadow:0 24px 60px rgba(0,0,0,.5)}
+.brand .mark svg{width:56px;height:56px;filter:drop-shadow(0 6px 18px rgba(242,154,76,.45))}
+.wordmark{font-size:31px}
+#nav{gap:7px}
+#nav button{border-radius:11px;padding:11px 13px;transition:background .18s,box-shadow .18s,transform .18s}
+#nav button:hover{transform:translateX(2px)}
+#nav button[aria-current="true"]{background:linear-gradient(90deg,color-mix(in srgb,var(--acc) 20%,transparent),rgba(255,255,255,.03) 70%);box-shadow:inset 3px 0 0 var(--acc);color:#fff}
+#nav button[aria-current="true"] .nic{color:var(--acc)}
+.sechead h2{font-size:30px;letter-spacing:.05em}
+#hero{flex:none;position:relative;display:flex;gap:20px;align-items:flex-end;padding:20px 22px 18px;margin:2px 0 16px;border:1px solid var(--line);border-radius:16px;overflow:hidden;background:linear-gradient(112deg,color-mix(in srgb,var(--acc) 24%,rgba(7,12,22,.72)),rgba(7,12,22,.6) 58%,rgba(7,12,22,.78))}
+.heroFox{position:absolute;right:-26px;top:-34px;width:210px;height:210px;opacity:.13;pointer-events:none}
+.heroMain{position:relative;z-index:1;min-width:0}
+.heroEyebrow{font:700 11px var(--f-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--acc)}
+.heroIata{font:800 74px/.92 var(--f-display);letter-spacing:.015em;color:#fff;text-shadow:0 6px 30px rgba(0,0,0,.5);margin:2px 0 0}
+.heroName{font:500 16px var(--f-body);color:#d7e4f3;margin-top:3px}
+.heroChips{position:relative;z-index:1;margin-left:auto;display:flex;flex-direction:column;gap:6px;align-items:flex-end}
+.heroChips span{font:11px var(--f-mono);padding:4px 10px;border:1px solid rgba(255,255,255,.18);border-radius:999px;background:rgba(3,6,12,.5);color:#cfe0f2;white-space:nowrap}
+.card{--acc:#f29a4c;position:relative;transition:transform .18s,border-color .18s,box-shadow .18s}
+.card::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;z-index:2;background:linear-gradient(90deg,var(--acc),transparent 82%)}
+.card:hover{transform:translateY(-3px);box-shadow:0 16px 34px rgba(0,0,0,.42)}
+.card[aria-pressed="true"]{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 14px 30px rgba(0,0,0,.4)}
+.card .pill{background:color-mix(in srgb,var(--acc) 26%,rgba(5,8,14,.72));color:#ffe9d2}
+.card .code b{font-size:31px}
+.card .code span{color:var(--acc)}
+#setup>div:first-child{background:rgba(5,9,17,.38);border:1px solid var(--line);border-radius:14px;padding:14px}
+#setup>div:last-child{position:relative;background:rgba(5,9,17,.55);border:1px solid var(--line);border-radius:14px;padding:18px 16px 8px;margin-top:8px}
+#setup>div:last-child::before{content:"DISPATCH · FLIGHT SETUP";position:absolute;top:-8px;left:14px;padding:0 8px;background:#0a1120;font:700 10px var(--f-mono);letter-spacing:.2em;color:var(--acc)}
+.seg button[aria-pressed="true"]{background:linear-gradient(180deg,var(--fox2),var(--fox));color:#241203;font-weight:700;border-color:transparent}
+.go{font-size:19px;padding:15px 20px;letter-spacing:.16em;border-radius:12px;box-shadow:0 12px 30px rgba(242,154,76,.35)}
+@media (max-width:900px){.heroIata{font-size:52px}.heroChips{flex-direction:row;flex-wrap:wrap;margin-left:0;align-items:flex-start}#hero{flex-wrap:wrap}}
 /* ---------- in-flight ---------- */
 #flight{position:fixed;inset:0;pointer-events:none;z-index:5}
 #flight .glass{pointer-events:auto}
@@ -299,6 +335,7 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
         <label class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="q" type="search" placeholder="Search ICAO, IATA, name or city (e.g. TPA, Incheon)" autocomplete="off" spellcheck="false" aria-label="Search airports"></label>
       </div>
       <div class="secbody" id="freeBody">
+        <div id="hero"><svg class="heroFox" aria-hidden="true"><use href="#foxheart"/></svg><div class="heroMain"><div class="heroEyebrow" id="heroSub">Featured airport</div><div class="heroIata" id="heroIata">TPA</div><div class="heroName" id="heroName">Tampa International Airport</div></div><div class="heroChips" id="heroChips"></div></div>
         <div id="results" hidden></div>
         <div id="featuredWrap"><div class="cardrow" style="margin-bottom:10px"><span class="eyebrow">Featured airports · hand-made surroundings</span><span class="eyebrow" style="color:var(--dim)">Runways from real data</span></div><div class="cards" id="cards"></div></div>
         <div id="setupWrap" hidden>
@@ -310,7 +347,7 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
             </div>
             <div style="display:grid;gap:16px;min-width:0">
               <div class="field"><span class="lab">Runway</span><div class="rwlist" id="rwlist"></div></div>
-              <div class="field"><span class="lab">Start</span><div class="seg" id="startSeg"><button data-v="terminal">In the terminal</button><button data-v="gate">Gate</button><button data-v="runway" aria-pressed="true">Runway</button><button data-v="final">10 nm final</button><button data-v="hand10">Land it yourself · 10 nm</button><button data-v="hand5">Land it yourself · 5 nm</button></div><label class="toggle"><input type="checkbox" id="coldDark"> Cold &amp; dark (gate or terminal): start the aircraft yourself from the overhead panel</label><label class="toggle"><input type="checkbox" id="landBoxes" checked> Land it yourself: glide path boxes in the sky</label><label class="toggle"><input type="checkbox" id="landAutoSpd" checked> Land it yourself: auto-speed (autothrust holds the speed, you steer)</label></div>
+              <div class="field"><span class="lab">Start</span><div class="seg" id="startSeg"><button data-v="terminal">In the terminal</button><button data-v="gate">Gate</button><button data-v="runway" aria-pressed="true">Runway</button><button data-v="final">10 nm final</button></div><label class="toggle"><input type="checkbox" id="coldDark"> Cold &amp; dark (gate or terminal): start the aircraft yourself from the overhead panel</label></div>
               <div class="field"><label for="destQ">Destination</label><input id="destQ" type="search" placeholder="Automatic, or search ICAO, IATA, name or city" autocomplete="off" spellcheck="false" style="background:rgba(0,0,0,.35);border:1px solid var(--line2);border-radius:8px;color:var(--ink);font:13px var(--f-body);padding:9px 11px;user-select:text"><div id="destRes" class="rwlist" hidden></div><small id="destInfo" class="mono" style="color:var(--mute)"></small></div>
               <div class="field timeline"><label for="tod">Local time <span id="todv" class="mono" style="color:var(--ink);margin-left:6px"></span></label><input id="tod" type="range" min="0" max="1439" step="5" value="1080"><div class="chips" id="sunchips"></div></div>
               <div class="field"><span class="lab">Weather</span><div class="seg" id="wxSeg"><button data-v="clear" aria-pressed="true">Clear</button><button data-v="scattered">Scattered</button><button data-v="overcast">Overcast</button><button data-v="rain">Rain</button><button data-v="fog">Fog</button></div></div>
