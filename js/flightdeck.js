@@ -705,7 +705,7 @@ export function buildCockpit(displays, opts = {}) {
     else if (c.kind === 'pb' && c.id in sw) s = sw[c.id] ? 'ON' : 'OFF';
     if (c.id === 'apuStart') s = ctx.sys.apuAvail ? 'AVAIL' : sw.apuStart ? `STARTING ${Math.round(ctx.sys.apuN)}%` : 'press to start (MASTER SW first)';
     if (c.id === 'extPwr') s = ctx.sys.extAvail ? (sw.extPwr ? 'ON' : 'AVAIL') : 'not available (no ground power)';
-    if (c.id.startsWith('fcu')) s = { fcuSpd: 'scroll to set speed, click to select', fcuHdg: 'scroll to set heading, click to select', fcuAlt: 'scroll to set altitude, click to level off', fcuVs: 'scroll to set V/S' }[c.id] || 'click';
+    if (c.id.startsWith('fcu')) s = { fcuSpd: 'scroll to turn · click to select current speed · the top FCU strip also takes drags, typing and Alt+arrow keys', fcuHdg: 'scroll to turn · click to select current heading · the top FCU strip also takes drags, typing and Ctrl+arrow keys', fcuAlt: 'scroll to turn · click to level off · the top FCU strip also takes drags, typing and Ctrl+arrow keys', fcuVs: 'scroll to turn · click to level off · the top FCU strip also takes drags, typing and Alt+arrow keys' }[c.id] || 'click';
     return `${c.label}${s ? ': ' + s : ''}`;
   };
   function click(c, ctx, dir = 1, byWheel = false) {

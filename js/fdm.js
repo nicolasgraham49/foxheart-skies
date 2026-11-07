@@ -143,7 +143,7 @@ export class FDM {
     this.pos.addScaledVector(this.vel, dt);
     const gd = this.onGround;
     this.w.x += (tq.x / this.I.pitch - (gd ? 1.2 : 0.06) * this.w.x) * dt;
-    this.w.y += (tq.y / this.I.yaw - (gd ? 2.5 : 0.05) * this.w.y) * dt;
+    this.w.y += (tq.y / this.I.yaw - (gd ? 1.25 : 0.05) * this.w.y) * dt; // [Flight systems] ground yaw damping 2.5 -> 1.25: the old value strangled nose-wheel turns (1.2 deg/s at full lock); air value untouched
     this.w.z += (tq.z / this.I.roll - (gd ? 4.5 : 0.06) * this.w.z) * dt;
     const wl = this.w.length();
     if (wl > 1e-9) { const dq = new THREE.Quaternion().setFromAxisAngle(this.w.clone().divideScalar(wl), wl * dt); this.q.multiply(dq).normalize(); }
@@ -178,8 +178,8 @@ export class FDM {
       const brakeMu = i ? (this.parkBrake ? 0.6 : this.brake * (wet ? 0.28 : 0.48) * (this.fail.hyd ? 0.6 : 1)) : 0;
       const mu = 0.016 + brakeMu;
       const Fl = -clamp(vl * 3e5, -mu * Fn, mu * Fn);
-      const latMu = (wet ? 0.38 : 0.65);
-      const Flat = -clamp(vlat * 5e5, -latMu * Fn, latMu * Fn);
+      const latMu = (wet ? 0.38 : 0.65) * (i === 0 ? 1.35 : 1); // [Flight systems] nose gear corners harder (its cornering force is what yaws the jet on the ground)
+      const Flat = -clamp(vlat * (i === 0 ? 1.1e6 : 5e5), -latMu * Fn, latMu * Fn);
       const Fw = new THREE.Vector3(0, Fn, 0).addScaledVector(wf, Fl).addScaledVector(wr, Flat);
       F.add(Fw);
       tq.add(new THREE.Vector3().crossVectors(rw, Fw).applyQuaternion(qinv));
@@ -226,7 +226,7 @@ export class FDM {
     // autopilot overrides stick
     let qCmd = null, pCmd = null;
     if (ap.on) {
-      if (Math.abs(pIn) > 0.5 || Math.abs(rIn) > 0.5) { this.disconnectAP('stick input'); }
+      if (Math.abs(pIn) > 0.25 || Math.abs(rIn) > 0.25) { this.disconnectAP('stick input'); } // [Flight systems] was 0.5: inputs below that were silently ignored, so the AP felt like it was fighting the pilot, then dumped at 0.5 with a lurch. 0.25 = a deliberate push takes over, small nudges don't
       else { const c = this.autopilot(dt, e, gamma, V, agl, sp); qCmd = c.q; pCmd = c.p; if (c.yaw != null) yIn = c.yaw; }
     }
     if (ap.athr) this.autothrottle(dt, sp);
@@ -288,8 +288,13 @@ export class FDM {
     if (!this.onGround) this.dr = clamp(yIn * 25 * D2R + this.rudTrim + (air ? 1.2 * beta - 0.9 * (yawRate - rCoord) : 0), -30 * D2R, 30 * D2R);
     else this.dr = clamp(yIn * 25 * D2R + this.rudTrim, -30 * D2R, 30 * D2R);
     const gsKt = Math.hypot(this.vel.x, this.vel.z) / KT;
-    const steerMax = (gsKt < 20 ? 65 : gsKt < 80 ? 65 - (gsKt - 20) * 0.95 : 8) * D2R;
-    this.steer += (yIn * steerMax - this.steer) * Math.min(1, dt * (this.assist === 'realistic' ? 3 : 6));
+    // [Flight systems] nose-wheel steering: full tiller lock is a walking-pace tool, so authority
+    // tapers from 6 kt (28 deg at 30 kt, 8 deg on the takeoff roll), and the wheel SLEWS at a
+    // limited rate instead of snapping to the input — small inputs steer, they don't dart.
+    // (This value only bites through the nose-gear contact patch, so flight is untouched.)
+    const steerMax = (gsKt < 6 ? 65 : gsKt < 30 ? 65 - (gsKt - 6) * (37 / 24) : gsKt < 80 ? 28 - (gsKt - 30) * 0.4 : 8) * D2R;
+    const steerRate = (gsKt < 10 ? 48 : gsKt < 25 ? 36 : 20) * D2R;
+    this.steer += clamp(yIn * steerMax - this.steer, -steerRate * dt, steerRate * dt);
     // spoilers: ground spoilers deploy on touchdown when armed and thrust idle
     if (this.onGround && this.spoilersArmed && this.tl < 0.08 && gsKt > 40 && this.gndTime > 0.3) this.groundSpoilers = Math.min(1, this.groundSpoilers + dt * 2);
     else if (!this.onGround || this.tl > 0.3) this.groundSpoilers = Math.max(0, this.groundSpoilers - dt);
@@ -338,9 +343,9 @@ export class FDM {
     const altFt = this.pos.y / FT;
     if (ap.vert === 'ALT' || ap.vert === 'ALT*' || ap.vert === 'V/S') {
       const err = ap.alt - altFt;
-      if (ap.vert === 'V/S') { vsCmd = ap.vs; if (Math.abs(err) < Math.abs(ap.vs) * 0.12 + 60 && Math.sign(err) !== -Math.sign(ap.vs || 1)) { ap.vert = 'ALT*'; } }
-      else if (Math.abs(err) > 250 && ap.vert === 'ALT') { ap.vert = 'V/S'; ap.vs = clamp(Math.round(err * 0.6 / 100) * 100, -2000, 2200) || Math.sign(err) * 1000; vsCmd = ap.vs; }
-      else { vsCmd = clamp(err * 4, -1500, 1500); if (Math.abs(err) < 20) ap.vert = 'ALT'; }
+      if (ap.vert === 'V/S') { vsCmd = ap.vs; if (Math.abs(err) < Math.abs(ap.vs) * 0.16 + 80 && Math.sign(err) !== -Math.sign(ap.vs || 1)) { ap.vert = 'ALT*'; } }
+      else if (Math.abs(err) > 250 && ap.vert === 'ALT') { ap.vert = 'V/S'; ap.vs = clamp(Math.round(err * 1.2 / 100) * 100, -2800, 3000) || Math.sign(err) * 1000; vsCmd = ap.vs; } // [Flight systems] entry rate 0.6->1.2 of the error: a 2000 ft change took 108 s to settle, now ~65 s, capture stays proportional (no overshoot)
+      else { vsCmd = clamp(err * 5, -1700, 1700); if (Math.abs(err) < 20) ap.vert = 'ALT'; }
     } else if (ap.vert === 'G/S' && dev) {
       const target = ap.ils.elev + Math.max(0, dev.dist) * Math.tan(3 * D2R);
       vsCmd = (-gs * Math.tan(3 * D2R) + clamp((target - this.pos.y) * 0.18, -3, 3)) / FT * 60;

@@ -686,6 +686,15 @@ addEventListener('keydown', e => {
   if (!W.started || W.menuMode) return;
   const k = e.key; keys[e.code] = true;
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' ', 'PageUp', 'PageDown', 'Tab', '/'].includes(k)) e.preventDefault();
+  // [Flight systems] FCU targets from the keyboard: Ctrl+arrows = HDG/ALT, Alt+arrows = SPD/V-S
+  // (Shift = bigger steps). Handled before the repeat filter so holding the keys keeps turning,
+  // and the arrow is swallowed so it does not also pitch/roll the jet via pollInput.
+  if ((e.ctrlKey || e.altKey) && !e.metaKey && k.startsWith('Arrow') && !W.onFoot && !paOpen && !radioOpen && !svcPanel.open) {
+    e.preventDefault(); keys[e.code] = false; const m = e.shiftKey ? 5 : 1, mX = e.shiftKey ? 10 : 1;
+    if (e.ctrlKey) { if (k === 'ArrowLeft') fcuAdj('hdg', -1, mX); else if (k === 'ArrowRight') fcuAdj('hdg', 1, mX); else if (k === 'ArrowUp') fcuAdj('alt', 1, mX); else if (k === 'ArrowDown') fcuAdj('alt', -1, mX); }
+    else { if (k === 'ArrowLeft') fcuAdj('spd', -1, m); else if (k === 'ArrowRight') fcuAdj('spd', 1, m); else if (k === 'ArrowUp') fcuAdj('vs', 1, m); else if (k === 'ArrowDown') fcuAdj('vs', -1, m); }
+    return;
+  }
   if (e.repeat) return;
   if (W.onFoot) {
     if (e.code === 'KeyE') footInteract();
@@ -1383,7 +1392,12 @@ function showTip(cx, cy) {
   if (!c) { el.style.opacity = 0; canvas.style.cursor = ''; return; }
   el.textContent = cockpit.userData.desc(c, deckCtx()); el.style.left = (cx + 16) + 'px'; el.style.top = (cy + 18) + 'px'; el.style.opacity = 1; canvas.style.cursor = 'pointer';
 }
-function fcuAdj(k, d) { const ap = fdm.ap; if (k === 'spd') ap.spd = THREE.MathUtils.clamp((ap.spd || Math.round(fdm.ias)) + d * 5, 100, 340); if (k === 'hdg') { ap.hdg = ((ap.hdg + d * 5) % 360 + 360) % 360; if (ap.on && ap.lat !== 'LOC') ap.lat = 'HDG'; } if (k === 'alt') ap.alt = THREE.MathUtils.clamp(ap.alt + d * 500, 0, 39000); if (k === 'vs') { ap.vs = THREE.MathUtils.clamp((ap.vert === 'V/S' ? ap.vs : 0) + d * 100, -6000, 6000); ap.vert = 'V/S'; } }
+// [Flight systems] FCU targets: one getter/setter pair for every input surface (strip wheel,
+// strip drag, type-in, keyboard, 3D knobs) so the steps, clamps and wraps can never disagree.
+const FCU_STEP = { spd: 1, hdg: 1, alt: 100, vs: 100 };
+function fcuGet(k) { const ap = fdm.ap; if (k === 'spd') return ap.spd || Math.round(fdm.ias); if (k === 'hdg') return ap.hdg; if (k === 'alt') return ap.alt; return ap.vert === 'V/S' ? ap.vs : 0; }
+function fcuSet(k, v) { const ap = fdm.ap; if (k === 'spd') ap.spd = THREE.MathUtils.clamp(Math.round(v), 100, 340); if (k === 'hdg') { ap.hdg = ((Math.round(v) % 360) + 360) % 360; if (ap.on && ap.lat !== 'LOC') ap.lat = 'HDG'; } if (k === 'alt') ap.alt = THREE.MathUtils.clamp(Math.round(v / 100) * 100, 0, 39000); if (k === 'vs') { ap.vs = THREE.MathUtils.clamp(Math.round(v / 100) * 100, -6000, 6000); ap.vert = 'V/S'; } }
+function fcuAdj(k, d, mult = 1) { fcuSet(k, fcuGet(k) + d * FCU_STEP[k] * mult); }
 const deckActions = {
   gear: () => { fdm.setGear(!fdm.gearDown); if (fdm.onGround && !fdm.gearDown) { fdm.setGear(true); toast('Gear cannot retract on the ground'); } },
   park: () => { fdm.parkBrake = !fdm.parkBrake; toast('Parking brake ' + (fdm.parkBrake ? 'set' : 'released')); },
@@ -1439,10 +1453,11 @@ let uiT = 0;
 function updateUI() {
   uiT += 1; if (uiT % 6) return; if (uiT % 30 === 0) updateMood(); updateColdList();
   const f = fdm, ap = f.ap, e = f.euler(), sp = f.speeds(), m = settings.units === 'metric';
-  $('#fSpd').textContent = ap.athr ? String(Math.round(ap.spd)).padStart(3, '0') : (ap.spd ? String(Math.round(ap.spd)) : '---');
-  $('#fHdg').textContent = String(Math.round(ap.hdg) % 360).padStart(3, '0');
-  $('#fAlt').textContent = String(Math.round(ap.alt)).padStart(5, '0');
-  $('#fVs').textContent = ap.vert === 'V/S' ? (ap.vs > 0 ? '+' : '') + String(ap.vs).padStart(4, '0') : '-----';
+  const sv = (id, txt) => { const n = $(id); if (n && !n._edit) n.textContent = txt; }; // [Flight systems] never stomp an open type-in editor
+  sv('#fSpd', ap.athr ? String(Math.round(ap.spd)).padStart(3, '0') : (ap.spd ? String(Math.round(ap.spd)) : '---'));
+  sv('#fHdg', String(Math.round(ap.hdg) % 360).padStart(3, '0'));
+  sv('#fAlt', String(Math.round(ap.alt)).padStart(5, '0'));
+  sv('#fVs', ap.vert === 'V/S' ? (ap.vs > 0 ? '+' : '') + String(ap.vs).padStart(4, '0') : '-----');
   const btn = (b, on) => { const el = $(`.fcub[data-b=${b}]`); if (el.getAttribute('aria-pressed') !== String(on)) el.setAttribute('aria-pressed', on); };
   btn('ap', ap.on); btn('athr', ap.athr); btn('hdgm', ap.on && ap.lat === 'HDG'); btn('nav', ap.on && ap.lat === 'NAV'); btn('loc', ap.lat === 'LOC' || ap.locArmed); btn('appr', !!(ap.appr && (ap.gsArmed || ap.vert === 'G/S' || ap.vert === 'FLARE')));
   $('#sThr').style.height = Math.round(f.tl * 100) + '%'; $('#sN1').textContent = f.n1[0].toFixed(0) + (f.reverser > 0.5 ? ' R' : '');
@@ -1504,11 +1519,28 @@ function updateColdList() {
   if (next < 0) { W.coldT = (W.coldT || 0) + 0.1; if (W.coldT > 8) W.coldDone = true; }
   el.hidden = false; el.innerHTML = `<div class="rhead"><span class="rlab">COLD &amp; DARK</span><span class="rname">${next < 0 ? 'Engines running. Ready to taxi.' : 'Start the aircraft'}</span></div><ol>${rows.join('')}</ol><div class="rfoot"><span>9 overhead · 8 pedestal · hover to read, click to operate</span></div>`;
 }
+// [Flight systems] type-a-number editor for an FCU strip value: click the value, type, Enter.
+function fcuEdit(el, k) {
+  if (el._edit) return; el._edit = true; el.classList.add('editing');
+  const span = el.querySelector('.v'); span._edit = true; // updateUI must not overwrite the editor
+  const inp = document.createElement('input'); inp.className = 'fcuedit'; inp.setAttribute('aria-label', (el.title || k) + ' — type a value, Enter to set');
+  inp.value = k === 'hdg' ? String(fcuGet(k)).padStart(3, '0') : String(fcuGet(k));
+  span.style.visibility = 'hidden'; el.appendChild(inp); inp.focus(); inp.select();
+  let done = false;
+  const close = commit => { if (done) return; done = true; if (commit) { const v = parseFloat(inp.value); if (isFinite(v)) fcuSet(k, v); } inp.remove(); span.style.visibility = ''; span._edit = false; el._edit = false; el.classList.remove('editing'); canvas.focus(); };
+  inp.addEventListener('keydown', ev => { ev.stopPropagation(); if (ev.key === 'Enter') close(true); else if (ev.key === 'Escape') close(false); });
+  inp.addEventListener('pointerdown', ev => ev.stopPropagation());
+  inp.addEventListener('blur', () => close(true));
+}
 function bindFCU() {
-  const adj = (k, d) => { const ap = fdm.ap; if (k === 'spd') ap.spd = THREE.MathUtils.clamp(ap.spd + d * 5, 100, 340); if (k === 'hdg') ap.hdg = ((ap.hdg + d * 5) % 360 + 360) % 360; if (k === 'alt') ap.alt = THREE.MathUtils.clamp(ap.alt + d * 500, 0, 39000); if (k === 'vs') { ap.vs = THREE.MathUtils.clamp((ap.vert === 'V/S' ? ap.vs : 0) + d * 100, -6000, 6000); ap.vert = 'V/S'; }
-    if (k === 'hdg' && ap.on && ap.lat !== 'LOC') ap.lat = 'HDG'; if (k === 'alt' && ap.on && ap.vert === 'ALT') ap.vert = 'ALT'; };
-  $$('.fcuw').forEach(el => { el.addEventListener('wheel', ev => { ev.preventDefault(); adj(el.dataset.k, ev.deltaY < 0 ? 1 : -1); }, { passive: false });
-    el.addEventListener('click', ev => { const ap = fdm.ap, k = el.dataset.k; if (k === 'spd') ap.spd = Math.round(fdm.ias); if (k === 'hdg') { ap.hdg = Math.round(fdm.euler().hdg); ap.lat = 'HDG'; } if (k === 'alt') ap.alt = Math.round(fdm.pos.y / FT / 100) * 100; if (k === 'vs') { ap.vert = 'ALT*'; } adj(k, ev.shiftKey ? -1 : 0); }); });
+  $$('.fcuw').forEach(el => { const k = el.dataset.k;
+    el.addEventListener('wheel', ev => { ev.preventDefault(); fcuAdj(k, ev.deltaY < 0 ? 1 : -1, ev.shiftKey ? 5 : 1); }, { passive: false });
+    // click-drag up/down turns the knob (3 px per step); a plain click opens the type-in editor
+    let drag = null;
+    el.addEventListener('pointerdown', ev => { if (ev.button !== 0 || el._edit) return; drag = { y: ev.clientY, v: fcuGet(k), moved: false }; try { el.setPointerCapture(ev.pointerId); } catch (e) { } });
+    el.addEventListener('pointermove', ev => { if (!drag) return; const dy = drag.y - ev.clientY; if (Math.abs(dy) > 3) drag.moved = true; if (drag.moved) { el.classList.add('editing'); fcuSet(k, drag.v + Math.round(dy / 3) * FCU_STEP[k]); } });
+    el.addEventListener('pointerup', () => { if (!drag) return; const wasDrag = drag.moved; drag = null; el.classList.remove('editing'); if (!wasDrag) fcuEdit(el, k); });
+    el.addEventListener('pointercancel', () => { drag = null; el.classList.remove('editing'); }); });
   $$('.fcub').forEach(el => el.addEventListener('click', () => { const ap = fdm.ap; switch (el.dataset.b) {
     case 'ap': toggleAP(); break; case 'athr': ap.athr = !ap.athr; if (ap.athr && !ap.spd) ap.spd = Math.round(fdm.ias); break;
     case 'hdgm': ap.lat = 'HDG'; ap.locArmed = false; break; case 'nav': if (W.route) { ap.lat = 'NAV'; } else toast('No route loaded'); break;
@@ -1685,6 +1717,9 @@ const KEYS = [['W S / ↑ ↓', 'Pitch (↑ nose down)'], ['A D / ← →', 'Rol
   ['T', 'Radio (ATC): while open, 1–6 pick a call, Esc closes'], ['Y', 'Cabin PA: while open, 1–9 announce, 0 seat belt sign, Esc closes'], ['K / Enter', 'Pushback / park at gate'], ['I / GND', 'Ground services at the gate: call or dismiss fuel, catering, baggage, water, toilets, cleaning, power (also in the PA panel)'], ['J', 'Next step: checklists, ECAM actions after a failure, ATC calls (same as A on a controller)'], ['Shift Enter', 'Auto-taxi along the magenta route'],
   ['F / V', 'Flaps extend / retract'], ['G', 'Landing gear'], ['B', 'Wheel brakes (hold)'], ['Space', 'Parking brake'], ['R', 'Reversers (on ground)'], ['/', 'Speed brake'], ['[ ]', 'Pitch trim (direct law)'],
   ['Z', 'Autopilot on / off'], ['Shift Z', 'Autothrust on / off'], ['O', 'Arm ILS approach (LOC + G/S)'], ['L', 'Landing lights'], ['C / 1–7', 'Camera: deck, chase, orbit, tower, runway, fly-by, cabin'], ['8 / 9 / 0', 'Flight deck only: look at pedestal / overhead / side window (again: ahead)'], ['Mouse on the deck', 'Hover a switch for its name, click to operate, scroll on knobs'],
+  ['FCU strip (top centre)', 'Scroll = adjust · drag up/down = turn the knob · click a value, type a number, Enter = set it (Esc cancels)'],
+  ['Ctrl ← → / ↑ ↓', 'FCU heading −/+ · altitude +/− (hold Shift for ×10 steps)'],
+  ['Alt ← → / ↑ ↓', 'FCU speed −/+ · V/S +/− (hold Shift for ×5 steps)'],
   ['Mouse drag', 'Look / orbit camera'], ['Wheel', 'Zoom'], ['M', 'Mouse yoke'], ['N', 'Navigation display overlay — route map with distance and ETA to destination (the bottom-left strip always shows the flight progress)'], ['H', 'Outside views: clean HUD ↔ full HUD + PFD'], ['. ,', 'Time acceleration'], ['P / Esc', 'Pause / menu'], ['?', 'This help'],
   ['On foot', 'WASD walk, Shift run, mouse look / orbit, wheel zoom, V third / first person, E interact, J skip ahead, Y PA'],
   ['Xbox controller', 'Left stick flies (Easy assist: let go and it levels) and steers on the ground; right stick looks, R3 recentres; RT / LT thrust (LT on the landing roll: reverse); A next step (shown on screen); B brakes (hold); X ATC menu; Y PA menu; LB / RB flaps up / down; hold LB + A gear, + X autopilot, + B spoilers, + Y lights; D-pad views; View camera, hold View for help; Menu pause'],
