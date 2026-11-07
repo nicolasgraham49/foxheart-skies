@@ -186,6 +186,14 @@ select{background:rgba(0,0,0,.35);color:var(--ink);border:1px solid var(--line2)
 #stat .c{display:grid;gap:4px;justify-items:center}
 #stat .k{color:var(--mute);font-size:9.5px;letter-spacing:.12em}
 #stat .v{font:700 14px var(--f-mono)}
+#navstrip{position:absolute;left:max(16px,env(safe-area-inset-left,0px));top:132px;padding:10px 14px;font:12px var(--f-mono);min-width:280px;display:grid;gap:6px}
+#navstrip[hidden]{display:none}
+#navstrip .nsrow{display:flex;gap:14px;align-items:baseline}
+#navstrip .nsrow b{font:700 15px var(--f-display);letter-spacing:.06em}
+#navstrip .nsrow.dim{color:var(--mute);font-size:11.5px}
+#navstrip .nsrow .dv{color:var(--amber)}
+#navstrip .nsbar{height:5px;border-radius:3px;background:rgba(255,255,255,.14);overflow:hidden}
+#navstrip .nsbar i{display:block;height:100%;background:linear-gradient(90deg,var(--fox),var(--fox2));border-radius:3px}
 .thr{width:10px;height:54px;border-radius:3px;background:rgba(255,255,255,.08);position:relative;overflow:hidden}
 .thr i{position:absolute;left:0;right:0;bottom:0;background:linear-gradient(0deg,var(--fox),var(--fox2))}
 #pfdwrap{position:absolute;left:max(16px,env(safe-area-inset-left,0px));bottom:max(16px,env(safe-area-inset-bottom,0px));display:flex;gap:8px;pointer-events:none}
@@ -436,10 +444,10 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
 
 <div id="flight" hidden>
   <div id="fcu">
-    <div class="fcuw" data-k="spd" title="Scroll to change, click to sync"><span class="l">SPD</span><span class="v" id="fSpd">---</span></div>
-    <div class="fcuw" data-k="hdg" title="Scroll to change, click to sync"><span class="l">HDG</span><span class="v" id="fHdg">---</span></div>
-    <div class="fcuw" data-k="alt" title="Scroll to change, click to sync"><span class="l">ALT</span><span class="v" id="fAlt">-----</span></div>
-    <div class="fcuw" data-k="vs" title="Scroll to change, click to level off"><span class="l">V/S</span><span class="v" id="fVs">-----</span></div>
+    <div class="fcuw" data-k="spd" title="Selected speed target (not current speed). Scroll to change, click to sync"><span class="l">SPD SEL</span><span class="v" id="fSpd">---</span></div>
+    <div class="fcuw" data-k="hdg" title="Selected heading target (not current heading). Scroll to change, click to sync"><span class="l">HDG SEL</span><span class="v" id="fHdg">---</span></div>
+    <div class="fcuw" data-k="alt" title="Selected altitude target (not current altitude). Scroll to change, click to sync"><span class="l">ALT SEL</span><span class="v" id="fAlt">-----</span></div>
+    <div class="fcuw" data-k="vs" title="Selected vertical-speed target. Scroll to change, click to level off"><span class="l">V/S SEL</span><span class="v" id="fVs">-----</span></div>
     <div class="fcusep"></div>
     <button class="fcub" data-b="ap" aria-pressed="false">AP<i></i></button>
     <button class="fcub" data-b="athr" aria-pressed="false">A/THR<i></i></button>
@@ -454,6 +462,7 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
   </div>
   <div id="note" class="glass"></div>
   <div id="info" class="glass"></div>
+  <div id="navstrip" class="glass" hidden></div>
   <div id="pfdwrap"></div>
   <div id="stat" class="glass">
     <div class="c"><div class="thr"><i id="sThr"></i></div><span class="k">THR</span></div>
