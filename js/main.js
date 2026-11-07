@@ -26,6 +26,7 @@ import { Rescue } from './rescue.js';
 import { Speech } from './speech.js';
 import { GroundCrew } from './groundcrew.js';
 import { LandingAids, fdGuide } from './landing.js';
+import { NavPlan, fmtEte, fmtClock } from './navmap.js';
 import { Music, moodFor } from './music.js';
 import { ServicePanel } from './env-svcpanel.js';
 import { buildCabin } from './interiors.js';
@@ -142,6 +143,7 @@ const blobTex = (() => { const c = document.createElement('canvas'); c.width = c
 const blob = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: blobTex, transparent: true, depthWrite: false })); blob.renderOrder = 4; scene.add(blob);
 
 const W = { geo: new Geo(0, 0), apt: null, built: [], primary: null, ils: null, end: null, mode: 'free', cfg: null, tod: 1080, wx: 'clear', wind: new THREE.Vector3(), windFrom: 270, windKt: 6, gust: 0, wet: { value: 0 }, route: null, navs: [], timeAccel: 1, paused: false, view: 'chase', simTime: 0, lastTD: null, scored: false, started: false, menuMode: true };
+const nav = new NavPlan(); // flight plan for the map + HUD strip (navmap.js); a future divert pass calls nav.setDivert(apt)
 
 // ---------------------------------------------------------------- world construction
 function nearestAnywhere(lat, lon) { let best = null, bd = 1e18; for (const a of World.airports) { const d = haversine(lat, lon, a.lat, a.lon); if (d < bd && a.runways.length) { bd = d; best = a; } } return best; }
@@ -1001,6 +1003,21 @@ function layoutOverlays() {
   const wrap = $('#pfdwrap'); wrap.innerHTML = '';
   if (W.view !== 'cockpit' && W.view !== 'cabin') { if (settings.extHud === 'full') wrap.appendChild(displays.pfd); if (ndOverlay) wrap.appendChild(displays.nd); }
 }
+// HUD flight-progress strip (bottom-left): route, distance to go, progress
+// bar, ETE / ETA / groundspeed — the always-visible answer to "where am I
+// and how long is left". Reads snapshot nav info only; rebuilt on change.
+let _nsKey = '';
+function updateNavStrip(S) {
+  const el = $('#navstrip'); if (!el) return;
+  const n = S && S.nav;
+  const show = !!n && !W.menuMode && !W.onFoot && W.view !== 'cabin' && settings.hud;
+  el.hidden = !show; if (!show) { _nsKey = ''; return; }
+  const metric = settings.units === 'metric';
+  const dist = metric ? Math.round(n.remainNm * 1.852) + ' km' : n.remainNm.toFixed(n.remainNm < 20 ? 1 : 0) + ' NM';
+  const key = [n.dep ? n.dep.icao : '', n.arr.icao, dist, fmtEte(n.eteMin), n.etaClockMin, Math.round(n.progress * 100), Math.round(n.gsKt / 5), n.divert ? n.divert.icao : ''].join('|');
+  if (key === _nsKey) return; _nsKey = key;
+  el.innerHTML = `<div class="nsrow"><b>${n.dep ? n.dep.icao : '····'} → ${n.arr.icao}</b><span>${dist} to go</span><span>${Math.round(n.progress * 100)}%</span></div><div class="nsbar"><i style="width:${Math.round(n.progress * 100)}%"></i></div><div class="nsrow dim"><span>ETE ${fmtEte(n.eteMin)}</span><span>ETA ${fmtClock(n.etaClockMin)}</span><span>GS ${Math.round(n.gsKt)} kt</span>${n.divert ? `<span class="dv">DIVERT ${n.divert.icao} ${n.divert.distNm.toFixed(0)} NM</span>` : ''}</div>`;
+}
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 function updateCamera(dt) {
   const acp = aircraft.position; const v = W.view;
@@ -1050,12 +1067,35 @@ function nearestBuilt() { let best = null, bd = 1e12; for (const b of W.built) {
 
 // ---------------------------------------------------------------- loop
 let last = performance.now(), fpsAcc = 0, fpsN = 0, fps = 0, dynT = 0, dispT = 0, dispIdx = 0, frameMs = 16;
+let _naCache = null;
+function navAptsAround(lat, lon) { // airports for the ND dot pass, in current-frame coords; cached until we move 20 km, the origin shifts, or the destination changes
+  const oKey = W.geo.lat0 + ',' + W.geo.lon0, dKey = W.dest ? W.dest.icao : '';
+  if (_naCache && _naCache.o === oKey && _naCache.d === dKey && haversine(lat, lon, _naCache.lat, _naCache.lon) < 20000) return _naCache.list;
+  const built = new Set(W.built.map(b => b.icao));
+  const list = nearestAirports(lat, lon, 750000, 42).map(a => ({ icao: a.icao, large: !!a.large, x: W.geo.x(a.lon), z: W.geo.z(a.lat), built: built.has(a.icao) }));
+  _naCache = { lat, lon, o: oKey, d: dKey, list }; return list;
+}
 function snapshot() {
   const e = fdm.euler(); const gh = fdm.gnd ? fdm.gnd.h : 0; const dev = W.ils ? ilsDeviation(W.ils, fdm.pos) : null;
   const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z);
+  // navigation plan: synced with the session's own origin/destination (the
+  // same pair flightInfo()/ATC use; a 'final' start flies dest -> here)
+  let navInfo = null, navPts = null, navApts = null;
+  if (W.started && !W.menuMode && W.cfg) {
+    const fin = W.cfg.start === 'final';
+    nav.setFlight(fin ? (W.dest || W.cfg.apt) : (W.cfg.apt || null), fin ? (W.cfg.apt || null) : (W.dest || null));
+    navInfo = nav.update(ll.lat, ll.lon, Math.hypot(fdm.vel.x, fdm.vel.z) / KT, W.tod);
+    if (navInfo) { const P = a => a ? { x: W.geo.x(a.lon), z: W.geo.z(a.lat) } : null; navPts = { dep: P(navInfo.dep), arr: P(navInfo.arr), divert: P(navInfo.divert) }; }
+    navApts = navAptsAround(ll.lat, ll.lon);
+  }
+  // ND auto range: the old altitude steps, widened so the destination is
+  // actually on the map when it is further than the step (EFIS knob wins)
+  let ndR = W.ndRange || (fdm.pos.y / FT - gh / FT < 4000 ? 10 : fdm.pos.y / FT < 12000 ? 20 : 40);
+  if (!W.ndRange && navInfo && navInfo.remainNm > ndR) { for (const s of [80, 160, 320]) { ndR = s; if (navInfo.remainNm * 1.1 <= s) break; } }
   return { fdm, e, speeds: fdm.speeds(), ap: fdm.ap, altFt: fdm.pos.y / FT, groundFt: gh / FT, raFt: fdm.ra / FT, ils: W.ils, ilsDev: dev, track: (Math.atan2(fdm.vel.x, -fdm.vel.z) * R2D + 360) % 360, route: W.route,
     airports: W.built.map(b => ({ x: b.x, z: b.z, geom: b.geom, icao: b.icao })), navaids: W.navs, traffic: traffic.list, windFrom: W.windFrom, windKt: W.windKt, localMin: W.tod, phase: W.phase,
-    ndRange: W.ndRange || (fdm.pos.y / FT - gh / FT < 4000 ? 10 : fdm.pos.y / FT < 12000 ? 20 : 40), warnings: warnings(e, dev), elecEmer: sys.emerElec, fd: fdm.ap.on || !(W.ils !== W.depIls || W.cfg?.start === 'final') ? null : fdGuide(fdm, W.ils, dev, e), lat: ll.lat, lon: ll.lon };
+    nav: navInfo, navPts, navApts,
+    ndRange: ndR, warnings: warnings(e, dev), elecEmer: sys.emerElec, fd: fdm.ap.on || !(W.ils !== W.depIls || W.cfg?.start === 'final') ? null : fdGuide(fdm, W.ils, dev, e), lat: ll.lat, lon: ll.lon };
 }
 function warnings(e, dev) {
   const m = fails.ecam([]); const f = fdm; const sp = f.speeds();
@@ -1245,7 +1285,7 @@ function renderRest(dt, night) {
   if (!W.menuMode && W.ils) aids.update(W.ils, fdm.pos, { px: renderer.getPixelRatio() }, ground); aids.g.visible = !W.menuMode && !!W.ils;
   composer.render(dt);
   // instruments at ~20 Hz, spread across frames
-  dispT += dt; if (dispT > (W.view === 'cockpit' ? 0.05 : 0.08)) { dispT = 0; const S = snapshot(); const order = W.view === 'cockpit' ? [['pfd'], ['nd'], ['ewd', 'sd']] : [['pfd'], ['pfd', 'nd']]; displays.draw(S, order[dispIdx++ % order.length]); W.S = S; }
+  dispT += dt; if (dispT > (W.view === 'cockpit' ? 0.05 : 0.08)) { dispT = 0; const S = snapshot(); const order = W.view === 'cockpit' ? [['pfd'], ['nd'], ['ewd', 'sd']] : [['pfd'], ['pfd', 'nd']]; displays.draw(S, order[dispIdx++ % order.length]); W.S = S; updateNavStrip(S); }
   const hc = $('#hudc'); const hx = hc.getContext('2d');
   if (!W.menuMode && !W.onFoot && settings.hud && W.view !== 'cockpit' && W.view !== 'cabin' && W.S) drawHUD(hx, hc.width, hc.height, W.S, camera, settings.units, settings.extHud); else hx.clearRect(0, 0, hc.width, hc.height);
   audio.update({ fdm, apuN: sys.apuN, paused: W.paused || W.menuMode, ground: fdm.onGround, camDist: camera.position.distanceTo(aircraft.position), rain: W.wx === 'rain', nearAirport: true, groundH: gh, flapTarget: FLAPS[fdm.flapIdx].flap }, dt, W.view);
@@ -1645,14 +1685,14 @@ const KEYS = [['W S / ↑ ↓', 'Pitch (↑ nose down)'], ['A D / ← →', 'Rol
   ['T', 'Radio (ATC): while open, 1–6 pick a call, Esc closes'], ['Y', 'Cabin PA: while open, 1–9 announce, 0 seat belt sign, Esc closes'], ['K / Enter', 'Pushback / park at gate'], ['I / GND', 'Ground services at the gate: call or dismiss fuel, catering, baggage, water, toilets, cleaning, power (also in the PA panel)'], ['J', 'Next step: checklists, ECAM actions after a failure, ATC calls (same as A on a controller)'], ['Shift Enter', 'Auto-taxi along the magenta route'],
   ['F / V', 'Flaps extend / retract'], ['G', 'Landing gear'], ['B', 'Wheel brakes (hold)'], ['Space', 'Parking brake'], ['R', 'Reversers (on ground)'], ['/', 'Speed brake'], ['[ ]', 'Pitch trim (direct law)'],
   ['Z', 'Autopilot on / off'], ['Shift Z', 'Autothrust on / off'], ['O', 'Arm ILS approach (LOC + G/S)'], ['L', 'Landing lights'], ['C / 1–7', 'Camera: deck, chase, orbit, tower, runway, fly-by, cabin'], ['8 / 9 / 0', 'Flight deck only: look at pedestal / overhead / side window (again: ahead)'], ['Mouse on the deck', 'Hover a switch for its name, click to operate, scroll on knobs'],
-  ['Mouse drag', 'Look / orbit camera'], ['Wheel', 'Zoom'], ['M', 'Mouse yoke'], ['N', 'Navigation display overlay'], ['H', 'Outside views: clean HUD ↔ full HUD + PFD'], ['. ,', 'Time acceleration'], ['P / Esc', 'Pause / menu'], ['?', 'This help'],
+  ['Mouse drag', 'Look / orbit camera'], ['Wheel', 'Zoom'], ['M', 'Mouse yoke'], ['N', 'Navigation display overlay — route map with distance and ETA to destination (the bottom-left strip always shows the flight progress)'], ['H', 'Outside views: clean HUD ↔ full HUD + PFD'], ['. ,', 'Time acceleration'], ['P / Esc', 'Pause / menu'], ['?', 'This help'],
   ['On foot', 'WASD walk, Shift run, mouse look / orbit, wheel zoom, V third / first person, E interact, J skip ahead, Y PA'],
   ['Xbox controller', 'Left stick flies (Easy assist: let go and it levels) and steers on the ground; right stick looks, R3 recentres; RT / LT thrust (LT on the landing roll: reverse); A next step (shown on screen); B brakes (hold); X ATC menu; Y PA menu; LB / RB flaps up / down; hold LB + A gear, + X autopilot, + B spoilers, + Y lights; D-pad views; View camera, hold View for help; Menu pause'],
   ['Controller in menus', 'D-pad or left stick moves, A selects, B backs out'], ['Controller on foot', 'Left stick walks, right stick looks / orbits, RT run, A interact, Y skip ahead, X cabin PA, View or R3 third / first person']];
 
 // ---------------------------------------------------------------- test hooks
 window.__sim = {
-  ready: false, errors, world: World, W, fdm, settings,
+  ready: false, errors, world: World, W, fdm, settings, nav,
   state() { const e = fdm.euler(); return { view: W.view, mode: W.mode, apt: W.apt?.icao, end: W.end?.ident, x: fdm.pos.x, y: fdm.pos.y, z: fdm.pos.z, altFt: fdm.pos.y / FT, raFt: fdm.ra / FT, ias: fdm.ias, gs: Math.hypot(fdm.vel.x, fdm.vel.z) / KT, vsFpm: fdm.vel.y / FT * 60, ...e, onGround: fdm.onGround, gearDown: fdm.gearDown, gearPos: fdm.gearPos, flaps: fdm.flapIdx, flapPos: fdm.flapPos, tl: fdm.tl, n1: fdm.n1.slice(), ap: { on: fdm.ap.on, athr: fdm.ap.athr, lat: fdm.ap.lat, vert: fdm.ap.vert, spd: fdm.ap.spd }, crashed: fdm.crashed, td: fdm.td && { vs: fdm.td.vs, ias: fdm.td.ias }, score: lastScore, simTime: W.simTime, tod: W.tod, wx: W.wx, sunElev: sky.sunElev, fps, renderScale, built: W.built.map(b => b.icao + (b.full ? '*' : '')), cityCount: city.count || 0, lightsCount: W.primary?.b.lightsCount, alpha: fdm.alpha * R2D, stall: fdm.stall, parkBrake: fdm.parkBrake }; },
   search: q => search(q).map(a => ({ icao: a.icao, iata: a.iata, name: a.name, runways: a.runways.length })),
   async start(cfg) { const A = cfg.icao ? World.byIcao.get(cfg.icao) : nearestAnywhere(cfg.lat, cfg.lon); $('#menu').hidden = true; $('#flight').hidden = false; W.menuMode = false; W.paused = false; if (cfg.route) { const r = ROUTES.find(r => r.title === cfg.route); r.toApt = World.byIcao.get(r.to); cfg = { ...cfg, route: r, toApt: r.toApt, start: 'route', mode: 'route', end: r.end }; } await startFlight({ ...cfg, apt: A }); return this.state(); },

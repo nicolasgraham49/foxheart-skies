@@ -5,6 +5,7 @@ import { atmos } from './sky.js';
 import { FT, KT, D2R, R2D, fmtTime } from './data.js';
 import { FLAPS } from './fdm.js';
 import { ilsDeviation } from './airport.js';
+import { fmtEte, fmtClock } from './navmap.js';
 
 const MONO = '"B612 Mono", "Consolas", monospace', SANS = '"B612", "Segoe UI", sans-serif';
 const GRN = '#3dfc7c', CYAN = '#3ee6ff', AMB = '#ffb21e', MAG = '#ff5cff', WHT = '#f2f2f2', RED = '#ff3a2e', YEL = '#ffe600';
@@ -122,12 +123,37 @@ export class Displays {
     const cx = 256, cy = 430, R = 330; const range = S.ndRange || 20; const sc = R / (range * 1852);
     const h = e.hdg * D2R, cosH = Math.cos(h), sinH = Math.sin(h);
     const P = (x, z) => { const de = x - f.pos.x, dn = -(z - f.pos.z); const rt = de * cosH - dn * sinH, fw = de * sinH + dn * cosH; return [cx + rt * sc, cy - fw * sc]; };
+    // label de-collision: at wide ranges every field + navaid converges on a
+    // few pixels and the labels stack into mush — first label drawn wins the
+    // space, later ones that would overlap are skipped (symbols still draw)
+    const placed = [];
+    const tryLabel = (txt, x, y, col, font, bold) => { const w = txt.length * font * 0.62 + 6, box = [x - 2, y - font * 0.78, x + w, y + 4]; for (const b of placed) if (box[0] < b[2] && box[2] > b[0] && box[1] < b[3] && box[3] > b[1]) return false; placed.push(box); c.fillStyle = col; c.font = `${bold ? 'bold ' : ''}${font}px ${MONO}`; c.fillText(txt, x, y); return true; };
     c.save(); c.beginPath(); c.arc(cx, cy, R + 2, Math.PI * 1.08, Math.PI * 1.92); c.lineTo(cx, cy); c.closePath(); c.rect(0, 380, 512, 132); c.clip();
     // range rings
     c.strokeStyle = 'rgba(255,255,255,0.5)'; c.lineWidth = 1.5; c.setLineDash([6, 8]); c.beginPath(); c.arc(cx, cy, R / 2, Math.PI, 2 * Math.PI); c.stroke(); c.setLineDash([]);
+    // every airport in range as a dot (navmap feed from main.js): the quiet
+    // alternates a pilot glances at; built airports are skipped here — they
+    // get real runways + a label in the airport pass below
+    if (S.navApts) { let labelled = 0;
+      for (const a of S.navApts) { if (a.built) continue; const [x, y] = P(a.x, a.z); if (Math.hypot(x - cx, y - cy) > R || y > cy) continue;
+        const kind = S.nav && S.nav.arr && a.icao === S.nav.arr.icao ? 'arr' : S.nav && S.nav.dep && a.icao === S.nav.dep.icao ? 'dep' : '';
+        if (range > 80 && !kind && !a.large) continue; // wide range: small fields are just noise
+        c.fillStyle = kind === 'arr' ? MAG : kind === 'dep' ? CYAN : 'rgba(235,235,235,0.75)';
+        c.beginPath(); c.arc(x, y, kind ? 4.5 : 3, 0, 7); c.fill();
+        if ((kind || a.large) && labelled < 14 && tryLabel(a.icao, x + 7, y + 3, c.fillStyle, 11)) labelled++; } }
+    // flight-plan line: departure -> destination (navmap.js). The flown part
+    // is dimmed white over the green; the destination gets a magenta diamond.
+    if (S.nav && S.navPts && S.navPts.arr) { const A = S.navPts.dep, B = S.navPts.arr; const [bx, by] = P(B.x, B.z);
+      if (A) { const [ax, ay] = P(A.x, A.z);
+        c.strokeStyle = GRN; c.lineWidth = 2.5; c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke();
+        c.strokeStyle = 'rgba(240,240,240,0.5)'; c.lineWidth = 2; c.beginPath(); c.moveTo(ax, ay); c.lineTo(cx, cy); c.stroke();
+        c.fillStyle = CYAN; c.beginPath(); c.arc(ax, ay, 5, 0, 7); c.fill(); if (S.nav.dep) tryLabel(S.nav.dep.icao, ax + 9, ay - 7, CYAN, 13, true);
+      } else { c.strokeStyle = GRN; c.lineWidth = 2.5; c.beginPath(); c.moveTo(cx, cy); c.lineTo(bx, by); c.stroke(); }
+      if (Math.hypot(bx - cx, by - cy) <= R) { c.fillStyle = MAG; c.save(); c.translate(bx, by); c.rotate(Math.PI / 4); c.fillRect(-6, -6, 12, 12); c.restore(); tryLabel(S.nav.arr.icao, bx + 11, by - 7, MAG, 13, true); }
+      if (S.navPts.divert) { const [dx2, dy2] = P(S.navPts.divert.x, S.navPts.divert.z); if (Math.hypot(dx2 - cx, dy2 - cy) <= R) { c.fillStyle = AMB; c.save(); c.translate(dx2, dy2); c.rotate(Math.PI / 4); c.fillRect(-6, -6, 12, 12); c.restore(); if (S.nav.divert) tryLabel(S.nav.divert.icao, dx2 + 11, dy2 - 7, AMB, 13, true); } } }
     // route
     if (S.route) { c.strokeStyle = GRN; c.lineWidth = 2.5; c.beginPath(); S.route.forEach((w, i) => { const [x, y] = P(w.x, w.z); i ? c.lineTo(x, y) : c.moveTo(x, y); }); c.stroke();
-      c.font = `15px ${MONO}`; S.route.forEach((w, i) => { const [x, y] = P(w.x, w.z); c.fillStyle = i === S.ap.wp ? WHT : GRN; c.save(); c.translate(x, y); c.rotate(Math.PI / 4); c.strokeStyle = c.fillStyle; c.strokeRect(-5, -5, 10, 10); c.restore(); c.fillText(w.name, x + 10, y - 8); }); }
+      S.route.forEach((w, i) => { const [x, y] = P(w.x, w.z); c.fillStyle = i === S.ap.wp ? WHT : GRN; c.save(); c.translate(x, y); c.rotate(Math.PI / 4); c.strokeStyle = c.fillStyle; c.strokeRect(-5, -5, 10, 10); c.restore(); tryLabel(w.name, x + 10, y - 8, i === S.ap.wp ? WHT : GRN, 15); }); }
     // ILS extended centreline
     if (S.ils) { const t = S.ils.thr, d = S.ils.dir; const [x0, y0] = P(t.x, t.z), [x1, y1] = P(t.x - d.x * 28000, t.z - d.z * 28000); c.strokeStyle = MAG; c.lineWidth = 2; c.setLineDash([12, 8]); c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); c.setLineDash([]); }
     // runways of nearby airports (real geometry)
@@ -135,16 +161,16 @@ export class Displays {
     for (const A of S.airports) {
       const [ax, ay] = P(A.x, A.z); if (Math.hypot(ax - cx, ay - cy) > R + 60) continue;
       for (const r of A.geom.runways) { const [x0, y0] = P(A.x + r.a.x, A.z + r.a.z), [x1, y1] = P(A.x + r.b.x, A.z + r.b.z); c.strokeStyle = WHT; c.lineWidth = Math.max(2, r.W * sc * 1.2); c.beginPath(); c.moveTo(x0, y0); c.lineTo(x1, y1); c.stroke(); }
-      c.fillStyle = MAG; c.font = `14px ${MONO}`; c.fillText(A.icao, ax + 12, ay + 18);
+      tryLabel(A.icao, ax + 12, ay + 18, MAG, 14);
     }
-    // navaids
-    c.font = `13px ${MONO}`;
-    for (const n of S.navaids) {
+    // navaids: a short-range aid — at wide ranges they only pile up on the
+    // aircraft symbol, so the whole pass is skipped beyond 80 NM
+    if (range <= 80) for (const n of S.navaids) {
       const [x, y] = P(n.x, n.z); if (Math.hypot(x - cx, y - cy) > R + 10 || y > cy) continue;
       const vor = n.type[0] === 'V' || n.type === 'T'; c.strokeStyle = vor ? CYAN : MAG; c.lineWidth = 1.5;
       if (vor) { c.beginPath(); for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; c.lineTo(x + Math.cos(a) * 6, y + Math.sin(a) * 6); } c.closePath(); c.stroke(); }
       else { c.beginPath(); c.arc(x, y, 5, 0, 7); c.stroke(); }
-      c.fillStyle = vor ? CYAN : MAG; c.fillText(n.id, x + 8, y - 6);
+      tryLabel(n.id, x + 8, y - 6, vor ? CYAN : MAG, 13);
     }
     // other traffic (TCAS-style)
     for (const t of S.traffic) { const [x, y] = P(t.x, t.z); if (Math.hypot(x - cx, y - cy) > R) continue; c.fillStyle = WHT; c.beginPath(); c.moveTo(x, y - 6); c.lineTo(x + 6, y); c.lineTo(x, y + 6); c.lineTo(x - 6, y); c.closePath(); c.fill(); const rel = Math.round((t.y - f.pos.y) / FT / 100); c.font = `12px ${MONO}`; c.fillText((rel > 0 ? '+' : '') + String(rel).padStart(2, '0'), x - 10, y + (rel > 0 ? -10 : 18)); }
@@ -160,6 +186,13 @@ export class Displays {
     const hbRel = wrap360(S.ap.hdg - e.hdg + 180) - 180; if (Math.abs(hbRel) < 50) { const a = (hbRel - 90) * D2R; c.fillStyle = CYAN; c.save(); c.translate(cx + Math.cos(a) * (R + 4), cy + Math.sin(a) * (R + 4)); c.rotate(hbRel * D2R); c.beginPath(); c.moveTo(0, 0); c.lineTo(-8, -14); c.lineTo(8, -14); c.closePath(); c.fill(); c.restore(); }
     const tkRel = wrap360(S.track - e.hdg + 180) - 180; { const a = (tkRel - 90) * D2R; c.strokeStyle = GRN; c.save(); c.translate(cx + Math.cos(a) * (R - 10), cy + Math.sin(a) * (R - 10)); c.rotate(tkRel * D2R); c.beginPath(); c.moveTo(0, -8); c.lineTo(6, 0); c.lineTo(0, 8); c.lineTo(-6, 0); c.closePath(); c.stroke(); c.restore(); }
     c.fillStyle = YEL; c.fillRect(cx - 2, cy - R - 22, 4, 22);
+    // off-scale destination: an edge diamond on the arc, pointing the way,
+    // with the distance left — so the target is never just "somewhere"
+    if (S.nav && S.navPts && S.navPts.arr) { const [bx, by] = P(S.navPts.arr.x, S.navPts.arr.z);
+      if (Math.hypot(bx - cx, by - cy) > R) { const rel = wrap360(S.nav.brgTo - e.hdg + 180) - 180;
+        if (Math.abs(rel) < 52) { const a = (rel - 90) * D2R, x = cx + Math.cos(a) * (R - 18), y = cy + Math.sin(a) * (R - 18);
+          c.fillStyle = MAG; c.save(); c.translate(x, y); c.rotate(Math.PI / 4); c.fillRect(-6, -6, 12, 12); c.restore();
+          c.font = `bold 13px ${MONO}`; c.textAlign = 'center'; c.fillText(S.nav.arr.icao + ' ' + Math.round(S.nav.remainNm), x, y + 26); c.textAlign = 'left'; } } }
     // own aircraft
     c.strokeStyle = YEL; c.lineWidth = 4; c.beginPath(); c.moveTo(cx, cy - 22); c.lineTo(cx, cy + 22); c.moveTo(cx - 20, cy - 4); c.lineTo(cx + 20, cy - 4); c.moveTo(cx - 8, cy + 18); c.lineTo(cx + 8, cy + 18); c.stroke();
     c.fillStyle = WHT; c.font = `15px ${MONO}`; c.textAlign = 'left';
@@ -168,8 +201,14 @@ export class Displays {
     const wd = S.windFrom, ws = S.windKt; c.fillStyle = GRN; c.fillText(`${String(Math.round(wd)).padStart(3, '0')}°/${Math.round(ws)}`, 12, 48);
     c.save(); c.translate(30, 76); c.rotate((wd + 180 - e.hdg) * D2R); c.strokeStyle = GRN; c.lineWidth = 2; c.beginPath(); c.moveTo(0, -14); c.lineTo(0, 14); c.moveTo(-5, 8); c.lineTo(0, 14); c.lineTo(5, 8); c.stroke(); c.restore();
     c.textAlign = 'right';
-    if (S.ils) { c.fillStyle = MAG; c.fillText('ILS' + S.ils.ident + ' ' + S.ils.freq.toFixed(2), 500, 26); c.fillText('CRS ' + String(Math.round(S.ils.course)).padStart(3, '0') + '°', 500, 46); }
-    else if (S.route && S.route[S.ap.wp]) { const w = S.route[S.ap.wp]; c.fillStyle = WHT; c.fillText(w.name, 500, 26); c.fillStyle = GRN; c.fillText((Math.hypot(w.x - f.pos.x, w.z - f.pos.z) / 1852).toFixed(1) + ' NM', 500, 46); }
+    let ry = 26;
+    if (S.ils) { c.fillStyle = MAG; c.font = `15px ${MONO}`; c.fillText('ILS' + S.ils.ident + ' ' + S.ils.freq.toFixed(2), 500, ry); c.fillText('CRS ' + String(Math.round(S.ils.course)).padStart(3, '0') + '°', 500, ry + 20); ry += 46; }
+    if (S.nav) { const n = S.nav; // destination block: where, how far, how long (navmap.js)
+      c.fillStyle = MAG; c.font = `bold 16px ${MONO}`; c.fillText('→ ' + n.arr.icao, 500, ry);
+      c.fillStyle = GRN; c.font = `15px ${MONO}`; c.fillText(n.remainNm.toFixed(n.remainNm < 20 ? 1 : 0) + ' NM · ' + Math.round(n.progress * 100) + '%', 500, ry + 22);
+      c.fillStyle = WHT; c.fillText('ETE ' + fmtEte(n.eteMin) + (n.etaClockMin != null ? ' · ETA ' + fmtClock(n.etaClockMin) : ''), 500, ry + 44);
+      if (n.divert) { c.fillStyle = AMB; c.fillText('DIVERT ' + n.divert.icao + ' ' + n.divert.distNm.toFixed(0) + ' NM', 500, ry + 66); }
+    } else if (!S.ils && S.route && S.route[S.ap.wp]) { const w = S.route[S.ap.wp]; c.fillStyle = WHT; c.font = `15px ${MONO}`; c.fillText(w.name, 500, 26); c.fillStyle = GRN; c.fillText((Math.hypot(w.x - f.pos.x, w.z - f.pos.z) / 1852).toFixed(1) + ' NM', 500, 46); }
     c.fillStyle = CYAN; c.fillText(range + ' NM', 500, 498); c.fillStyle = WHT; c.textAlign = 'left'; c.fillText('ARC  TRUE', 12, 498);
   }
   // ------------------------------------------------ Engine / warning display
