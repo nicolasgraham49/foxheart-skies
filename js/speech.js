@@ -29,7 +29,7 @@ export class Speech {
   voices() { try { return this.available ? speechSynthesis.getVoices() : []; } catch (e) { return []; } }
   canSpeak() { return this.enabled && this.available && !this.silent; }
   busyWith(ch) { return !!(this.cur && this.cur.channel === ch) || this.items.some(i => i.channel === ch); }
-  // o: { text, display, who, channel, prio, voice (fn or voice), lang, rate, pitch, volume, delay (s), onstart, onend, maxWait (s) }
+  // o: { text, display, who, channel, prio, voice (fn or voice), lang, accent (ordered locale tags — ATC controllers only, see resolveVoice), rate, pitch, volume, delay (s), onstart, onend, maxWait (s) }
   say(o) {
     const channel = o.channel || 'atc', prio = o.prio ?? PRIO[channel] ?? 3, now = performance.now();
     if (channel === 'gpws' && this.cur && this.cur.channel === 'pa') return null; // never talk over the captain's PA
@@ -63,15 +63,32 @@ export class Speech {
   // substituted (local voices first — they cannot die with the network), and failing that the utterance goes out
   // lang-only on the browser's default voice. A voice that errors or ends instantly is blocklisted and the chunk is
   // re-spoken once with the next candidate, so one dead voice can never mute a channel.
+  // ACCENT EXCEPTION — narrow and opt-in: a caller may pass o.accent, an ordered list of locale tags (BCP-47,
+  // lowercase, e.g. ['es'] or ['ar', 'en-gb', 'en-in']). ONLY ATC passes it, and only for controller speech, so a
+  // facility at a foreign airport can speak English with that place's voice — a Spanish voice reading English IS
+  // the Latin accent. When (and only when) accent tags are present, resolveVoice may return a voice whose language
+  // differs from the utterance's, provided the voice's locale matches one of the tags: the caller's own pick wins
+  // when it already carries the accent, else the best matching voice per tag in preference order. The utterance's
+  // lang tag is still set from o.lang exactly as always (it, not the voice, declares what is being pronounced).
+  // Every safety above still applies inside the accent branch: fresh list, blocklist skipped, local-first ranking,
+  // and if no accent voice exists (or all are blocklisted) resolution falls through to the normal same-language
+  // path — an accent can never cause silence. Callers who pass no accent get byte-identical behaviour to before.
   voiceKey(v) { return v ? String(v.name || v.voiceURI || '') + '|' + String(v.lang || '') : ''; }
   voiceBad(v) { return !!(v && this.badVoices.has(this.voiceKey(v))); }
   markBad(v) { if (v) this.badVoices.add(this.voiceKey(v)); }
   static rankV(v) { return (v.localService ? 100 : 0) + (/natural|neural/i.test(v.name) ? 30 : 0) + (/google/i.test(v.name) ? 15 : 0) + (/microsoft/i.test(v.name) ? 8 : 0) + (v.default ? 4 : 0) - (/compact|espeak/i.test(v.name) ? 60 : 0); }
-  resolveVoice(req, lang) {
+  resolveVoice(req, lang, accent) {
     const list = this.voices(); if (!list.length) return null;
-    const l2 = s => String(s || '').toLowerCase().replace(/_/g, '-').slice(0, 2);
+    const norm = s => String(s || '').toLowerCase().replace(/_/g, '-');
+    const l2 = s => norm(s).slice(0, 2);
     const tgt = l2(lang || (req && req.lang) || 'en');
-    if (req && typeof req === 'object' && req.name) { const f = list.find(x => x.name === req.name && l2(x.lang) === l2(req.lang)); if (f && !this.voiceBad(f) && l2(f.lang) === tgt) return f; }
+    const fresh = req && typeof req === 'object' && req.name ? list.find(x => x.name === req.name && l2(x.lang) === l2(req.lang)) : null;
+    if (fresh && !this.voiceBad(fresh) && l2(fresh.lang) === tgt) return fresh;
+    if (Array.isArray(accent) && accent.length) { // accent branch (see contract above): pick, then per-tag pools
+      const hit = t => { const tg = norm(t); return v => { const vl = norm(v.lang); return vl === tg || vl.startsWith(tg + '-') || (tg.length === 2 && l2(vl) === tg); }; };
+      if (fresh && !this.voiceBad(fresh) && accent.some(t => hit(t)(fresh))) return fresh;
+      for (const t of accent) { const p = list.filter(v => hit(t)(v) && !this.voiceBad(v)).sort((a, b) => Speech.rankV(b) - Speech.rankV(a)); if (p.length) return p[0]; }
+    }
     const pool = list.filter(v => l2(v.lang) === tgt && !this.voiceBad(v)).sort((a, b) => Speech.rankV(b) - Speech.rankV(a));
     return pool[0] || null;
   }
@@ -87,7 +104,7 @@ export class Speech {
     try {
       const u = new SpeechSynthesisUtterance(text);
       const want = typeof it.o.voice === 'function' ? it.o.voice() : it.o.voice;
-      const v = this.resolveVoice(want, it.o.lang); it.curVoice = v || null;
+      const v = this.resolveVoice(want, it.o.lang, it.o.accent); it.curVoice = v || null;
       u.lang = it.o.lang || (v && v.lang) || 'en-US'; // the requested language rules; a voice never overrides it
       try { if (v) u.voice = v; } catch (e) { }
       u.rate = rate; u.pitch = pitch; u.volume = volume;

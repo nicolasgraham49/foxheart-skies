@@ -26,6 +26,18 @@ const twyS = n => String(n).split('').map(c => /\d/.test(c) ? DIG[+c] : NATO['AB
 const lang2 = s => String(s || '').toLowerCase().replace(/_/g, '-').slice(0, 2);
 const ES_CC = new Set(['ES', 'MX', 'PA', 'CO', 'PE', 'CL', 'AR', 'VE', 'EC', 'BO', 'PY', 'UY', 'CU', 'DO', 'PR', 'GT', 'HN', 'SV', 'NI', 'CR']);
 export const aptLang = apt => { const cc = apt && apt.cc; return cc === 'KR' ? 'ko' : ES_CC.has(cc) ? 'es' : 'en'; };
+// ---------------------------------------------------------------- controller ACCENTS: the voice locale a facility
+// carries when it speaks ENGLISH. Localized phraseology (es / ko above) already speaks with a local-language voice;
+// the accent covers every other transmission — a Spanish voice reading English at Panama IS the Latin accent, a
+// British voice at Heathrow, a Japanese voice at Haneda. Ordered BCP-47 preference tags (lowercase): the first tag
+// with an installed voice wins. US airports pin en-US (on a machine whose English voices are all en-US — the
+// common case — that pool IS today's English pool); anywhere unlisted returns null and keeps the plain pool.
+// Consumed by voiceFor (persona pick inside the accent pool) and passed to speech.js as o.accent — the
+// one documented exception that lets the resolver return a voice whose language differs from the utterance's.
+export const aptAccent = apt => { const cc = apt && apt.cc; if (!cc) return null; if (cc === 'US') return ['en-us'];
+  if (ES_CC.has(cc)) return ['es'];
+  switch (cc) { case 'KR': return ['ko']; case 'JP': return ['ja']; case 'GB': return ['en-gb']; case 'AE': return ['ar', 'en-gb', 'en-in']; case 'SG': return ['en-gb', 'en-sg']; }
+  return null; };
 const DIG_ES = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve'];
 const digitsEs = (s, dot = 'punto') => String(s).split('').map(c => c === '.' ? dot : /\d/.test(c) ? DIG_ES[+c] : c === '-' || c === ',' ? '' : c).filter(Boolean).join(' ');
 const NUM_ES = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro', 'veinticinco', 'veintiséis', 'veintisiete', 'veintiocho', 'veintinueve'];
@@ -193,6 +205,12 @@ export class ATC {
     this.voices = this.voicesByLang.en;
   }
   poolFor(lg) { const p = (this.voicesByLang || {})[lg] || []; const alive = p.filter(v => !(this.speech && this.speech.voiceBad && this.speech.voiceBad(v))); return alive.length ? alive : p; }
+  poolForLoc(tag) { // voices matching one accent locale tag ('es', 'ko', 'ja', 'ar', 'en-gb', …), reliability-ranked like the language pools and blocklist-aware the same way
+    const tg = String(tag || '').toLowerCase();
+    const score = v => (v.localService ? 100 : 0) + (/natural|neural/i.test(v.name) ? 30 : 0) + (/google/i.test(v.name) ? 15 : 0) + (/microsoft/i.test(v.name) ? 8 : 0) + (v.default ? 4 : 0);
+    const all = (this.allVoices || []).filter(v => { const vl = String(v.lang || '').toLowerCase().replace(/_/g, '-'); return (vl === tg || vl.startsWith(tg + '-') || (tg.length === 2 && lang2(v.lang) === tg)) && !/espeak|compact/i.test(v.name); }).sort((a, b) => score(b) - score(a));
+    const alive = all.filter(v => !(this.speech && this.speech.voiceBad && this.speech.voiceBad(v))); return alive.length ? alive : all;
+  }
   facLang(apt) { return aptLang(apt); }
   // ---------------------------------------------------------------- controller personas: one "person" per facility per airport.
   // Each persona shifts the voice slot and colours pitch / rate, so Tampa Ground is not the same human as Miami Ground,
@@ -205,18 +223,26 @@ export class ATC {
       p = this.personas[key] = { off: h % 3, dpI: h % 5, drI: (h >>> 3) % 4, dp: DPS[h % 5], dr: DRS[(h >>> 3) % 4], n: 0 }; }
     return p;
   }
-  voiceFor(who, cs, per, lang) {
+  voiceFor(who, cs, per, lang, apt) {
     const pref = this.voicePref || {};
     const byName = nm => nm && nm !== 'auto' ? (this.allVoices || []).find(v => v.name === nm) : null;
-    if (who === 'ME') { // the first officer: always the English pool, the player's own pick first — unchanged behaviour
+    if (who === 'ME') { // the first officer: the player's own pick first, then an en-US voice (the owner is the pilot — the FO never takes a foreign accent); the plain English pool only when no en-US voice exists
       const man = byName(pref.pilot); if (man) return man;
-      const V = this.poolFor('en'); if (!V.length) return null; const n = Math.min(V.length, 8); return V[n > 2 ? 2 : n - 1];
+      const US = this.poolForLoc('en-us'); const V = US.length ? US : this.poolFor('en'); if (!V.length) return null; const n = Math.min(V.length, 8); return V[n > 2 ? 2 : n - 1];
     }
     const man = byName(pref.controller); if (man) return man; // a hand-picked Settings voice wins (speech.js still validates it exists)
+    // ACCENT: a controller speaking English at a foreign airport takes a voice from that airport's locale
+    // (aptAccent) when the machine has one — the persona slot applies within the accent pool, so facilities and
+    // shift changes still separate. No accent voice installed → fall through to the plain pool, today's behaviour.
+    // (OTHER — other pilots on the frequency — are not controllers and keep the plain pool.)
+    if (who !== 'OTHER' && (lang || 'en') === 'en') { const acc = aptAccent(apt); if (acc) for (const tg of acc) { const V = this.poolForLoc(tg); if (!V.length) continue;
+      let slots = []; for (let i = 0; i < V.length; i++) slots.push(i);
+      if (V.length > 1) { const mi = V.indexOf(this.voiceFor('ME', null, null, 'en')); if (mi >= 0) slots = slots.filter(i => i !== mi); } // the FO's own voice stays reserved in English-locale pools (a no-op in es/ko/ja/ar pools)
+      return V[slots[((VORD[who] ?? 0) + (per ? per.off : 0)) % slots.length]]; } }
     const V = this.poolFor(lang || 'en'); if (!V.length) return null; const n = Math.min(V.length, 8);
     if (who === 'OTHER') { let h = 0; for (const c of cs || '') h = (h * 31 + c.charCodeAt(0)) >>> 0; return V[h % n]; }
     let slots = []; for (let i = 0; i < n; i++) slots.push(i);
-    if ((lang || 'en') === 'en' && n > 1) { const me = n > 2 ? 2 : n - 1; slots = slots.filter(i => i !== me); } // the FO's slot stays reserved at English airports
+    if ((lang || 'en') === 'en' && n > 1) { const mi = V.indexOf(this.voiceFor('ME', null, null, 'en')); const me = mi >= 0 ? mi : (n > 2 ? 2 : n - 1); slots = slots.filter(i => i !== me); } // the FO's voice stays reserved at English airports
     return V[slots[((VORD[who] ?? 0) + (per ? per.off : 0)) % slots.length]];
   }
   say(kind, m, done, atis, cs) {
@@ -236,7 +262,8 @@ export class ATC {
       if (per && ++per.n % 25 === 0) { per.off = (per.off + 1) % 3; per.dpI = (per.dpI + 2) % 5; per.dp = [0.93, 0.97, 1.0, 1.04, 1.08][per.dpI]; } // shift change: a colleague takes the frequency
       const pitch = kind === 'OTHER' ? 0.82 + (h % 7) * 0.06 : Math.min(1.45, Math.max(0.6, vc.pitch * (per ? per.dp : 1))), vol = Math.min(1, ((this.audio?.vol ?? 0.7) + 0.2) * (kind === 'OTHER' ? 0.72 + (h % 5) * 0.05 : 1));
       const txLang = m.lang || 'en'; // the language of the TEXT: localized phraseology carries its own, the rest stays English — real bilingual ops
-      const id = this.speech.say({ text: m.s, display: m.d, who: kind === 'ME' ? this.cs.toUpperCase() + ' · FO' : kind === 'OTHER' ? cs : fac, channel: atis ? 'atis' : kind === 'OTHER' ? 'chatter' : 'atc', voice: () => this.voiceFor(kind, cs, per, txLang), lang: txLang === 'ko' ? 'ko-KR' : txLang === 'es' ? 'es-ES' : 'en-US',
+      const acc = kind !== 'ME' && kind !== 'OTHER' && txLang === 'en' ? aptAccent(f.apt) : null; // controllers (never the FO, never other pilots) carry their airport's accent in English; localized text already speaks with a local voice
+      const id = this.speech.say({ text: m.s, display: m.d, who: kind === 'ME' ? this.cs.toUpperCase() + ' · FO' : kind === 'OTHER' ? cs : fac, channel: atis ? 'atis' : kind === 'OTHER' ? 'chatter' : 'atc', voice: () => this.voiceFor(kind, cs, per, txLang, f.apt), accent: acc || undefined, lang: txLang === 'ko' ? 'ko-KR' : txLang === 'es' ? 'es-ES' : 'en-US',
         rate: vc.rate * (per ? per.dr : 1) * (1 + this.busy() * 0.05) * (0.96 + Math.random() * 0.08), pitch, volume: vol, mute: !speak, maxWait: kind === 'OTHER' ? 10 : 0,
         onstart: () => A && A.radioOpen && A.radioOpen(kind === 'ME', kind === 'OTHER' ? 0.6 : 1), onend: fin });
       this.speakingAtis = !!atis; return { id, est };
