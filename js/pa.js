@@ -1,5 +1,9 @@
 // Cabin PA: ready-made captain/crew announcements (EN, with ES/KO versions of most), typed custom
 // announcements, ding-dong chime and PA hiss via Web Audio, speech via speechSynthesis.
+// Announcement language follows the airport (owner rule): automatic announcements lead with the local
+// language of the airport they belong to — the departure airport, or the arrival airport for arrival-side
+// lines — and the language picked in the PA menu follows when it differs. aptLang is ATC's mapping, reused.
+import { aptLang } from './atc.js';
 const ES_CITY = { KTPA: 'Tampa', KMIA: 'Miami', RKSI: 'Incheon', RKSS: 'Gimpo', KLAX: 'Los Ángeles', MPTO: 'Ciudad de Panamá', KJFK: 'Nueva York', KSFO: 'San Francisco', RJTT: 'Tokio', EGLL: 'Londres', OMDB: 'Dubái', WSSS: 'Singapur' };
 const KO_CITY = { KTPA: '탬파', KMIA: '마이애미', RKSI: '인천', RKSS: '김포', KLAX: '로스앤젤레스', MPTO: '파나마시티', KJFK: '뉴욕', KSFO: '샌프란시스코', RJTT: '도쿄', EGLL: '런던', OMDB: '두바이', WSSS: '싱가포르' };
 const WX = { clear: ['clear skies', 'cielo despejado', '맑은 날씨'], scattered: ['a few clouds', 'algunas nubes', '구름 조금'], overcast: ['overcast skies', 'cielo nublado', '흐린 날씨'], rain: ['some rain', 'algo de lluvia', '비'], fog: ['fog', 'niebla', '안개'] };
@@ -54,8 +58,9 @@ export const PA_EMERG = [
     en: () => 'Put on your oxygen mask! Pull the mask toward you, place it over your nose and mouth and breathe normally. Secure your own mask before helping others.', es: () => '¡Pónganse la máscara de oxígeno! Colóquenla sobre la nariz y la boca y respiren normalmente.', ko: () => '산소마스크를 착용하십시오! 마스크를 당겨 코와 입에 대고 정상적으로 호흡하십시오.' },
 ];
 export class PA {
-  constructor(audio) { this.audio = audio; this.lang = 'en'; this.last = {}; this.log = []; }
+  constructor(audio) { this.audio = audio; this.lang = 'en'; this.last = {}; this.log = []; this.org = null; this.dst = null; }
   context(c) { // c: { origin, dest (apt objects), distNm, cruiseFt, destLocalMin, temp, wx, localMin }
+    this.org = c.origin || null; this.dst = c.dest || null;
     const ft = Math.round((c.distNm || 200) / 450 * 60 + 25); const { h, mm } = hm(ft);
     const ftEn = h ? `${h} hour${h > 1 ? 's' : ''}${mm ? ` and ${mm} minutes` : ''}` : `${mm} minutes`, ftEs = h ? `${h} hora${h > 1 ? 's' : ''}${mm ? ` y ${mm} minutos` : ''}` : `${mm} minutos`, ftKo = h ? `${h}시간${mm ? ` ${mm}분` : ''}` : `${mm}분`;
     const t = hm(((c.destLocalMin % 1440) + 1440) % 1440); const ampm = t.h >= 12 ? 'p.m.' : 'a.m.'; const h12 = ((t.h + 11) % 12) + 1;
@@ -74,36 +79,91 @@ export class PA {
     const pool = vs.filter(v => v.lang.toLowerCase().replace(/_/g, '-').startsWith(lang)).sort((a, b) => rank(b) - rank(a));
     const bad = v => this.speech && this.speech.voiceBad && this.speech.voiceBad(v);
     return pool.find(v => !bad(v)) || pool[0] || null; }
+  localLang(arr) { return aptLang(arr ? this.dst : this.org); } // the language an airport speaks (ATC's mapping)
+  langName(l) { return l === 'es' ? 'Spanish' : l === 'ko' ? 'Korean' : 'English'; }
+  // The automatic gate / purser calls are composed in English by the session conductor in main.js. When this
+  // airport's language is not English, render the same call in the local language so it can lead and let the
+  // English original follow. Returns { text, who } for a known automatic call, else null (typed text etc.).
+  autoLocal(text) {
+    const lg = this.localLang(false); if (lg === 'en' || !text) return null;
+    const city = (lg === 'es' ? ES_CITY[this.dst?.icao] : KO_CITY[this.dst?.icao]) || (this.dst ? short(this.dst) : '');
+    let m;
+    if (m = text.match(/^Ladies and gentlemen, Nicofoxheart Air flight four one two to .+ is now boarding at gate (.+)\. Please have your boarding pass ready/))
+      return { who: 'PA · GATE', text: lg === 'es' ? `Señoras y señores, el vuelo cuatro uno dos de Nicofoxheart Air con destino a ${city} está abordando ahora en la puerta ${m[1]}. Tengan listo su pase de abordar y escuchen el número de su grupo.` : `손님 여러분, ${city}행 니코폭스하트 항공 412편 탑승을 시작합니다. ${m[1]}번 탑승구로 와 주시기 바랍니다. 탑승권을 준비하시고 그룹 번호 안내를 잘 들어 주십시오.` };
+    if (m = text.match(/^Group (\d+), all remaining passengers, now boarding at gate (.+)\. This is the final call/))
+      return { who: 'PA · GATE', text: lg === 'es' ? `Grupo ${m[1]}, todos los pasajeros restantes, abordando ahora en la puerta ${m[2]}. Esta es la última llamada del vuelo cuatro uno dos.` : `${m[1]}그룹, 아직 탑승하지 않은 모든 손님께서는 지금 ${m[2]}번 탑승구에서 탑승해 주십시오. 412편 마지막 탑승 안내입니다.` };
+    if (m = text.match(/^Group (\d+), passengers seated in rows (\d+) to (\d+), now boarding at gate (.+)\./))
+      return { who: 'PA · GATE', text: lg === 'es' ? `Grupo ${m[1]}, pasajeros de las filas ${m[2]} a ${m[3]}, abordando ahora en la puerta ${m[4]}.` : `${m[1]}그룹, ${m[2]}열부터 ${m[3]}열에 앉으신 손님께서는 지금 ${m[4]}번 탑승구에서 탑승해 주십시오.` };
+    if (/^Ladies and gentlemen, welcome aboard Nicofoxheart Air flight four one two to .+\. Boarding is complete\./.test(text))
+      return { who: 'PA · PURSER', text: lg === 'es' ? `Señoras y señores, bienvenidos a bordo del vuelo cuatro uno dos de Nicofoxheart Air con destino a ${city}. El abordaje ha finalizado. Por favor abróchense el cinturón de seguridad y guarden su equipaje. Les deseamos un vuelo agradable.` : `손님 여러분, ${city}행 니코폭스하트 항공 412편에 오신 것을 환영합니다. 탑승이 완료되었습니다. 좌석벨트를 매 주시고 짐은 선반이나 앞좌석 아래에 보관해 주십시오. 즐거운 비행 되시기 바랍니다.` };
+    return null;
+  }
+  // Speak an announcement as one or more parts, in order. Part: { lang, text, enText, swap, who, missing? }.
+  // A swap part falls back to its English rendering (text AND speech tag) when the browser has no voice for
+  // its language — the speech-pass rule; a non-swap part (typed text) keeps its language and goes out
+  // lang-only on the robust resolver instead. Identical consecutive spoken parts collapse into one.
   // returns { text, lang actually used, note }
-  announce(id, custom) {
-    const L = PA_LINES.find(l => l.id === id) || PA_EMERG.find(l => l.id === id); let lang = this.lang, text, note = '';
-    if (custom != null) text = custom; else { const f = L[lang] || L.en; text = f(this.c || {}); if (!L[lang]) { lang = 'en'; note = 'No ' + this.lang.toUpperCase() + ' version of this line; spoken in English.'; } }
-    if (custom != null) lang = /[\uac00-\ud7af]/.test(custom) ? 'ko' : /[ñáéíóú¿¡]/i.test(custom) ? 'es' : lang === 'ko' ? 'en' : lang; // typed text: pick the voice from the script
-    let voice = this.voiceFor(lang === 'ko' ? 'ko' : lang === 'es' ? 'es' : 'en');
-    let fbEn = false; // the SPOKEN language: when no voice exists for the shown language, the text is swapped to English — the speech lang tag and voice must follow the text, not the display language
-    if (!voice && lang !== 'en' && custom == null) { note = `No ${lang === 'ko' ? 'Korean' : 'Spanish'} voice is installed in this browser; shown in ${lang === 'ko' ? 'Korean' : 'Spanish'}, spoken in English.`; voice = this.voiceFor('en'); text = (L.en)(this.c || {}); fbEn = true; }
-    this.log.push({ id: id || 'custom', text, lang, t: Date.now() }); if (this.log.length > 30) this.log.shift();
+  emit(id, L, parts, place) {
+    let note = '';
+    const out = [];
+    for (const p of parts) {
+      let spokenLang = p.lang, spokenText = p.text;
+      if (p.missing) note = 'No ' + this.langName(p.missing) + ' version of this line; spoken in English.';
+      if (p.swap && spokenLang !== 'en' && !this.voiceFor(spokenLang)) { note = `No ${this.langName(spokenLang)} voice is installed in this browser; shown in ${this.langName(spokenLang)}, spoken in English.`; spokenLang = 'en'; spokenText = p.enText || p.text; }
+      const prev = out[out.length - 1];
+      if (prev && prev.spokenText === spokenText && prev.spokenLang === spokenLang) continue;
+      out.push({ ...p, spokenLang, spokenText });
+    }
+    if (out.length > 1 && out[0].spokenLang !== out[1].spokenLang)
+      note = ((note ? note + ' ' : '') + `Announced in ${this.langName(out[0].spokenLang)} first — ${place ? place + "'s own language" : 'the local language'} — then ${this.langName(out[1].spokenLang)}.`).trim();
+    const lead = out[0], combined = out.map(p => p.spokenText).join(' ');
+    this.log.push({ id: id || 'custom', text: lead.text, lang: lead.lang, t: Date.now() }); if (this.log.length > 30) this.log.shift();
     const A = this.audio; A && A.paChime && A.paChime();
-    const said = custom != null ? custom : (L[this.lang] || L.en)(this.c || {});
+    const pitch = L?.who === 'crew' ? 1.15 : 0.95, vol = Math.min(1, (A?.vol ?? 0.7) + 0.2);
     if (this.speech) { // shared speech manager: PA outranks ATC / ATIS / chatter and is never cancelled by them
-      const vl = fbEn ? 'en' : lang === 'ko' ? 'ko' : lang === 'es' ? 'es' : 'en';
-      this.speech.say({ channel: 'pa', text, display: said, who: custom != null ? 'PA · YOU' : L && L.who === 'crew' ? 'PA · PURSER' : 'PA · CAPTAIN', delay: 1.3, voice: () => this.voiceFor(vl), lang: vl === 'ko' ? 'ko-KR' : vl === 'es' ? 'es-ES' : 'en-US',
-        rate: 0.95, pitch: L?.who === 'crew' ? 1.15 : 0.95, volume: Math.min(1, (A?.vol ?? 0.7) + 0.2), mute: A?.voice === false,
-        onstart: () => A && A.paHiss && A.paHiss(true), onend: () => A && A.paHiss && A.paHiss(false) });
-      return { text: said, spokenText: text, lang, note, boost: L ? L.boost : 1, sign: L ? L.sign : undefined };
+      out.forEach((p, i) => { const vl = p.spokenLang;
+        this.speech.say({ channel: 'pa', text: p.spokenText, display: p.text, who: p.who, delay: 1.3 + i * 0.1, voice: () => this.voiceFor(vl), lang: vl === 'ko' ? 'ko-KR' : vl === 'es' ? 'es-ES' : 'en-US',
+          rate: 0.95, pitch, volume: vol, mute: A?.voice === false,
+          onstart: i === 0 ? () => A && A.paHiss && A.paHiss(true) : undefined, onend: i === out.length - 1 ? () => A && A.paHiss && A.paHiss(false) : undefined });
+      });
+      return { text: lead.text, spokenText: combined, lang: lead.lang, note, boost: L ? L.boost : 1, sign: L ? L.sign : undefined };
     }
     setTimeout(() => {
       A && A.paHiss && A.paHiss(true); let done = false; const fin = () => { if (done) return; done = true; A && A.paHiss && A.paHiss(false); };
       try {
         if (A?.voice !== false && 'speechSynthesis' in window) {
-          const chunks = text.split(/(?<=[.。])\s*/).filter(Boolean);
-          const spL = fbEn ? 'en' : lang;
-          chunks.forEach((c, i) => { const u = new SpeechSynthesisUtterance(c); const tag = spL === 'ko' ? 'ko-KR' : spL === 'es' ? 'es-ES' : 'en-US'; try { if (voice && String(voice.lang || '').toLowerCase().slice(0, 2) === spL) u.voice = voice; } catch (e) { } u.lang = tag; u.rate = 0.95; u.pitch = L?.who === 'crew' ? 1.15 : 0.95; u.volume = Math.min(1, (A?.vol ?? 0.7) + 0.2); if (i === chunks.length - 1) { u.onend = fin; u.onerror = fin; } speechSynthesis.speak(u); });
+          let lastU = null;
+          for (const p of out) {
+            const v = this.voiceFor(p.spokenLang), tag = p.spokenLang === 'ko' ? 'ko-KR' : p.spokenLang === 'es' ? 'es-ES' : 'en-US';
+            p.spokenText.split(/(?<=[.。])\s*/).filter(Boolean).forEach(c => { const u = new SpeechSynthesisUtterance(c); try { if (v && String(v.lang || '').toLowerCase().slice(0, 2) === p.spokenLang) u.voice = v; } catch (e) { } u.lang = tag; u.rate = 0.95; u.pitch = pitch; u.volume = vol; lastU = u; speechSynthesis.speak(u); });
+          }
+          if (lastU) { lastU.onend = fin; lastU.onerror = fin; }
         }
       } catch (e) { }
-      setTimeout(fin, Math.min(30000, 1500 + text.length * 70));
+      setTimeout(fin, Math.min(30000, 1500 + combined.length * 70));
     }, 1300);
-    return { text: said, spokenText: text, lang, note, boost: L ? L.boost : 1, sign: L ? L.sign : undefined };
+    return { text: lead.text, spokenText: combined, lang: lead.lang, note, boost: L ? L.boost : 1, sign: L ? L.sign : undefined };
+  }
+  // returns { text, lang actually used, note }
+  announce(id, custom) {
+    const L = PA_LINES.find(l => l.id === id) || PA_EMERG.find(l => l.id === id);
+    if (custom != null) {
+      const auto = this.autoLocal(custom); // an automatic gate / purser call: the local language leads, English follows
+      if (auto) return this.emit(id, null, [
+        { lang: this.localLang(false), text: auto.text, enText: custom, swap: true, who: auto.who },
+        { lang: 'en', text: custom, enText: custom, swap: true, who: auto.who }], short(this.org || {}));
+      let lang = this.lang; // typed text: pick the voice from the script, as before
+      if (/[\uac00-\ud7af]/.test(custom)) lang = 'ko'; else if (/[ñáéíóú¿¡]/i.test(custom)) lang = 'es'; else if (lang === 'ko') lang = 'en';
+      return this.emit(id, null, [{ lang, text: custom, enText: custom, swap: false, who: 'PA · YOU' }], '');
+    }
+    // Prepared lines lead with the airport's own language — the departure airport's, except arrival-side
+    // lines ('arrival'), which speak the destination's. The language picked in the PA menu follows when it
+    // differs; all three stay selectable in the menu exactly as before.
+    const arrSide = id === 'arrival', lead = this.localLang(arrSide), c = this.c || {};
+    const who = L.who === 'crew' ? 'PA · PURSER' : 'PA · CAPTAIN';
+    const mk = lg => L[lg] ? { lang: lg, text: L[lg](c), enText: L.en(c), swap: true, who } : { lang: 'en', text: L.en(c), enText: L.en(c), swap: true, missing: lg, who };
+    const parts = [mk(lead)]; if (this.lang !== lead) parts.push(mk(this.lang));
+    return this.emit(id, L, parts, short((arrSide ? this.dst : this.org) || {}));
   }
 }
 function short(a) { return ({ KTPA: 'Tampa', KMIA: 'Miami', RKSI: 'Seoul Incheon', RKSS: 'Seoul Gimpo', KLAX: 'Los Angeles', MPTO: 'Panama City', KJFK: 'New York', KSFO: 'San Francisco', RJTT: 'Tokyo Haneda', EGLL: 'London Heathrow', OMDB: 'Dubai', WSSS: 'Singapore' })[a.icao] || a.city || a.name; }
