@@ -169,8 +169,10 @@ select{background:rgba(0,0,0,.35);color:var(--ink);border:1px solid var(--line2)
 /* ---------- in-flight ---------- */
 #flight{position:fixed;inset:0;pointer-events:none;z-index:5}
 #flight .glass{pointer-events:auto}
-#fcu{position:absolute;top:max(12px,env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);display:flex;gap:2px;padding:6px;border-radius:9px;background:rgba(18,22,28,.82);border:1px solid rgba(255,255,255,.08);box-shadow:0 10px 30px rgba(0,0,0,.35)}
-.fcuw{display:grid;justify-items:center;gap:2px;padding:4px 10px;border-radius:6px;cursor:ns-resize;min-width:62px}
+#fcu{position:absolute;top:max(12px,env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%);display:flex;gap:2px;padding:6px;border-radius:9px;background:rgba(18,22,28,.82);border:1px solid rgba(255,255,255,.08);box-shadow:0 10px 30px rgba(0,0,0,.35);pointer-events:auto}
+.fcuw{display:grid;justify-items:center;gap:2px;padding:4px 10px;border-radius:6px;cursor:ns-resize;min-width:62px;position:relative}
+.fcuw.editing{outline:1px solid var(--amber);outline-offset:-1px;background:rgba(255,184,77,.08)}
+.fcuedit{position:absolute;left:50%;top:60%;transform:translate(-50%,-50%);width:80px;background:#0d0f12;color:var(--amber);font:700 17px var(--f-mono);border:1px solid var(--amber);border-radius:5px;text-align:center;outline:none;padding:1px 2px;z-index:3}
 .fcuw:hover{background:rgba(255,255,255,.05)}
 .fcuw .l{font:9.5px var(--f-mono);letter-spacing:.14em;color:#9aa6b8}
 .fcuw .v{font:700 18px/1 var(--f-mono);color:var(--amber);text-shadow:0 0 8px rgba(255,184,77,.35);font-variant-numeric:tabular-nums}
@@ -444,10 +446,10 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
 
 <div id="flight" hidden>
   <div id="fcu">
-    <div class="fcuw" data-k="spd" title="Selected speed target (not current speed). Scroll to change, click to sync"><span class="l">SPD SEL</span><span class="v" id="fSpd">---</span></div>
-    <div class="fcuw" data-k="hdg" title="Selected heading target (not current heading). Scroll to change, click to sync"><span class="l">HDG SEL</span><span class="v" id="fHdg">---</span></div>
-    <div class="fcuw" data-k="alt" title="Selected altitude target (not current altitude). Scroll to change, click to sync"><span class="l">ALT SEL</span><span class="v" id="fAlt">-----</span></div>
-    <div class="fcuw" data-k="vs" title="Selected vertical-speed target. Scroll to change, click to level off"><span class="l">V/S SEL</span><span class="v" id="fVs">-----</span></div>
+    <div class="fcuw" data-k="spd" title="Selected speed target (not current speed). Scroll or drag up/down to change · click to type a value · Ctrl/Alt+arrow keys work too"><span class="l">SPD SEL</span><span class="v" id="fSpd">---</span></div>
+    <div class="fcuw" data-k="hdg" title="Selected heading target (not current heading). Scroll or drag up/down to change · click to type a value · Ctrl+←/→ changes it too"><span class="l">HDG SEL</span><span class="v" id="fHdg">---</span></div>
+    <div class="fcuw" data-k="alt" title="Selected altitude target (not current altitude). Scroll or drag up/down to change · click to type a value · Ctrl+↑/↓ changes it too"><span class="l">ALT SEL</span><span class="v" id="fAlt">-----</span></div>
+    <div class="fcuw" data-k="vs" title="Selected vertical-speed target. Scroll or drag up/down to change · click to type a value · Alt+↑/↓ changes it too"><span class="l">V/S SEL</span><span class="v" id="fVs">-----</span></div>
     <div class="fcusep"></div>
     <button class="fcub" data-b="ap" aria-pressed="false">AP<i></i></button>
     <button class="fcub" data-b="athr" aria-pressed="false">A/THR<i></i></button>
