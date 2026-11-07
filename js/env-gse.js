@@ -185,8 +185,12 @@ function cateringTruck() {
 function poseCatering(v, k, h, t) { // k: 0 stowed .. 1 deployed; h: target box floor height
   const lift = Math.max(2.62, h) - v.yR, a = THREE.MathUtils.smoothstep(k, 0, 0.6), b = THREE.MathUtils.smoothstep(k, 0.62, 1);
   v.boxG.position.y = v.yR + lift * a; setScissor(v.arms, v.boxG.position.y - 1.28, 5.0); v.arms.forEach(m => m.position.y = 1.28 + (v.boxG.position.y - 1.28) / 2);
-  v.plat.position.z = v.platZ0 - 2.8 * b;
-  v.trolley.visible = b > 0.99 && t != null; if (v.trolley.visible) { const p = (t % 14) / 14, e = p < 0.5 ? THREE.MathUtils.smoothstep(p, 0.05, 0.4) : 1 - THREE.MathUtils.smoothstep(p, 0.6, 0.95); v.trolley.position.z = -1.55 - 3.2 * e; }
+  // hull standoff (C-F1): the platform's full 2.8 m slide drove its bumper ~0.1 m into
+  // the fuselage skin and the trolley ~0.4 m in. Clamp the slide so the bumper stops
+  // at obj z = -4.72 (≈0.15 m clear of the hull at the door) and the trolley never
+  // rolls past the platform's front edge (obj z centre >= -4.22, front -4.62).
+  v.plat.position.z = v.platZ0 - Math.min(2.8 * b, 2.6);
+  v.trolley.visible = b > 0.99 && t != null; if (v.trolley.visible) { const p = (t % 14) / 14, e = p < 0.5 ? THREE.MathUtils.smoothstep(p, 0.05, 0.4) : 1 - THREE.MathUtils.smoothstep(p, 0.6, 0.95); v.trolley.position.z = Math.max(-1.55 - 3.2 * e, -4.22); }
 }
 function beltLoader() {
   const k = new Kit(), Lb = 8.4;

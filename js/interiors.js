@@ -323,6 +323,30 @@ export function buildBridge(pts, matSrc) {
   const B = new Builder((p, n) => 0.82 + Math.max(0, n.y) * 0.1);
   const segs = []; const extras = []; // extra meshes (glass, drum, bogie) for dispose
   const w = 2.6, h = 2.5;
+  // ---- rotunda-joint intrusion math (playtest fix): at an angled gate the two
+  // segments meet at the drum (pts[1]) at an angle, and each segment's wall layers
+  // and end furniture — built square to its own axis — slice across the OTHER
+  // segment's corridor near the joint (the "wall across the walkway" at KTPA
+  // Gate 8). For a point at distance t from the joint into segment X with lateral
+  // offset lam, `at` gives its coordinates in the other segment's frame; layers
+  // are trimmed and posts skipped exactly where they would intrude. All derived
+  // from the actual segment directions, so any gate angle works.
+  const frames = [];
+  for (let i = 0; i < pts.length - 1; i++) { const u = pts[i + 1].clone().sub(pts[i]).setY(0).normalize(); frames.push({ dir: u, lat: new THREE.Vector3(u.z, 0, -u.x) }); }
+  const jointFor = (X, O) => {
+    if (!frames[X] || !frames[O]) return null;
+    const dX = frames[X].dir, lX = frames[X].lat, dO = frames[O].dir, lO = frames[O].lat;
+    // vectors from the joint INTO each segment's span (segment 0 runs into the
+    // joint, segment 1 runs out of it — the old dot-product shortcut flipped
+    // the lateral terms for X=1, so segment 1's bend-side layers were never
+    // trimmed and its wall crossed segment 0's corridor ~1.3 m before R)
+    const inX = X === 0 ? dX.clone().negate() : dX.clone(), inO = O === 0 ? dO.clone().negate() : dO.clone();
+    const at = (t, lam) => { const px = inX.x * t + lX.x * lam, pz = inX.z * t + lX.z * lam; return { along: px * inO.x + pz * inO.z, lat: px * lO.x + pz * lO.z }; };
+    const intrudes = (t, lam, latLim) => { const p = at(t, lam); return p.along > -0.08 && Math.abs(p.lat) < latLim; };
+    const trim = (lam, latLim) => { if (!intrudes(0, lam, latLim)) return 0; let last = 0; for (let t = 0.02; t <= 4.5; t += 0.02) if (intrudes(t, lam, latLim)) last = t; return Math.min(last + 0.03, 4.5); };
+    return { at, intrudes, trim };
+  };
+  const joints = [jointFor(0, 1), jointFor(1, 0)];
   for (let i = 0; i < pts.length - 1; i++) {
     const a = pts[i], b = pts[i + 1]; const u = b.clone().sub(a).setY(0); const L = u.length(); u.normalize(); const c = a.clone().add(b).multiplyScalar(0.5);
     const ry = Math.atan2(u.x, u.z); const slope = Math.atan2(b.y - a.y, L);
@@ -332,60 +356,76 @@ export function buildBridge(pts, matSrc) {
     // everyone walked through it). The floor boxes are centred 0.06 under the a→b line so their
     // top faces lie exactly on the line the walkers follow.
     const add = (x, y, z, sx, sy, sz, tile, o = {}) => B.box(c.x + x * Math.cos(ry) + z * Math.sin(ry), c.y + y + z * Math.tan(slope), c.z - x * Math.sin(ry) + z * Math.cos(ry), sx, sy, sz, tile, { ry, pitch: -slope, ...o });
+    // rotunda-end helpers for THIS segment: rEnd = local z sign of the drum end;
+    // layer() builds a full-length layer shortened at the drum end by its trim;
+    // skipD() tests a discrete piece at local (x, z) for cross-corridor intrusion
+    const Ji = joints[i], rEnd = i === 0 ? 1 : -1;
+    const tFromR = z => rEnd > 0 ? L / 2 - z : z + L / 2;
+    const trimFor = lam => Ji ? Math.min(Ji.trim(lam, 1.34), Math.max(0, L - 0.6)) : 0;
+    const layer = (x, y, sx, sy, tile, o, lam) => { const d = trimFor(lam); add(x, y, -rEnd * d / 2, sx, sy, L - d, tile, o); };
+    const layer2 = (y, sx, sy, tile, o, lamAbs) => { const d = Math.max(trimFor(lamAbs), trimFor(-lamAbs)); add(0, y, -rEnd * d / 2, sx, sy, L - d, tile, o); };
+    const skipD = (x, z, latLim = 1.42) => !!Ji && Ji.intrudes(tFromR(z), x, latLim);
     // ---- floor: carpet runner + rubber margins + accent edge trim, all tops on the line
     add(0, -0.06, 0, 1.7, 0.12, L, 'carpet', { rep: 2 });
     add(-1.075, -0.06, 0, 0.45, 0.12, L, 'rubber', { rep: 2 }); add(1.075, -0.06, 0, 0.45, 0.12, L, 'rubber', { rep: 2 });
     add(-0.87, -0.056, 0, 0.045, 0.128, L, 'accent'); add(0.87, -0.056, 0, 0.045, 0.128, L, 'accent');
-    // bend floor patch: extends this segment's deck plane past the rotunda point, 6 mm
-    // below the line, so the wedge between the two pitched decks at the bend has a floor
+    // bend floor patch: widens this segment's deck near the rotunda so the wedge
+    // between the two pitched decks at the bend has a floor. It stays on this
+    // segment's own side of the joint (centre 0.55 m inside, 1.7 m long): the old
+    // version reached 1.8 m PAST the joint pitched at this segment's slope, which
+    // on the steep aircraft-side segment rose ~0.33 m through the other walkway.
     const rSign = i === 0 ? 1 : -1;
-    add(0, -0.066, rSign * (L / 2 + 0.5), w + 0.7, 0.12, 2.6, 'rubber', { rep: 2 });
+    add(0, -0.066, rSign * (L / 2 - 0.55), w + 0.7, 0.12, 1.7, 'rubber', { rep: 2 });
     // ---- interior walls: skirting, lower panel, window band, header; handrails
     for (const s of [-1, 1]) {
       const inw = s < 0 ? 'px' : 'nx';
-      add(s * 1.30, 0.07, 0, 0.08, 0.14, L, 'metal', { faces: inw, tint: [0.55, 0.57, 0.6] });
-      add(s * 1.30, 0.54, 0, 0.08, 0.80, L, 'cabwall', { rep: 2.5, faces: inw });
-      add(s * 1.30, 0.98, 0, 0.10, 0.08, L, 'metal', { faces: inw, tint: [0.6, 0.62, 0.65] });
-      for (let z = -L / 2 + 0.68; z < L / 2 - 0.3; z += 1.36) add(s * 1.30, 1.41, z, 0.09, 0.78, 0.08, 'metal', { tint: [0.42, 0.44, 0.47] });
-      add(s * 1.30, 1.84, 0, 0.10, 0.08, L, 'metal', { faces: inw, tint: [0.6, 0.62, 0.65] });
-      add(s * 1.30, 2.16, 0, 0.08, 0.56, L, 'cabwall', { rep: 2.5, faces: inw });
-      add(s * 1.185, 0.90, 0, 0.05, 0.055, L, 'metal', { tint: [0.85, 0.87, 0.9] });
-      for (let z = -L / 2 + 1.3; z < L / 2; z += 2.6) add(s * 1.245, 0.90, z, 0.07, 0.04, 0.05, 'metal', { tint: [0.6, 0.62, 0.65] });
+      layer(s * 1.30, 0.07, 0.08, 0.14, 'metal', { faces: inw, tint: [0.55, 0.57, 0.6] }, s * 1.30);
+      layer(s * 1.30, 0.54, 0.08, 0.80, 'cabwall', { rep: 2.5, faces: inw }, s * 1.30);
+      layer(s * 1.30, 0.98, 0.10, 0.08, 'metal', { faces: inw, tint: [0.6, 0.62, 0.65] }, s * 1.30);
+      for (let z = -L / 2 + 0.68; z < L / 2 - 0.3; z += 1.36) if (!skipD(s * 1.30, z)) add(s * 1.30, 1.41, z, 0.09, 0.78, 0.08, 'metal', { tint: [0.42, 0.44, 0.47] });
+      layer(s * 1.30, 1.84, 0.10, 0.08, 'metal', { faces: inw, tint: [0.6, 0.62, 0.65] }, s * 1.30);
+      layer(s * 1.30, 2.16, 0.08, 0.56, 'cabwall', { rep: 2.5, faces: inw }, s * 1.30);
+      layer(s * 1.185, 0.90, 0.05, 0.055, 'metal', { tint: [0.85, 0.87, 0.9] }, s * 1.185);
+      for (let z = -L / 2 + 1.3; z < L / 2; z += 2.6) if (!skipD(s * 1.245, z)) add(s * 1.245, 0.90, z, 0.07, 0.04, 0.05, 'metal', { tint: [0.6, 0.62, 0.65] });
     }
     // ad lightboxes on the lower panels (lit shop art from the atlas)
     const ads = i === 0 ? [[-1, -L * 0.28, 'shop1'], [1, 0, 'shop2'], [-1, L * 0.28, 'shop3']] : [[-1, 0, 'shop0']];
-    for (const [s, z, tile] of ads) { const f = s < 0 ? 'px' : 'nx'; add(s * 1.245, 0.55, z, 0.035, 0.66, 1.6, 'metal', { tiles: { [f]: tile }, emit: { [f]: 1.3 }, faces: f }); }
+    for (const [s, z, tile] of ads) { if (skipD(s * 1.245, z)) continue; const f = s < 0 ? 'px' : 'nx'; add(s * 1.245, 0.55, z, 0.035, 0.66, 1.6, 'metal', { tiles: { [f]: tile }, emit: { [f]: 1.3 }, faces: f }); }
     // ---- ceiling: slab, light panels, cove strips, beams (aligned with the roof ribs)
-    add(0, h, 0, w, 0.1, L, 'white', { faces: 'ny', rep: 2 });
-    for (let z = -L / 2 + 1; z < L / 2; z += 2.5) add(0, h - 0.06, z, 1.2, 0.04, 0.5, 'light', { faces: 'ny', emit: { ny: 1.7 } });
-    add(-1.02, h - 0.055, 0, 0.16, 0.03, L, 'light', { faces: 'ny', emit: { ny: 1.35 } }); add(1.02, h - 0.055, 0, 0.16, 0.03, L, 'light', { faces: 'ny', emit: { ny: 1.35 } });
-    for (let z = -L / 2 + 1.25; z < L / 2; z += 2.5) add(0, h - 0.06, z, w - 0.15, 0.045, 0.09, 'metal', { faces: 'ny', tint: [0.7, 0.72, 0.75] });
+    layer2(h, w, 0.1, 'white', { faces: 'ny', rep: 2 }, 1.30);
+    // ceiling panels: on the aircraft-end segment (i === 1) the panel nearest
+    // the flight deck blew out to a white blob at night (emit 1.7 on the
+    // near-white 'light' tile) — toned to 1.15 there so it reads as a lamp.
+    const panelEmit = i === 1 ? 1.15 : 1.7;
+    for (let z = -L / 2 + 1; z < L / 2; z += 2.5) if (!skipD(0, z)) add(0, h - 0.06, z, 1.2, 0.04, 0.5, 'light', { faces: 'ny', emit: { ny: panelEmit } });
+    layer(-1.02, h - 0.055, 0.16, 0.03, 'light', { faces: 'ny', emit: { ny: 1.35 } }, -1.02); layer(1.02, h - 0.055, 0.16, 0.03, 'light', { faces: 'ny', emit: { ny: 1.35 } }, 1.02);
+    for (let z = -L / 2 + 1.25; z < L / 2; z += 2.5) if (!skipD(0, z)) add(0, h - 0.06, z, w - 0.15, 0.045, 0.09, 'metal', { faces: 'ny', tint: [0.7, 0.72, 0.75] });
     // ---- ends: flange ring (seals the wall/shell annulus), bellows ribs, door frame
     for (const e of [-1, 1]) {
       const ze = e * (L / 2), zi = ze - e * 0.07, dk = [0.5, 0.52, 0.55];
       add(0, 2.52, zi, w + 0.36, 0.16, 0.14, 'metal', { tint: dk });
-      add(-1.40, 1.26, zi, 0.16, 2.68, 0.14, 'metal', { tint: dk }); add(1.40, 1.26, zi, 0.16, 2.68, 0.14, 'metal', { tint: dk });
+      if (!skipD(-1.40, zi)) add(-1.40, 1.26, zi, 0.16, 2.68, 0.14, 'metal', { tint: dk }); if (!skipD(1.40, zi)) add(1.40, 1.26, zi, 0.16, 2.68, 0.14, 'metal', { tint: dk });
       add(0, -0.075, zi, w + 0.36, 0.15, 0.14, 'metal', { tint: dk }); // threshold plate, top flush with the deck
       for (let k = 0; k < 3; k++) { const zb = ze - e * (0.24 + k * 0.115);
-        add(-1.265, 1.21, zb, 0.07, 2.42, 0.075, 'rubber'); add(1.265, 1.21, zb, 0.07, 2.42, 0.075, 'rubber'); add(0, 2.40, zb, 2.60, 0.075, 0.075, 'rubber'); }
+        if (!skipD(-1.265, zb)) add(-1.265, 1.21, zb, 0.07, 2.42, 0.075, 'rubber'); if (!skipD(1.265, zb)) add(1.265, 1.21, zb, 0.07, 2.42, 0.075, 'rubber'); add(0, 2.40, zb, 2.60, 0.075, 0.075, 'rubber'); }
       const zf = ze - e * 0.62, fr = [0.3, 0.32, 0.35];
-      add(-1.27, 1.225, zf, 0.09, 2.45, 0.1, 'metal', { tint: fr }); add(1.27, 1.225, zf, 0.09, 2.45, 0.1, 'metal', { tint: fr }); add(0, 2.42, zf, 2.63, 0.1, 0.1, 'metal', { tint: fr });
+      if (!skipD(-1.27, zf)) add(-1.27, 1.225, zf, 0.09, 2.45, 0.1, 'metal', { tint: fr }); if (!skipD(1.27, zf)) add(1.27, 1.225, zf, 0.09, 2.45, 0.1, 'metal', { tint: fr }); add(0, 2.42, zf, 2.63, 0.1, 0.1, 'metal', { tint: fr });
     }
     // gate sign over the far door (aircraft end of seg 2, terminal end of seg 1)
-    if (i === 1) add(0, 2.22, L / 2 - 0.72, 1.15, 0.3, 0.05, 'metal', { tiles: { nz: 'signGate' }, emit: { nz: 1.25 }, faces: 'nz' });
+    if (i === 1) add(0, 2.22, L / 2 - 0.72, 1.15, 0.3, 0.05, 'metal', { tiles: { nz: 'signGate' }, emit: { nz: 0.95 }, faces: 'nz' });
     if (i === 0) add(0, 2.22, -L / 2 + 0.72, 1.15, 0.3, 0.05, 'metal', { tiles: { pz: 'signGate' }, emit: { pz: 1.25 }, faces: 'pz' });
     // ---- exterior shell: lower + upper panels (window band left open for glass),
     // exterior mullions, accent stripe, logo boards, underside, conduit, roof ribs, beacon
-    add(0, 0.42, 0, w + 0.3, 1.14, L, 'metal', { faces: 'pxnx', tint: [0.78, 0.8, 0.83] });
-    add(0, 2.31, 0, w + 0.3, 0.98, L, 'metal', { faces: 'pxnxpy', tint: [0.78, 0.8, 0.83] });
-    for (let z = -L / 2 + 0.68; z < L / 2 - 0.3; z += 1.36) { add(-1.44, 1.41, z, 0.07, 0.8, 0.1, 'metal', { tint: [0.4, 0.42, 0.45] }); add(1.44, 1.41, z, 0.07, 0.8, 0.1, 'metal', { tint: [0.4, 0.42, 0.45] }); }
-    add(1.465, 0.70, 0, 0.025, 0.17, L, 'accent', { faces: 'px' }); add(-1.465, 0.70, 0, 0.025, 0.17, L, 'accent', { faces: 'nx' });
+    layer2(0.42, w + 0.3, 1.14, 'metal', { faces: 'pxnx', tint: [0.78, 0.8, 0.83] }, 1.45);
+    layer2(2.31, w + 0.3, 0.98, 'metal', { faces: 'pxnxpy', tint: [0.78, 0.8, 0.83] }, 1.45);
+    for (let z = -L / 2 + 0.68; z < L / 2 - 0.3; z += 1.36) { if (!skipD(-1.44, z)) add(-1.44, 1.41, z, 0.07, 0.8, 0.1, 'metal', { tint: [0.4, 0.42, 0.45] }); if (!skipD(1.44, z)) add(1.44, 1.41, z, 0.07, 0.8, 0.1, 'metal', { tint: [0.4, 0.42, 0.45] }); }
+    layer(1.465, 0.70, 0.025, 0.17, 'accent', { faces: 'px' }, 1.465); layer(-1.465, 0.70, 0.025, 0.17, 'accent', { faces: 'nx' }, -1.465);
     const logoZ = (i === 1 ? -1 : 1) * (L / 2 - 2.2);
-    add(1.47, 2.28, logoZ, 0.05, 0.6, 1.8, 'metal', { tiles: { px: 'logo' }, emit: { px: 1.1 }, faces: 'px' });
-    add(-1.47, 2.28, logoZ, 0.05, 0.6, 1.8, 'metal', { tiles: { nx: 'logo' }, emit: { nx: 1.1 }, faces: 'nx' });
-    add(0, -0.19, 0, w + 0.24, 0.07, L, 'metal', { faces: 'ny', tint: [0.45, 0.47, 0.5] });
-    add(1.44, 0.16, 0, 0.06, 0.09, L, 'rubber', { faces: 'px' });
-    for (let z = -L / 2 + 1.25; z < L / 2; z += 2.5) { const rt = [0.62, 0.64, 0.67];
+    if (!skipD(1.47, logoZ)) add(1.47, 2.28, logoZ, 0.05, 0.6, 1.8, 'metal', { tiles: { px: 'logo' }, emit: { px: 1.1 }, faces: 'px' });
+    if (!skipD(-1.47, logoZ)) add(-1.47, 2.28, logoZ, 0.05, 0.6, 1.8, 'metal', { tiles: { nx: 'logo' }, emit: { nx: 1.1 }, faces: 'nx' });
+    layer2(-0.19, w + 0.24, 0.07, 'metal', { faces: 'ny', tint: [0.45, 0.47, 0.5] }, 1.45);
+    layer(1.44, 0.16, 0.06, 0.09, 'rubber', { faces: 'px' }, 1.44);
+    for (let z = -L / 2 + 1.25; z < L / 2; z += 2.5) { if (skipD(-1.51, z) || skipD(1.51, z) || skipD(0, z)) continue; const rt = [0.62, 0.64, 0.67];
       add(0, 2.83, z, w + 0.44, 0.09, 0.15, 'metal', { tint: rt }); add(-1.51, 1.33, z, 0.07, 2.9, 0.15, 'metal', { tint: rt }); add(1.51, 1.33, z, 0.07, 2.9, 0.15, 'metal', { tint: rt }); }
     add(0, 2.90, 0, 0.13, 0.07, 0.13, 'light', { tint: [1, 0.3, 0.25], emit: { px: 1.8, nx: 1.8, py: 1.8, ny: 1.8, pz: 1.8, nz: 1.8 } });
     // ---- aircraft-end cab + canopy (segment 2 only): housing over the last metre and a
@@ -397,7 +437,7 @@ export function buildBridge(pts, matSrc) {
       add(0, 2.60, L / 2 + 0.05, w + 0.44, 0.42, 0.1, 'rubber');
       add(-1.47, 1.18, L / 2 + 0.05, 0.3, 2.5, 0.1, 'rubber'); add(1.47, 1.18, L / 2 + 0.05, 0.3, 2.5, 0.1, 'rubber');
     }
-    segs.push({ a, b, c, u, L, ry, slope });
+    segs.push({ a, b, c, u, L, ry, slope, rEnd, trimGlass: { p: trimFor(1.375), m: trimFor(-1.375) } });
     // the rect is 0.6 longer than the segment at both ends (joint coverage); extrapolate the end
     // heights by the same 0.6 so floorAt's lerp reproduces the true a→b line on the segment itself
     wm.rect(c, u, L / 2 + 0.6, w / 2 - 0.35, a.y - (b.y - a.y) * (0.6 / L), b.y + (b.y - a.y) * (0.6 / L), 'bridge');
@@ -411,8 +451,9 @@ export function buildBridge(pts, matSrc) {
   const glassMat = new THREE.MeshBasicMaterial({ color: 0xa8c8dc, transparent: true, opacity: 0.30, side: THREE.DoubleSide, depthWrite: false });
   let drumMullMat = null; // rotunda mullion material (disposed via extras)
   for (const sg of segs) for (const s of [-1, 1]) {
-    const gm = new THREE.Mesh(new THREE.PlaneGeometry(sg.L - 0.4, 0.78).rotateY(Math.PI / 2), glassMat);
-    gm.position.set(sg.c.x + s * 1.375 * Math.cos(sg.ry), sg.c.y + 1.41, sg.c.z - s * 1.375 * Math.sin(sg.ry));
+    const gd = s > 0 ? sg.trimGlass.p : sg.trimGlass.m, gsh = -sg.rEnd * gd / 2;
+    const gm = new THREE.Mesh(new THREE.PlaneGeometry(sg.L - 0.4 - gd, 0.78).rotateY(Math.PI / 2), glassMat);
+    gm.position.set(sg.c.x + s * 1.375 * Math.cos(sg.ry) + Math.sin(sg.ry) * gsh, sg.c.y + 1.41, sg.c.z - s * 1.375 * Math.sin(sg.ry) + Math.cos(sg.ry) * gsh);
     gm.rotation.order = 'YXZ'; gm.rotation.y = sg.ry; gm.rotation.x = -sg.slope; gm.renderOrder = 3; gm.frustumCulled = false;
     group.add(gm); extras.push(gm);
   }
@@ -462,7 +503,8 @@ export function buildBridge(pts, matSrc) {
     const main = arcs.reduce((m, a) => (a[1] - a[0]) > (m[1] - m[0]) ? a : m, arcs[0]);
     if (main) {
       const mid = (main[0] + main[1]) / 2;
-      const panel = (thC, tl, y0, y1, tile, fb) => { sliver(Rd - 0.010, y0 - 0.045, y1 + 0.045, thC - tl / 2 - 0.035, tl + 0.07, drumMullMat); sliver(Rd - 0.018, y0, y1, thC - tl / 2, tl, tileMatFor(tile, fb)); };
+      const panel = (thC, tl, y0, y1, tile, fb) => { if (thC - tl / 2 - 0.035 < main[0] + 0.03 || thC + tl / 2 + 0.035 > main[1] - 0.03) return; // never overhang a mouth: at shallow bends the main arc is short
+        sliver(Rd - 0.010, y0 - 0.045, y1 + 0.045, thC - tl / 2 - 0.035, tl + 0.07, drumMullMat); sliver(Rd - 0.018, y0, y1, thC - tl / 2, tl, tileMatFor(tile, fb)); };
       panel(mid - 0.58, 0.52, 0.10, 0.90, 'shop1', 0x7a4a2b); // framed art/ads on the lower wall
       panel(mid + 0.58, 0.52, 0.10, 0.90, 'shop2', 0x2b5a7a);
       panel(mid, 1.15, 2.08, 2.36, 'signHello', 0x24304a); // welcome sign on the upper wall

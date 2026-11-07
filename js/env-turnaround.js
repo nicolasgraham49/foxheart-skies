@@ -43,13 +43,13 @@ export class Turnaround {
     const V = this.V;
     // docks (centre x, z, yaw) from the contact points on the hull
     const tip = POSE.beltTip(V.belt1, this.hCargo), bx = 1.55 - tip.z; this.beltPhi = tip.phi;
-    const D = { cat1: [6.75, -13.0, PI / 2], cat2: [6.75, 11.6, PI / 2], belt1: [bx, -8.4, PI / 2], belt2: [bx, 9.2, PI / 2], cont: [5.75, 5.9, PI / 2], fuel: [16, -1.5, 0], lav: [3.2, 19.4, 0], water: [7.2, 17.8, 0], van: [14, -37, PI / 2], train: [12.8, -8.6, 0] };
+    const D = { cat1: [6.75, -13.0, PI / 2], cat2: [6.75, 11.6, PI / 2], belt1: [bx, -8.4, PI / 2], belt2: [bx, 9.2, PI / 2], cont: [6.15, 5.9, PI / 2], fuel: [16, -1.5, 0], lav: [3.2, 19.4, 0], water: [7.2, 17.8, 0], van: [14, -37, PI / 2], train: [12.8, -8.6, 0] };
     const P = {
       cat1: [[[100, FZ], [40, FZ], [LX, FZ + 7], [LX, -19], [14.5, -13], [10.5, -13], [6.75, -13]], [[6.75, -13], [10, -13], [13, -11.6], [15, -9]], [[15, -9], [14.4, -9.8], [15.5, -17], [18, -26], [LX, -34], [28, FZ], [100, FZ]]],
       cat2: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, 19], [14.5, 11.6], [10.5, 11.6], [6.75, 11.6]], [[6.75, 11.6], [11, 11.6], [16, 11.6]], [[16, 11.6], [14.5, 12.4], [13.6, 15], [14.5, 21], [17.5, 28], [LX + 1, 35], [30, RZ], [100, RZ]]],
       belt1: [[[100, FZ], [40, FZ], [LX, FZ + 7], [LX, -16], [14, -8.4], [bx + 3.5, -8.4], [bx, -8.4]], [[bx, -8.4], [bx + 3, -8.4], [bx + 6.5, -7], [bx + 9, -4.2]], [[bx + 9, -4.2], [bx + 8.4, -4.9], [bx + 9, -12], [18, -22], [LX, -31], [28, FZ], [100, FZ]]],
       belt2: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, 17], [14, 9.2], [bx + 3.5, 9.2], [bx, 9.2]], [[bx, 9.2], [bx + 3, 9.2], [bx + 6.5, 7.8], [bx + 9, 5]], [[bx + 9, 5], [bx + 8.4, 5.7], [bx + 9, 13], [18, 22], [LX, 31], [28, RZ], [100, RZ]]],
-      cont: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, 15], [15, 5.9], [9.75, 5.9], [5.75, 5.9]], [[5.75, 5.9], [8.95, 5.9], [12.95, 4.5], [15.45, 1.5]], [[15.45, 1.5], [14.85, 2.3], [15.5, 10], [18, 20], [LX, 30], [28, RZ], [100, RZ]]],
+      cont: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, 15], [15, 5.9], [9.75, 5.9], [6.15, 5.9]], [[6.15, 5.9], [8.95, 5.9], [12.95, 4.5], [15.45, 1.5]], [[15.45, 1.5], [14.85, 2.3], [15.5, 10], [18, 20], [LX, 30], [28, RZ], [100, RZ]]],
       fuel: [[[100, RZ], [40, RZ], [LX + 1, RZ - 6], [LX, 22], [18.5, 10], [16.2, 4], [16, 1.5], [16, -1.5]], null, [[16, -1.5], [16, -6], [16.6, -12], [18.5, -22], [LX, -32], [28, FZ], [100, FZ]]],
       lav: [[[100, RZ], [20, RZ], [8, RZ - 1], [4, RZ - 5], [3.2, 30], [3.2, 24], [3.2, 19.4]], [[3.2, 19.4], [3.2, 27], [2.5, 35], [-1, 40], [-5, 41.5]], [[-5, 41.5], [0, 42], [30, RZ], [100, RZ]]],
       water: [[[100, RZ], [24, RZ], [12, RZ - 1], [8, RZ - 5], [7.2, 30], [7.2, 23], [7.2, 17.8]], [[7.2, 17.8], [7.2, 26], [6.5, 34], [3, 39.5], [-1, 41.5]], [[-1, 41.5], [4, 42], [30, RZ], [100, RZ]]],
@@ -133,7 +133,11 @@ export class Turnaround {
     let ui = 0; const UA = this.uldA, UB = this.uldB, cv = this.V.cont, cw = ph.cont.work, cyc = cw >= 0 && (cv.out == null || t < cv.out - 2) ? Math.floor(cw / 40) : -1;
     const uldDone = cw >= 0 ? clamp(Math.floor(cw / 40), 0, 2) : dep && (cv.gone || (cv.out != null && t >= cv.out)) ? 2 : 0; // ULDs moved so far
     if (ph.train.vis) for (let di = 0; di < 2; di++) { const has = dep ? di >= uldDone : di < uldDone; if (!has) continue; M2.copy(T(0, 0.6, 0, 0)); M.multiplyMatrices(tr.cars[2 + di].obj.matrix, M2); UA.setMatrixAt(ui, M); UB.setMatrixAt(ui++, M); }
-    if (cyc >= 0 && cyc < 2) { const p = (cw % 40) / 40, e = sm(p, 0.1, 0.85), z = dep ? 3.0 - 7.6 * e : -4.6 + 7.6 * e; if (p < 0.88) { M2.copy(T(0, cv.main.position.y + 0.08, z)); M.multiplyMatrices(cv.obj.matrix, M2); UA.setMatrixAt(ui, M); UB.setMatrixAt(ui++, M); } }
+    // ULD transfer travel is clamped (C-F1): the old 7.6 m slide drove the ULD's front
+    // face (centre z - 0.765) to stand x = 0.39 — through the closed cargo-door skin.
+    // 6.1 m of travel stops the front at stand x ≈ 2.09, clear of the hull; the
+    // loader's bridge deck spans the remaining gap visually.
+    if (cyc >= 0 && cyc < 2) { const p = (cw % 40) / 40, e = sm(p, 0.1, 0.85), z = dep ? 3.0 - 6.1 * e : -3.1 + 6.1 * e; if (p < 0.88) { M2.copy(T(0, cv.main.position.y + 0.08, z)); M.multiplyMatrices(cv.obj.matrix, M2); UA.setMatrixAt(ui, M); UB.setMatrixAt(ui++, M); } }
     for (let i = ui; i < 3; i++) { UA.setMatrixAt(i, ZERO); UB.setMatrixAt(i, ZERO); } UA.instanceMatrix.needsUpdate = UB.instanceMatrix.needsUpdate = true;
     // service crew (slots 3..)
     const man = (i, v, x, y, z, yaw, mode, vis = true) => { const p = C.p[i]; p.vis = vis && !!v.obj.visible; if (!p.vis) return; p.pos.set(x, y, z); v.obj.localToWorld(p.pos); p.yaw = this.svc.rotation.y + v.obj.rotation.y + yaw; p.mode = mode; };
