@@ -22,7 +22,8 @@ const hdgD = h => String(Math.round(((h % 360) + 360) % 360) || 360).padStart(3,
 const NATO = 'Alfa Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliett Kilo Lima Mike November Oscar Papa Quebec Romeo Sierra Tango Uniform Victor Whiskey Xray Yankee Zulu'.split(' ');
 const twyS = n => String(n).split('').map(c => /\d/.test(c) ? DIG[+c] : NATO['ABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(c)] || c).join(' ');
 // ---------------------------------------------------------------- bilingual ATC: a facility speaks its airport's language.
-// Spanish for Spain + Latin America, Korean for Korea, English elsewhere (the pilot / FO always stay in English).
+// Spanish for Spain + Latin America, Korean for Korea, English elsewhere. The pilot + FO speak Spanish at every
+// airport — see the Spanish cockpit block at pilotSpanish() (the owner's standing order; controllers unaffected).
 const lang2 = s => String(s || '').toLowerCase().replace(/_/g, '-').slice(0, 2);
 const ES_CC = new Set(['ES', 'MX', 'PA', 'CO', 'PE', 'CL', 'AR', 'VE', 'EC', 'BO', 'PY', 'UY', 'CU', 'DO', 'PR', 'GT', 'HN', 'SV', 'NI', 'CR']);
 export const aptLang = apt => { const cc = apt && apt.cc; return cc === 'KR' ? 'ko' : ES_CC.has(cc) ? 'es' : 'en'; };
@@ -45,6 +46,8 @@ const numEs = n => { n = Math.round(Math.abs(n)); if (n < 30) return NUM_ES[n]; 
 const DIG_KO = ['영', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
 const digitsKo = (s, dot = '점') => String(s).split('').map(c => c === '.' ? dot : /\d/.test(c) ? DIG_KO[+c] : c === '-' || c === ',' ? '' : c).filter(Boolean).join(' ');
 const numKo = n => { n = Math.round(Math.abs(n)); if (n < 10) return DIG_KO[n]; const t = Math.floor(n / 10), o = n % 10; return (t > 1 ? DIG_KO[t] : '') + '십' + (o ? DIG_KO[o] : ''); };
+const H100_ES = ['', 'cien', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+const numEsW = n => { n = Math.round(Math.abs(n)); if (n < 100) return numEs(n); if (n < 1000) { const h = Math.floor(n / 100), r = n % 100; return (h === 1 ? (r ? 'ciento' : 'cien') : H100_ES[h]) + (r ? ' ' + numEs(r) : ''); } if (n < 100000) { const t = Math.floor(n / 1000), r = n % 1000; return (t === 1 ? 'mil' : numEsW(t) + ' mil') + (r ? ' ' + numEsW(r) : ''); } return digitsEs(String(n)); }; // full Spanish number words for the pilot's speech: 5500 -> "cinco mil quinientos", 210 -> "doscientos diez"
 // message builder: parts are strings (same display/spoken), [display, spoken] pairs or other messages
 const M = (...parts) => ({ d: parts.map(p => Array.isArray(p) ? p[0] : p && p.d !== undefined ? p.d : p).join(''), s: parts.map(p => Array.isArray(p) ? p[1] : p && p.s !== undefined ? p.s : p).join('') });
 const cap = m => ({ ...m, d: m.d.charAt(0).toUpperCase() + m.d.slice(1) });
@@ -183,7 +186,8 @@ export class ATC {
   infoM(A) { const h = this.heard[A.icao]; return h ? M(', information ', h) : ''; } // pilot: "with information Kilo" only if you listened
   infoChk(A) { const cur = this.atisLetter(A); if (this.heard[A.icao] === cur) return ''; this.heard[A.icao] = cur; return M('information ', cur, ' is current, ', this.altimM(A), '. '); }
   // ---------------------------------------------------------------- transmissions
-  me(kind, m, delay = 0) { this.dropChatter(); this.push({ who: 'ME', kind, m: this.human(m, 0.03), delay }); this.lastMeT = this.t; }
+  me(kind, m, delay = 0) { this.dropChatter(); let mm = this.human(m, 0.03); if (this.pilotSpanish() && !mm.lang) mm = { ...mm, lang: 'es' }; // Spanish cockpit: the call was composed in Spanish — the tag is what makes speech.js voice it with the Spanish voice
+    this.push({ who: 'ME', kind, m: mm, delay }); this.lastMeT = this.t; }
   atc(kind, m, delay = 1.6, then, x) { this.push(Object.assign({ who: kind, kind, m: this.human(m, 0.07), delay: delay * this.pace() * (0.85 + Math.random() * 0.4), then }, x || {})); }
   other(kind, cs, m, delay = 0.6) { this.push({ who: 'OTHER', cs, kind, m: this.human(m, 0.1), delay, chatter: true }); }
   push(x) { this.queue.push(x); }
@@ -212,6 +216,42 @@ export class ATC {
     const alive = all.filter(v => !(this.speech && this.speech.voiceBad && this.speech.voiceBad(v))); return alive.length ? alive : all;
   }
   facLang(apt) { return aptLang(apt); }
+  // ---------------------------------------------------------------- the SPANISH COCKPIT: the owner is a Spanish
+  // speaker IRL and wants his crew the same in the sim, so the captain's calls and the FO's readbacks are
+  // COMPOSED in Spanish and voiced by a Spanish voice at EVERY airport: me() stamps lang 'es' on pilot
+  // transmissions (say() then tags the utterance es-ES, exactly like localized controller text), voiceFor('ME')
+  // draws the crew's voice from the Spanish pool, and say() passes the es locale explicitly as the accent
+  // request so the resolver keeps the crew Spanish even over a stale non-Spanish pick. Controllers are NOT
+  // touched — their language/accent system stands, so a US tower still answers in English (real bilingual ops;
+  // the owner understands both). Readbacks stay a pure language layer: every rb carries an optional mEs twin
+  // and readback() picks it when the preference is on — the state machine never parses speech text.
+  // PERSISTED PREFERENCE: localStorage 'fox.pilotSpanish' — unset or '1' = Spanish (Spanish is the DEFAULT,
+  // per the owner's standing order), '0' = the old all-English cockpit. setPilotSpanish(on) flips it live and
+  // persists it; a future Settings toggle only has to call that.
+  pilotSpanish() { if (this._pilotEs != null) return this._pilotEs; try { const v = localStorage.getItem('fox.pilotSpanish'); return v == null ? true : v !== '0' && v !== 'false'; } catch (e) { return true; } }
+  setPilotSpanish(on) { this._pilotEs = !!on; try { localStorage.setItem('fox.pilotSpanish', on ? '1' : '0'); } catch (e) { } }
+  // ---- the pilot's own phraseology in Spanish (same [display, spoken] pair shape as the English builders)
+  CSp() { return [this.cs, 'Foxheart ' + digitsEs('412')]; } // our callsign as WE say it: "Foxheart cuatro uno dos"
+  altEsM(ft, A) { const ta = this.ta(A); ft = r100(ft); return [altD(ft, ta), ft >= ta ? 'nivel de vuelo ' + digitsEs(String(ft / 100).padStart(3, '0')) : numEsW(ft) + ' pies']; }
+  altRepEs(s, tgt, A) { const a = r100(s.altFt); if (tgt == null && Math.abs(s.vsFpm) >= 250) return M(this.altEsM(a, A), s.vsFpm > 0 ? ' ascendiendo' : ' descendiendo'); if (tgt == null || Math.abs(s.altFt - tgt) < 250 || Math.abs(s.vsFpm) < 250) return M('manteniendo ', this.altEsM(Math.abs(s.altFt - (tgt ?? a)) < 250 ? (tgt ?? a) : a, A)); return M(this.altEsM(a, A), s.vsFpm > 0 ? ' ascendiendo a ' : ' descendiendo a ', this.altEsM(tgt, A)); }
+  cmdAltEs(ft, cur, A) { const up = ft > cur, a = this.altEsM(ft, A); if (this.usA(A)) return M(up ? 'ascienda y mantenga ' : 'descienda y mantenga ', a); return M(up ? 'ascienda a ' : 'descienda a ', ft >= this.ta(A) ? a : ['altitud ' + a[0] + ' ft', 'altitud ' + a[1]]); }
+  hdgEsM(h, cur) { const d = wrap180(h - cur); return M(Math.abs(d) < 8 ? 'mantenga rumbo ' : d > 0 ? 'vire a la derecha rumbo ' : 'vire a la izquierda rumbo ', [hdgD(h), digitsEs(hdgD(h))]); }
+  spdEsM(kt) { return [kt + ' kt', numEsW(kt) + ' nudos']; }
+  freqEsM(F) { return this.freqL(F, 'es'); }
+  rwyEsM(id) { return this.rwyL(id, 'es'); }
+  twyEs(n) { return String(n).split('').map(c => /\d/.test(c) ? DIG_ES[+c] : NATO['ABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(c)] || c).join(' '); }
+  infoEsM(A) { const h = this.heard[A.icao]; return h ? M(', con información ', h) : ''; } // "con información Kilo", only if you listened
+  hiEs() { const m = this.o.ctx.weather().localMin ?? 720; return m < 720 ? 'buenos días' : m < 1140 ? 'buenas tardes' : 'buenas noches'; }
+  maybeHiEs(p = 0.45) { return Math.random() < p ? this.hiEs() + ', ' : ''; }
+  byeEs() { return this.pick('byeEs', ['adiós', 'buen día', 'hasta luego', 'gracias, adiós']); }
+  dirEs(d) { return { north: 'norte', south: 'sur', east: 'este', west: 'oeste', 'north-east': 'noreste', 'south-west': 'suroeste', 'north-west': 'noroeste', 'south-east': 'sureste' }[d] || d; }
+  routeInstrEs(s) { const c = this.o.ctx, fx = c.fixNear && c.fixNear(this.arr); const tgt = fx || this.arr; const brg = gcBrg(s.lat, s.lon, tgt.lat, tgt.lon); const dist = gcNm(s.lat, s.lon, tgt.lat, tgt.lon);
+    if (fx && dist < 400) return M('proceda directo a ', [fx.id, this.twyEs(fx.id)]); const h = Math.round(brg / 5) * 5; return this.hdgEsM(h, s.trk); }
+  taxiInstrEs(r, E) { const T = r.via.map(n => [n, this.twyEs(n)]).flatMap((x, i) => i ? [', ', x] : [x]); const R = this.rwyEsM(E.ident);
+    return this.usA(this.dep) ? M('pista ', R, ', rodaje por ', ...T, ', mantenga corto de pista ', R, ' en ', [r.hold, this.twyEs(r.hold)], ', ', this.CSp(), '.') : M('rodaje al punto de espera ', [r.hold, this.twyEs(r.hold)], ' pista ', R, ' por ', ...T, ', ', this.CSp(), '.'); }
+  natEs(nat) { const m = String(nat).match(/^engine (failure|fire), engine (one|two)$/); if (m) return (m[1] === 'fire' ? 'fuego en el motor ' : 'falla de motor, motor ') + numEs(m[2] === 'one' ? 1 : 2);
+    const b = String(nat).match(/^bird strike, engine (one|two) damaged$/); if (b) return 'impacto de aves, motor ' + numEs(b[1] === 'one' ? 1 : 2) + ' dañado';
+    return { 'landing gear will not extend': 'el tren de aterrizaje no se extiende', 'landing gear will not extend, belly landing': 'el tren de aterrizaje no se extiende, aterrizaje de panza', 'hydraulic failure': 'falla hidráulica', 'rapid decompression, emergency descent': 'descompresión rápida, descenso de emergencia', 'electrical failure, both generators': 'falla eléctrica, ambos generadores', 'flaps jammed': 'flaps atascados', emergency: 'una emergencia', 'technical problem': 'un problema técnico' }[nat] || nat; }
   // ---------------------------------------------------------------- controller personas: one "person" per facility per airport.
   // Each persona shifts the voice slot and colours pitch / rate, so Tampa Ground is not the same human as Miami Ground,
   // and after a long stint on one frequency the shift changes (the persona rotates to a colleague).
@@ -226,8 +266,15 @@ export class ATC {
   voiceFor(who, cs, per, lang, apt) {
     const pref = this.voicePref || {};
     const byName = nm => nm && nm !== 'auto' ? (this.allVoices || []).find(v => v.name === nm) : null;
-    if (who === 'ME') { // the first officer: the player's own pick first, then an en-US voice (the owner is the pilot — the FO never takes a foreign accent); the plain English pool only when no en-US voice exists
+    if (who === 'ME') { // the captain + first officer. SPANISH COCKPIT (the owner's order): a pilot transmission in
+      // Spanish (lang 'es' — me() stamps it, say() passes it through) draws the crew's voice from the SPANISH
+      // pool; say() pairs it with the es-ES tag, and speech.js's explicit-locale path covers a stale
+      // non-Spanish pick. A request in English gets the crew's English voice exactly as before (the player's
+      // own pick first, then en-US, the plain English pool only when no en-US voice exists) — which is also
+      // what the controller pools' FO-reservation probes ask for (voiceFor('ME', …, 'en')), so controller pool
+      // composition is unchanged by the Spanish preference.
       const man = byName(pref.pilot); if (man) return man;
+      if (this.pilotSpanish() && (lang || 'en') === 'es') { const ES = this.poolFor('es'); if (ES.length) { const n = Math.min(ES.length, 8); return ES[n > 2 ? 2 : n - 1]; } }
       const US = this.poolForLoc('en-us'); const V = US.length ? US : this.poolFor('en'); if (!V.length) return null; const n = Math.min(V.length, 8); return V[n > 2 ? 2 : n - 1];
     }
     const man = byName(pref.controller); if (man) return man; // a hand-picked Settings voice wins (speech.js still validates it exists)
@@ -262,7 +309,8 @@ export class ATC {
       if (per && ++per.n % 25 === 0) { per.off = (per.off + 1) % 3; per.dpI = (per.dpI + 2) % 5; per.dp = [0.93, 0.97, 1.0, 1.04, 1.08][per.dpI]; } // shift change: a colleague takes the frequency
       const pitch = kind === 'OTHER' ? 0.82 + (h % 7) * 0.06 : Math.min(1.45, Math.max(0.6, vc.pitch * (per ? per.dp : 1))), vol = Math.min(1, ((this.audio?.vol ?? 0.7) + 0.2) * (kind === 'OTHER' ? 0.72 + (h % 5) * 0.05 : 1));
       const txLang = m.lang || 'en'; // the language of the TEXT: localized phraseology carries its own, the rest stays English — real bilingual ops
-      const acc = kind !== 'ME' && kind !== 'OTHER' && txLang === 'en' ? aptAccent(f.apt) : null; // controllers (never the FO, never other pilots) carry their airport's accent in English; localized text already speaks with a local voice
+      const acc = kind === 'ME' ? (txLang === 'es' ? ['es'] : null) // Spanish cockpit: the crew explicitly requests the es locale (resolveVoice's accent contract — a Spanish voice reading the crew's Spanish, never a stale English pick)
+        : kind !== 'OTHER' && txLang === 'en' ? aptAccent(f.apt) : null; // controllers (never other pilots) carry their airport's accent in English; localized text already speaks with a local voice
       const id = this.speech.say({ text: m.s, display: m.d, who: kind === 'ME' ? this.cs.toUpperCase() + ' · FO' : kind === 'OTHER' ? cs : fac, channel: atis ? 'atis' : kind === 'OTHER' ? 'chatter' : 'atc', voice: () => this.voiceFor(kind, cs, per, txLang, f.apt), accent: acc || undefined, lang: txLang === 'ko' ? 'ko-KR' : txLang === 'es' ? 'es-ES' : 'en-US',
         rate: vc.rate * (per ? per.dr : 1) * (1 + this.busy() * 0.05) * (0.96 + Math.random() * 0.08), pitch, volume: vol, mute: !speak, maxWait: kind === 'OTHER' ? 10 : 0,
         onstart: () => A && A.radioOpen && A.radioOpen(kind === 'ME', kind === 'OTHER' ? 0.6 : 1), onend: fin });
@@ -370,9 +418,9 @@ export class ATC {
     const c = this.o?.ctx; if (!c) return; const CS = this.CSm();
     switch (id) {
       case 'atis': this.tune('ATIS'); return;
-      case 'sayagain': { const L = this.lastInstr; if (!L) return; this.me(L.kind, M('Say again, ', CS, '.')); this.atc(L.kind, L.m, 1.3, null, { reply: true }); return; }
-      case 'tfc_look': { const k = this.tuned?.kind || 'APP'; this.flags.tfc = false; this.me(k, M(this.pick('look', ['Looking, ', 'Looking for the traffic, ', 'Negative contact, looking, ']), CS, '.')); this.atc(k, M(CS, ', ', this.pick('tfcAck', ['roger, I will advise.', 'roger.', 'roger, traffic no factor.'])), 1.6, null, { reply: true }); this.emit(); return; }
-      case 'tfc_sight': { const k = this.tuned?.kind || 'APP'; this.flags.tfc = false; this.me(k, M(this.pick('sight', ['Traffic in sight, ', 'Got the traffic, ', 'In sight, ']), CS, '.')); this.atc(k, M(CS, ', ', this.pick('vis', ['thank you.', 'roger, maintain visual separation.', 'thanks.'])), 1.6, null, { reply: true }); this.emit(); return; }
+      case 'sayagain': { const L = this.lastInstr; if (!L) return; this.me(L.kind, this.pilotSpanish() ? M('Repita, ', this.CSp(), '.') : M('Say again, ', CS, '.')); this.atc(L.kind, L.m, 1.3, null, { reply: true }); return; }
+      case 'tfc_look': { const k = this.tuned?.kind || 'APP'; this.flags.tfc = false; this.me(k, this.pilotSpanish() ? M(this.pick('lookEs', ['Buscando, ', 'Buscando el tráfico, ', 'Sin contacto, buscando, ']), this.CSp(), '.') : M(this.pick('look', ['Looking, ', 'Looking for the traffic, ', 'Negative contact, looking, ']), CS, '.')); this.atc(k, M(CS, ', ', this.pick('tfcAck', ['roger, I will advise.', 'roger.', 'roger, traffic no factor.'])), 1.6, null, { reply: true }); this.emit(); return; }
+      case 'tfc_sight': { const k = this.tuned?.kind || 'APP'; this.flags.tfc = false; this.me(k, this.pilotSpanish() ? M(this.pick('sightEs', ['Tráfico a la vista, ', 'Tengo el tráfico, ', 'A la vista, ']), this.CSp(), '.') : M(this.pick('sight', ['Traffic in sight, ', 'Got the traffic, ', 'In sight, ']), CS, '.')); this.atc(k, M(CS, ', ', this.pick('vis', ['thank you.', 'roger, maintain visual separation.', 'thanks.'])), 1.6, null, { reply: true }); this.emit(); return; }
       case 'rb': return this.readback();
       case 'ho': return this.checkIn();
       case 'clr': return this.reqClearance();
@@ -384,12 +432,12 @@ export class ATC {
       case 'emer_back': this.emerAsk = null; this.emit(); return;
       case 'mayday': case 'pan': this.emerAsk = null; return this.declare(id);
       case 'cancel': return this.cancelEmer();
-      case 'ils': { const re = c.arrEnd(); this.me('APP', M(this.fac('APP').name, ', ', CS, ', request the I L S runway ', this.rwyM(re.ident), '.')); this.atc('APP', M(CS, ', roger, expect vectors for the I L S runway ', this.rwyM(re.ident), '.'), 1.6, null, { reply: true }); this.flags.ilsReq = true; return; }
+      case 'ils': { const re = c.arrEnd(); this.me('APP', this.pilotSpanish() ? M(this.fac('APP').name, ', ', this.CSp(), ', solicito aproximación I L S a la pista ', this.rwyEsM(re.ident), '.') : M(this.fac('APP').name, ', ', CS, ', request the I L S runway ', this.rwyM(re.ident), '.')); this.atc('APP', M(CS, ', roger, expect vectors for the I L S runway ', this.rwyM(re.ident), '.'), 1.6, null, { reply: true }); this.flags.ilsReq = true; return; }
     }
   }
   // the first officer reads back the pending instruction; some units confirm ("readback correct"), then whatever it unlocks happens
   readback() {
-    const r = this.rb; if (!r) return; this.rb = null; this.me(r.kind, r.m);
+    const r = this.rb; if (!r) return; this.rb = null; this.me(r.kind, this.pilotSpanish() && r.mEs ? r.mEs : r.m); // Spanish cockpit: the FO reads back the Spanish twin when the clearance carried one
     if (r.fcu) this.o.ctx.fcu && this.o.ctx.fcu(r.fcu);
     if (r.ok) this.atc(r.kind, r.ok, 1.4, null, { reply: true }); r.then && r.then(); this.emit();
   }
@@ -397,25 +445,26 @@ export class ATC {
   assignHdg(h, fix) { this.hdgA = h == null ? null : { hdg: h, fix, t: this.t, bad: 0, warnT: -1e9 }; }
   assignSpd(kt) { this.spdA = kt == null ? null : { kt, t: this.t, warnT: -1e9 }; }
   reqClearance() {
-    const dep = this.dep, arr = this.arr, CS = this.CSm(), D = this.fac('DEL'), us = this.usA(dep), dF = this.fac('DEP'), sq = [this.squawk, digits(this.squawk)];
-    this.me('DEL', M(D.name, ', ', CS, ', ', this.maybeHi(), 'gate ', [this.o.gate, digits(this.o.gate)], this.infoM(dep), ', request I F R clearance to ', this.city(arr), '.'));
+    const dep = this.dep, arr = this.arr, CS = this.CSm(), CPS = this.CSp(), D = this.fac('DEL'), us = this.usA(dep), dF = this.fac('DEP'), sq = [this.squawk, digits(this.squawk)];
+    this.me('DEL', this.pilotSpanish() ? M(D.name, ', ', CPS, ', ', this.maybeHiEs(), 'puerta ', [this.o.gate, digitsEs(this.o.gate)], this.infoEsM(dep), ', solicito autorización I F R a ', this.city(arr), '.') : M(D.name, ', ', CS, ', ', this.maybeHi(), 'gate ', [this.o.gate, digits(this.o.gate)], this.infoM(dep), ', request I F R clearance to ', this.city(arr), '.'));
     const exp = this.cruise > this.init ? M(', expect ', this.Am(this.cruise, dep), ' one zero minutes after departure') : '';
     const sidM = this.pick('sid', [M('via the ', this.sid, ' departure, radar vectors, then as filed'), M('via the ', this.sid, ' departure, then as filed'), M(this.sid, ' departure, radar vectors, then as filed')]);
     const m = us ? M(CS, ', ', this.idM('DEL'), this.maybeHiL(dep, 0.3), this.infoChk(dep), 'cleared to ', this.city(arr), ' airport ', sidM, '. ', this.cmdAlt(this.init, 0, dep), exp, '. Departure frequency ', this.freqM(dF), ', squawk ', sq, '.')
       : M(CS, ', ', this.idM('DEL'), this.maybeHiL(dep, 0.3), this.infoChk(dep), 'cleared to ', this.city(arr), ' ', sidM, '. ', this.cmdAlt(this.init, 0, dep), '. Squawk ', sq, ', departure frequency ', this.freqM(dF), '.');
     const rbm = M('Cleared to ', this.city(arr), ' via the ', this.sid, ' departure, radar vectors, ', this.cmdAlt(this.init, 0, dep), ', departure ', this.freqM(dF), ', squawk ', sq, ', ', CS, '.');
+    const rbmEs = M('Autorizado a ', this.city(arr), ' vía la salida ', this.sid, ', vectores radar, ', this.cmdAltEs(this.init, 0, dep), ', frecuencia de salida ', this.freqEsM(dF), ', código ', [this.squawk, digitsEs(this.squawk)], ', ', CPS, '.');
     const lgC = aptLang(dep);
     const ok = M(this.csM2(lgC), ', ', lgC === 'es' ? 'lectura correcta' : lgC === 'ko' ? '정확히 복장했습니다' : 'readback correct', this.pick('gndNext', lgC === 'es' ? ['. ', '. Cuando esté listo para el retroceso, ', '. '] : lgC === 'ko' ? ['. ', '. 푸시백 준비가 되면, ', '. '] : ['. ', '. When ready to push, ', '. ']), M(this.pick('gndN2', ['contact ', 'call ']), this.fac('GND').name, ' ', this.freqM(this.fac('GND')), '.'));
     if (lgC !== 'en') ok.lang = lgC;
-    this.atc('DEL', m, 2.2, null, { reply: true, rb: { label: `${this.city(arr)} via ${this.sid}, ${altD(this.init, this.ta(dep))}, squawk ${this.squawk}`, m: rbm, ok, fcu: { alt: this.init }, then: () => { this.setPhase('clr_ok'); } } });
+    this.atc('DEL', m, 2.2, null, { reply: true, rb: { label: `${this.city(arr)} via ${this.sid}, ${altD(this.init, this.ta(dep))}, squawk ${this.squawk}`, m: rbm, mEs: rbmEs, ok, fcu: { alt: this.init }, then: () => { this.setPhase('clr_ok'); } } });
   }
   reqPush() {
-    const c = this.o.ctx, CS = this.CSm(), G = this.fac('GND'), E = this.o.depEnd;
-    this.me('GND', M(G.name, ', ', CS, ', ', this.maybeHi(0.3), 'gate ', [this.o.gate, digits(this.o.gate)], this.contacted.has(this.fac('DEL').name) ? '' : this.infoM(this.dep), ', ', this.pick('pushReq', ['request push and start', 'ready to push and start', 'request pushback']), '.'));
+    const c = this.o.ctx, CS = this.CSm(), CPS = this.CSp(), G = this.fac('GND'), E = this.o.depEnd;
+    this.me('GND', this.pilotSpanish() ? M(G.name, ', ', CPS, ', ', this.maybeHiEs(0.3), 'puerta ', [this.o.gate, digitsEs(this.o.gate)], this.contacted.has(this.fac('DEL').name) ? '' : this.infoEsM(this.dep), ', ', this.pick('pushReqEs', ['solicito retroceso y arranque', 'listo para retroceso y arranque', 'solicito retroceso']), '.') : M(G.name, ', ', CS, ', ', this.maybeHi(0.3), 'gate ', [this.o.gate, digits(this.o.gate)], this.contacted.has(this.fac('DEL').name) ? '' : this.infoM(this.dep), ', ', this.pick('pushReq', ['request push and start', 'ready to push and start', 'request pushback']), '.'));
     const face = c.pushFace(), tail = this.pick('face', ['face ', 'tail ']); const dirW = tail === 'face ' ? face : { north: 'south', south: 'north', east: 'west', west: 'east', 'north-east': 'south-west', 'south-west': 'north-east', 'north-west': 'south-east', 'south-east': 'north-west' }[face] || face;
     const app = M(this.pick('pushOk', ['push and start approved, ', 'push and start at your discretion, ', 'push approved, ']), tail, dirW);
     this.atc('GND', M(CS, ', ', this.idM('GND'), this.maybeHiL(this.dep, 0.25), app, (Math.random() < 0.5 ? M(', expect runway ', this.rwyM(E.ident)) : ''), '.'), 2, null,
-      { reply: true, rb: { label: `push and start, ${tail}${dirW}`, m: M(cap(app), ', ', CS, '.'), then: () => { this.setPhase('pushing'); if (!c.pushing()) c.startPushback(); } } });
+      { reply: true, rb: { label: `push and start, ${tail}${dirW}`, m: M(cap(app), ', ', CS, '.'), mEs: M('Retroceso y arranque aprobado, ', tail === 'face ' ? 'cara ' : 'cola ', this.dirEs(dirW), ', ', CPS, '.'), then: () => { this.setPhase('pushing'); if (!c.pushing()) c.startPushback(); } } });
   }
   taxiInstr(r, E) { // US: "runway 19R, taxi via B, A, hold short runway 19R at A1"; ICAO: "taxi to holding point A1 runway 19R via B, A"
     const T = r.via.map(n => [n, twyS(n)]).flatMap((x, i) => i ? [', ', x] : [x]); const R = this.rwyM(E.ident);
@@ -424,12 +473,12 @@ export class ATC {
   issueTaxi(delay, prefix) {
     const c = this.o.ctx, CS = this.CSm(), E = this.o.depEnd; const r = c.taxiOut(); this.taxiRoute = r; const ins = this.taxiInstr(r, E);
     this.atc('GND', M(CS, ', ', this.idM('GND'), prefix || '', ins, '.'), delay, () => { c.showTaxi(r); this.setPhase('taxiing'); },
-      { reply: true, rb: { label: `taxi via ${r.via.join(', ')}, hold short ${E.ident} at ${r.hold}`, m: M(cap(ins), ', ', CS, '.') } });
+      { reply: true, rb: { label: `taxi via ${r.via.join(', ')}, hold short ${E.ident} at ${r.hold}`, m: M(cap(ins), ', ', CS, '.'), mEs: M(cap(this.taxiInstrEs(r, E)), ', ', this.CSp(), '.') } });
   }
-  reqTaxi() { const CS = this.CSm(); this.me('GND', M(this.contacted.has(this.fac('GND').name) ? '' : this.fac('GND').name + ', ', CS, ', request taxi.')); this.issueTaxi(2); }
+  reqTaxi() { const CS = this.CSm(); this.me('GND', this.pilotSpanish() ? M(this.contacted.has(this.fac('GND').name) ? '' : this.fac('GND').name + ', ', this.CSp(), ', solicito rodaje.') : M(this.contacted.has(this.fac('GND').name) ? '' : this.fac('GND').name + ', ', CS, ', request taxi.')); this.issueTaxi(2); }
   reqDeparture(viaHo) {
     const CS = this.CSm(), E = this.o.depEnd, T = this.fac('TWR'), s = this.ctxS(); const onRwy = this.phase === 'rwy_start' || s.onDepRwy;
-    this.me('TWR', M(T.name, ', ', CS, ', ', onRwy ? M('runway ', this.rwyM(E.ident), ', ready for departure.') : M('holding short runway ', this.rwyM(E.ident), ', ready for departure.')), viaHo ? 0.9 : 0);
+    this.me('TWR', this.pilotSpanish() ? M(T.name, ', ', this.CSp(), ', ', onRwy ? M('pista ', this.rwyEsM(E.ident), ', listo para la salida.') : M('manteniendo corto de pista ', this.rwyEsM(E.ident), ', listo para la salida.')) : M(T.name, ', ', CS, ', ', onRwy ? M('runway ', this.rwyM(E.ident), ', ready for departure.') : M('holding short runway ', this.rwyM(E.ident), ', ready for departure.')), viaHo ? 0.9 : 0);
     this.towerDep(2, onRwy);
   }
   towerDep(delay, onRwy) {
@@ -438,27 +487,27 @@ export class ATC {
       if (lg !== 'en') { const CL = this.csM2(lg), RL = this.rwyL(E.ident, lg); // frame localized; the reason (b.why) is dynamic and stays English
         const hs = lg === 'es' ? (onRwy ? M('mantenga posición, ', b.why) : M('mantenga corto de la pista ', RL, ', ', b.why)) : (onRwy ? M('위치를 유지하십시오, ', b.why) : M('활주로 ', RL, ' 앞에서 대기하십시오, ', b.why));
         const m = M(CL, ', ', id, hs, '.'); m.lang = lg;
-        this.atc('TWR', m, delay, () => this.setPhase('twr_hold'), { reply: true, rb: { label: onRwy ? 'hold position' : `hold short ${E.ident}`, m: M(onRwy ? 'Holding position' : M('Holding short runway ', R), ', ', CS, '.') } }); return; }
-      const hs = onRwy ? M('hold position, ', b.why) : M('hold short runway ', R, ', ', b.why); this.atc('TWR', M(CS, ', ', id, hs, '.'), delay, () => this.setPhase('twr_hold'), { reply: true, rb: { label: onRwy ? 'hold position' : `hold short ${E.ident}`, m: M(onRwy ? 'Holding position' : M('Holding short runway ', R), ', ', CS, '.') } }); return; }
+        this.atc('TWR', m, delay, () => this.setPhase('twr_hold'), { reply: true, rb: { label: onRwy ? 'hold position' : `hold short ${E.ident}`, m: M(onRwy ? 'Holding position' : M('Holding short runway ', R), ', ', CS, '.'), mEs: M(onRwy ? 'Mantengo posición' : M('Mantengo corto de pista ', this.rwyEsM(E.ident)), ', ', this.CSp(), '.') } }); return; }
+      const hs = onRwy ? M('hold position, ', b.why) : M('hold short runway ', R, ', ', b.why); this.atc('TWR', M(CS, ', ', id, hs, '.'), delay, () => this.setPhase('twr_hold'), { reply: true, rb: { label: onRwy ? 'hold position' : `hold short ${E.ident}`, m: M(onRwy ? 'Holding position' : M('Holding short runway ', R), ', ', CS, '.'), mEs: M(onRwy ? 'Mantengo posición' : M('Mantengo corto de pista ', this.rwyEsM(E.ident)), ', ', this.CSp(), '.') } }); return; }
     if (onRwy || Math.random() < 0.55) this.clearTakeoff(delay, id); else this.lineUp(delay, id);
   }
   lineUp(delay, id = '') { const CS = this.CSm(), E = this.o.depEnd, R = this.rwyM(E.ident), lg = aptLang(this.dep);
     if (lg !== 'en') { const CL = this.csM2(lg), RL = this.rwyL(E.ident, lg);
       const m = lg === 'es' ? M(CL, ', ', id, this.pick('luawEs', [M('pista ', RL, ', alíniese y espere.'), M('alíniese y espere, pista ', RL, '.')]))
         : M(CL, ', ', id, '활주로 ', RL, ', 정렬하고 대기하십시오.'); m.lang = lg;
-      this.atc('TWR', m, delay, () => this.setPhase('lineup'), { reply: true, rb: { label: `line up and wait ${E.ident}`, m: M('Line up and wait runway ', R, ', ', CS, '.') } }); return; }
-    const m = this.pick('luaw', [M('runway ', R, ', line up and wait.'), M('line up and wait, runway ', R, '.'), M('runway ', R, ', line up.')]); this.atc('TWR', M(CS, ', ', id, m), delay, () => this.setPhase('lineup'), { reply: true, rb: { label: `line up and wait ${E.ident}`, m: M('Line up and wait runway ', R, ', ', CS, '.') } }); }
+      this.atc('TWR', m, delay, () => this.setPhase('lineup'), { reply: true, rb: { label: `line up and wait ${E.ident}`, m: M('Line up and wait runway ', R, ', ', CS, '.'), mEs: M('Me alineo y espero, pista ', this.rwyEsM(E.ident), ', ', this.CSp(), '.') } }); return; }
+    const m = this.pick('luaw', [M('runway ', R, ', line up and wait.'), M('line up and wait, runway ', R, '.'), M('runway ', R, ', line up.')]); this.atc('TWR', M(CS, ', ', id, m), delay, () => this.setPhase('lineup'), { reply: true, rb: { label: `line up and wait ${E.ident}`, m: M('Line up and wait runway ', R, ', ', CS, '.'), mEs: M('Me alineo y espero, pista ', this.rwyEsM(E.ident), ', ', this.CSp(), '.') } }); }
   clearTakeoff(delay, id = '') {
     const E = this.o.depEnd, CS = this.CSm(), R = this.rwyM(E.ident), lg = aptLang(this.dep);
     const calm = this.wx().kt < 3 && Math.random() < 0.5; // a calm wind is often simply not mentioned
     if (lg !== 'en') { const CL = this.csM2(lg), RL = this.rwyL(E.ident, lg), wp = calm ? null : this.windL(this.dep, lg);
       const m = lg === 'es' ? M(CL, ', ', id, wp ? M(wp, ', ') : '', 'pista ', RL, ', autorizado a despegar.')
         : M(CL, ', ', id, wp ? M(wp, ', ') : '', '활주로 ', RL, ', 이륙을 허가합니다.'); m.lang = lg;
-      this.atc('TWR', m, delay, () => { this.setPhase('takeoff_clr'); this.flags.tkoClr = true; }, { reply: true, rb: { label: `cleared for takeoff ${E.ident}`, m: M('Cleared for takeoff runway ', R, ', ', CS, '.') } }); return; }
+      this.atc('TWR', m, delay, () => { this.setPhase('takeoff_clr'); this.flags.tkoClr = true; }, { reply: true, rb: { label: `cleared for takeoff ${E.ident}`, m: M('Cleared for takeoff runway ', R, ', ', CS, '.'), mEs: M('Autorizado a despegar, pista ', this.rwyEsM(E.ident), ', ', this.CSp(), '.') } }); return; }
     const wp = calm ? null : this.windM();
     const m = Math.random() < 0.55 ? M(CS, ', ', id, wp ? M(wp, ', ') : '', 'runway ', R, ', cleared for takeoff.')
       : M(CS, ', ', id, 'runway ', R, ', cleared for takeoff', wp ? M(', ', wp) : '', '.');
-    this.atc('TWR', m, delay, () => { this.setPhase('takeoff_clr'); this.flags.tkoClr = true; }, { reply: true, rb: { label: `cleared for takeoff ${E.ident}`, m: M('Cleared for takeoff runway ', R, ', ', CS, '.') } });
+    this.atc('TWR', m, delay, () => { this.setPhase('takeoff_clr'); this.flags.tkoClr = true; }, { reply: true, rb: { label: `cleared for takeoff ${E.ident}`, m: M('Cleared for takeoff runway ', R, ', ', CS, '.'), mEs: M('Autorizado a despegar, pista ', this.rwyEsM(E.ident), ', ', this.CSp(), '.') } });
   }
   clearLanding(delay, pre) {
     const re = this.o.ctx.arrEnd(), CS = this.CSm(), R = this.rwyM(re.ident), lg = aptLang(this.arr);
@@ -468,14 +517,14 @@ export class ATC {
       const preL = pre ? (lg === 'es' ? '¿me recibe? ' : '잘 들리십니까? ') : '';
       const m = lg === 'es' ? M(CL, ', ', this.idM('TWR'), preL, !pre && !this.flags.emer && Math.random() < 0.3 ? 'es el número uno, ' : '', wp ? M(wp, ', ') : '', 'pista ', RL, ', autorizado a aterrizar', emer, '.')
         : M(CL, ', ', this.idM('TWR'), preL, wp ? M(wp, ', ') : '', '활주로 ', RL, ', 착륙을 허가합니다', emer, '.'); m.lang = lg;
-      this.atc('TWR', m, delay, () => { this.setPhase('land_clr'); this.ho = null; }, { reply: true, rb: { label: `cleared to land ${re.ident}`, m: M('Cleared to land runway ', R, ', ', CS, '.') } }); return; }
+      this.atc('TWR', m, delay, () => { this.setPhase('land_clr'); this.ho = null; }, { reply: true, rb: { label: `cleared to land ${re.ident}`, m: M('Cleared to land runway ', R, ', ', CS, '.'), mEs: M('Autorizado a aterrizar, pista ', this.rwyEsM(re.ident), ', ', this.CSp(), '.') } }); return; }
     const wp = calm ? null : this.windM();
     const emer = this.flags.emer ? ', fire and rescue are standing by' : '';
     const shape = Math.random();
     const m = shape < 0.3 && !pre && !this.flags.emer ? M(CS, ', ', this.idM('TWR'), 'you\'re number one, ', wp ? M(wp, ', ') : '', 'runway ', R, ', cleared to land.')
       : shape < 0.6 ? M(CS, ', ', this.idM('TWR'), pre || '', 'runway ', R, ', cleared to land', wp ? M(', ', wp) : '', emer, '.')
       : M(CS, ', ', this.idM('TWR'), pre || '', wp ? M(wp, ', ') : '', 'runway ', R, ', cleared to land', emer, '.');
-    this.atc('TWR', m, delay, () => { this.setPhase('land_clr'); this.ho = null; }, { reply: true, rb: { label: `cleared to land ${re.ident}`, m: M('Cleared to land runway ', R, ', ', CS, '.') } });
+    this.atc('TWR', m, delay, () => { this.setPhase('land_clr'); this.ho = null; }, { reply: true, rb: { label: `cleared to land ${re.ident}`, m: M('Cleared to land runway ', R, ', ', CS, '.'), mEs: M('Autorizado a aterrizar, pista ', this.rwyEsM(re.ident), ', ', this.CSp(), '.') } });
   }
   // direct to a real navaid near the destination when there is one, else a vector toward it
   routeInstr(s) {
@@ -484,26 +533,27 @@ export class ATC {
     const h = Math.round(brg / 5) * 5; return { m: this.hdgM(h, s.trk), label: 'heading ' + hdgD(h), hdg: h, fix: null };
   }
   checkIn() {
-    const h = this.ho; if (!h) return; const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(); const F = this.fac(h.to, h.apt), old = this.fac(h.from);
-    if (!h.skipBye) this.me(h.from, M(this.freqM(F), ', ', Math.random() < 0.75 ? this.bye(old.apt) + ', ' : '', CS, '.'));
+    const h = this.ho; if (!h) return; const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), ES = this.pilotSpanish(), CPS = this.CSp(); const F = this.fac(h.to, h.apt), old = this.fac(h.from);
+    if (!h.skipBye) this.me(h.from, ES ? M(this.freqEsM(F), ', ', Math.random() < 0.75 ? this.byeEs() + ', ' : '', CPS, '.') : M(this.freqM(F), ', ', Math.random() < 0.75 ? this.bye(old.apt) + ', ' : '', CS, '.'));
     this.ho = null; if (h.to === 'CTR' && h.apt) this.ctrApt = h.apt; const d = h.skipBye ? 0 : 1.1;
     switch (h.to) {
       case 'TWR': if (DEP_PH.has(this.phase)) { this.reqDeparture(true); return; }
-        { const re = c.arrEnd(), nm = Math.max(1, Math.round(s.thrNm)); this.me('TWR', M(F.name, ', ', CS, ', ', [String(nm), digits(nm)], ' mile final, I L S runway ', this.rwyM(re.ident), '.'), d);
+        { const re = c.arrEnd(), nm = Math.max(1, Math.round(s.thrNm)); this.me('TWR', ES ? M(F.name, ', ', CPS, ', a ', [String(nm), numEsW(nm)], ' millas en final, aproximación I L S a la pista ', this.rwyEsM(re.ident), '.') : M(F.name, ', ', CS, ', ', [String(nm), digits(nm)], ' mile final, I L S runway ', this.rwyM(re.ident), '.'), d);
           const b = c.runwayBusy(this.arr, re);
           if (b.busy) this.atc('TWR', M(CS, ', ', this.idM('TWR'), this.pick('cont', ['continue approach, ', 'continue inbound, ', 'continue the approach, ']), b.why, '.'), 2, () => this.setPhase('twr_continue'), { reply: true, instr: true });
           else this.clearLanding(2); return; }
       case 'DEP': {
-        this.me('DEP', M(F.name, ', ', CS, ', ', this.maybeHi(0.3), this.altRep(s, this.alt?.ft ?? this.init, this.dep), '.'), d);
+        this.me('DEP', ES ? M(F.name, ', ', CPS, ', ', this.maybeHiEs(0.3), this.altRepEs(s, this.alt?.ft ?? this.init, this.dep), '.') : M(F.name, ', ', CS, ', ', this.maybeHi(0.3), this.altRep(s, this.alt?.ft ?? this.init, this.dep), '.'), d);
         const ri = this.routeInstr(s), climb = this.depTop;
         const ins = M(this.cmdAlt(climb, s.altFt, this.dep), ', ', ri.m);
+        const insEs = M(this.cmdAltEs(climb, s.altFt, this.dep), ', ', this.routeInstrEs(s));
         this.atc('DEP', M(CS, ', ', this.idM('DEP'), this.pick('rcD', this.usA(this.dep) ? ['radar contact, ', 'radar contact, ', 'roger, radar contact, '] : ['radar contact, ', 'identified, ', 'radar contact, ']), ins, '.'), 2, () => this.setPhase('dep'),
-          { reply: true, rb: { label: `${altD(climb, this.ta(this.dep))}, ${ri.label}`, m: M(cap(ins), ', ', CS, '.'), fcu: { alt: climb, hdg: ri.hdg }, then: () => { this.assignAlt(climb); this.assignHdg(ri.hdg, ri.fix); } } });
+          { reply: true, rb: { label: `${altD(climb, this.ta(this.dep))}, ${ri.label}`, m: M(cap(ins), ', ', CS, '.'), mEs: M(insEs, ', ', CPS, '.'), fcu: { alt: climb, hdg: ri.hdg }, then: () => { this.assignAlt(climb); this.assignHdg(ri.hdg, ri.fix); } } });
         return; }
       case 'CTR': {
-        const A = this.ctrApt; this.me('CTR', M(F.name, ', ', CS, ', ', this.altRep(s, this.alt?.ft ?? null, A), '.'), d);
+        const A = this.ctrApt; this.me('CTR', ES ? M(F.name, ', ', CPS, ', ', this.altRepEs(s, this.alt?.ft ?? null, A), '.') : M(F.name, ', ', CS, ', ', this.altRep(s, this.alt?.ft ?? null, A), '.'), d);
         if (!this.flags.climbed && this.cruise > s.altFt + 500) { this.flags.climbed = true; const ins = this.cmdAlt(this.cruise, s.altFt, A);
-          this.atc('CTR', M(CS, ', ', this.idM('CTR', A), 'roger, ', ins, '.'), 2, () => this.setPhase('ctr'), { reply: true, rb: { label: altD(this.cruise, this.ta(A)), m: M(cap(ins), ', ', CS, '.'), fcu: { alt: this.cruise }, then: () => this.assignAlt(this.cruise) } }); }
+          this.atc('CTR', M(CS, ', ', this.idM('CTR', A), 'roger, ', ins, '.'), 2, () => this.setPhase('ctr'), { reply: true, rb: { label: altD(this.cruise, this.ta(A)), m: M(cap(ins), ', ', CS, '.'), mEs: M(this.cmdAltEs(this.cruise, s.altFt, A), ', ', CPS, '.'), fcu: { alt: this.cruise }, then: () => this.assignAlt(this.cruise) } }); }
         else { this.flags.climbed = true; const lgA = aptLang(A);
           if (lgA !== 'en') { const ack = M(this.csM2(lgA), ', ', this.idM('CTR', A), lgA === 'es' ? this.pick('ctrREs', ['recibido.', 'contacto radar.']) : this.pick('ctrRKo', ['알겠습니다.', '레이더 접촉했습니다.'])); ack.lang = lgA; this.atc('CTR', ack, 2, () => this.setPhase('ctr'), { reply: true }); }
           else this.atc('CTR', M(CS, ', ', this.idM('CTR', A), (this.usA(A) && Math.random() < 0.5 ? M('roger, ', this.city(A), ' altimeter ', ['29.92', 'two niner niner two'], '.') : this.pick('ctrR', ['roger.', 'radar contact.']))), 2, () => this.setPhase('ctr'), { reply: true });
@@ -511,30 +561,31 @@ export class ATC {
         return; }
       case 'APP': {
         const A = this.arr, re = c.arrEnd(), R = this.rwyM(re.ident);
-        this.me('APP', M(F.name, ', ', CS, ', ', this.flags.ga ? M('missed approach, ', this.altRep(s, this.alt?.ft ?? this.appAlt, A)) : this.altRep(s, this.alt?.ft ?? null, A), this.flags.ga ? '' : this.infoM(A), '.'), d);
+        this.me('APP', ES ? M(F.name, ', ', CPS, ', ', this.flags.ga ? M('aproximación frustrada, ', this.altRepEs(s, this.alt?.ft ?? this.appAlt, A)) : this.altRepEs(s, this.alt?.ft ?? null, A), this.flags.ga ? '' : this.infoEsM(A), '.') : M(F.name, ', ', CS, ', ', this.flags.ga ? M('missed approach, ', this.altRep(s, this.alt?.ft ?? this.appAlt, A)) : this.altRep(s, this.alt?.ft ?? null, A), this.flags.ga ? '' : this.infoM(A), '.'), d);
         const g = c.approachGeo(); const tgtAlt = this.appAlt;
         const onRoute = c.onRoute && c.onRoute(); const hd = Math.round(g.ipHdg / 5) * 5; const spd = !this.flags.ga && s.ias > 228 ? 210 : null;
         const ins = M(tgtAlt < s.altFt - 300 ? M(this.cmdAlt(tgtAlt, s.altFt, A), ', ') : M('maintain ', this.Am(tgtAlt, A), ', '), onRoute ? M('continue on your route, expect the I L S runway ', R) : M(this.hdgM(hd, s.trk), ', vectors I L S runway ', R), spd ? M(', reduce speed to ', [spd + ' kt', digits(spd) + ' knots']) : '');
+        const insEs = M(tgtAlt < s.altFt - 300 ? M(this.cmdAltEs(tgtAlt, s.altFt, A), ', ') : M('mantenga ', this.altEsM(tgtAlt, A), ', '), onRoute ? M('continúe en su ruta, espere el I L S de la pista ', this.rwyEsM(re.ident)) : M(this.hdgEsM(hd, s.trk), ', vectores para el I L S de la pista ', this.rwyEsM(re.ident)), spd ? M(', reduzca la velocidad a ', this.spdEsM(spd)) : '');
         this.atc('APP', M(CS, ', ', this.idM('APP'), this.flags.ga ? 'radar contact. ' : M(this.infoChk(A), this.pick('appLead', ['radar contact, ', 'roger, ', ''])), ins, '.'), 2.2, () => { this.setPhase('app'); this.flags.vecT = this.t; },
-          { reply: true, rb: { label: `${altD(tgtAlt, this.ta(A))}${onRoute ? ', own navigation' : ', heading ' + hdgD(hd)}${spd ? ', ' + spd + ' kt' : ''}`, m: M(cap(ins), ', ', CS, '.'), fcu: { alt: tgtAlt, hdg: onRoute ? null : hd, spd }, then: () => { this.assignAlt(tgtAlt); this.assignHdg(onRoute ? null : hd); this.assignSpd(spd); } } });
+          { reply: true, rb: { label: `${altD(tgtAlt, this.ta(A))}${onRoute ? ', own navigation' : ', heading ' + hdgD(hd)}${spd ? ', ' + spd + ' kt' : ''}`, m: M(cap(ins), ', ', CS, '.'), mEs: M(insEs, ', ', CPS, '.'), fcu: { alt: tgtAlt, hdg: onRoute ? null : hd, spd }, then: () => { this.assignAlt(tgtAlt); this.assignHdg(onRoute ? null : hd); this.assignSpd(spd); } } });
         this.flags.ga = false; return; }
       case 'GND': {
-        const A = this.arr, re = c.arrEnd(), ex = this.exitName; this.me('GND', M(F.name, ', ', CS, ', clear of runway ', this.rwyM(re.ident), ex ? M(' at ', [ex, twyS(ex)]) : '', ', request taxi to the gate.'), d);
-        const r = c.taxiIn(); this.taxiRoute = r; const T = r.via.map(n => [n, twyS(n)]).flatMap((x, i) => i ? [', ', x] : [x]);
+        const A = this.arr, re = c.arrEnd(), ex = this.exitName; this.me('GND', ES ? M(F.name, ', ', CPS, ', libre de la pista ', this.rwyEsM(re.ident), ex ? M(' por ', [ex, this.twyEs(ex)]) : '', ', solicito rodaje a la puerta.') : M(F.name, ', ', CS, ', clear of runway ', this.rwyM(re.ident), ex ? M(' at ', [ex, twyS(ex)]) : '', ', request taxi to the gate.'), d);
+        const r = c.taxiIn(); this.taxiRoute = r; const T = r.via.map(n => [n, twyS(n)]).flatMap((x, i) => i ? [', ', x] : [x]); const TE = r.via.map(n => [n, this.twyEs(n)]).flatMap((x, i) => i ? [', ', x] : [x]);
         const ins = M('taxi to gate ', [r.gate, digits(r.gate)], ' via ', ...T);
         this.atc('GND', M(CS, ', ', this.idM('GND'), this.pick('welc', aptLang(A) === 'es' ? ['', 'bienvenido a ' + this.city(A) + ', '] : ['', 'welcome to ' + this.city(A) + ', ']), ins, '.'), 2, () => { c.showTaxi(r); this.setPhase('taxi_in'); },
-          { reply: true, rb: { label: `gate ${r.gate} via ${r.via.join(', ')}`, m: M('Taxi to gate ', [r.gate, digits(r.gate)], ' via ', ...T, ', ', CS, '.') } });
+          { reply: true, rb: { label: `gate ${r.gate} via ${r.via.join(', ')}`, m: M('Taxi to gate ', [r.gate, digits(r.gate)], ' via ', ...T, ', ', CS, '.'), mEs: M('Rodaje a la puerta ', [r.gate, digitsEs(r.gate)], ' por ', ...TE, ', ', CPS, '.') } });
         return; }
     }
   }
   reqDescent() {
-    const s = this.ctxS(), CS = this.CSm(), A = this.ctrApt; this.me('CTR', M(this.fac('CTR').name, ', ', CS, ', ', this.altRep(s, null, A), ', request descent.'));
+    const s = this.ctxS(), CS = this.CSm(), A = this.ctrApt; this.me('CTR', this.pilotSpanish() ? M(this.fac('CTR').name, ', ', this.CSp(), ', ', this.altRepEs(s, null, A), ', solicito descenso.') : M(this.fac('CTR').name, ', ', CS, ', ', this.altRep(s, null, A), ', request descent.'));
     this.descend(1.8, true);
   }
   descend(delay, reply) {
     const s = this.ctxS(), CS = this.CSm(), A = this.ctrApt; this.flags.desc = true; const tgt = Math.min(this.bottom, r100(s.altFt) - 1000); if (tgt < this.appAlt) return;
     const ins = M(this.cmdAlt(tgt, s.altFt, A), tgt < this.ta(A) ? M(', ', this.city(this.arr), ' ', this.altimM(this.arr)) : '');
-    this.atc('CTR', M(CS, ', ', ins, '.'), delay, null, { reply, rb: { label: altD(tgt, this.ta(A)), m: M(this.cmdAlt(tgt, s.altFt, A), ', ', CS, '.'), fcu: { alt: tgt }, then: () => this.assignAlt(tgt) } });
+    this.atc('CTR', M(CS, ', ', ins, '.'), delay, null, { reply, rb: { label: altD(tgt, this.ta(A)), m: M(this.cmdAlt(tgt, s.altFt, A), ', ', CS, '.'), mEs: M(this.cmdAltEs(tgt, s.altFt, A), ', ', this.CSp(), '.'), fcu: { alt: tgt }, then: () => this.assignAlt(tgt) } });
   }
   // ---------------------------------------------------------------- ATC follows the flight and calls you
   follow(dt) {
@@ -550,14 +601,14 @@ export class ATC {
     if (this.queue.length || this.tx) return; // proactive calls wait for a quiet frequency
     const E = this.o.depEnd, R = this.rwyM(E.ident);
     // departure ground / tower
-    if (p === 'pushed' && s.onGround && s.gsKt > 4 && !this.flags.taxiNag && !this.rb) { this.flags.taxiNag = true; if (easy) this.issueTaxi(0.8, ''); else this.atc('GND', M(CS, ', ', this.idM('GND'), 'hold position, you are not cleared to taxi. Advise ready to taxi.'), 0.8, null, { rb: { label: 'hold position', m: M('Holding position, ', CS, '.') } }); return; }
+    if (p === 'pushed' && s.onGround && s.gsKt > 4 && !this.flags.taxiNag && !this.rb) { this.flags.taxiNag = true; if (easy) this.issueTaxi(0.8, ''); else this.atc('GND', M(CS, ', ', this.idM('GND'), 'hold position, you are not cleared to taxi. Advise ready to taxi.'), 0.8, null, { rb: { label: 'hold position', m: M('Holding position, ', CS, '.'), mEs: M('Mantengo posición, ', this.CSp(), '.') } }); return; }
     if (p === 'taxiing' && !this.ho && !this.rb && (c.nearHold() || s.onDepRwy) && !this.flags.twrHo) { this.flags.twrHo = true; this.atc('GND', M(CS, ', ', this.pick('gTwr', ['', 'holding short, ']), this.contactM('TWR', this.dep), '.'), 0.8, () => this.setPhase('to_twr'), { ho: { to: 'TWR', from: 'GND' } }); return; }
     const preClr = ['pushed', 'taxiing', 'to_twr', 'twr_hold', 'gate', 'clr_ok'].includes(p);
     if (preClr && s.onGround && s.onDepRwy && !this.flags.incur) { // on the runway without a clearance
       this.flags.incur = true; this.ho = null; this.rb = null;
       if (s.gsKt > 30 && s.tl > 0.5 && (easy || s.gsKt > 80)) { if (easy) this.clearTakeoff(0.3); else { this.flags.deviation = true; this.setPhase('takeoff_clr'); } return; }
       this.atc('TWR', M(CS, ', ', this.idM('TWR', this.dep), easy ? M('you have entered runway ', R, ' without a clearance. Hold position, I will have a clearance for you shortly.') : s.gsKt > 30 ? M('stop immediately, I say again, stop immediately! You are not cleared for takeoff.') : M('hold position! You are not cleared onto runway ', R, '.')), 0.3,
-        () => this.setPhase('twr_hold'), { rb: { label: 'hold position', m: M('Holding position, ', CS, '.') } });
+        () => this.setPhase('twr_hold'), { rb: { label: 'hold position', m: M('Holding position, ', CS, '.'), mEs: M('Mantengo posición, ', this.CSp(), '.') } });
       return;
     }
     if (p === 'twr_hold' && this.t - this.phT > 4 && !this.rb && !c.runwayBusy(this.dep, E).busy && !this.flags.luaw) { this.flags.luaw = true; this.lineUp(0.6); return; }
@@ -581,11 +632,12 @@ export class ATC {
       if (!this.flags.appClr && (g.ipNm < 4.5 || (g.thrNm > 7 && g.thrNm < 24 && Math.abs(g.crossNm) < 5 && Math.abs(wrap180(s.trk - re.hdg)) < 100))) {
         const onRoute = c.onRoute && c.onRoute(); const vh = c.vectorHeading(); const alt = this.appAlt; const aligned = Math.abs(g.crossNm) < 1 && Math.abs(wrap180(s.trk - re.hdg)) < 25;
         const ins = onRoute ? M(this.cmdAlt(alt, s.altFt, A), ', cleared I L S runway ', R2, ' approach') : M(aligned ? '' : M(this.hdgM(vh.hdg, s.trk), ', '), s.altFt > alt + 300 ? this.cmdAlt(alt, s.altFt, A) : M('maintain ', this.Am(alt, A)), ' until established on the localizer, cleared I L S runway ', R2, ' approach');
+        const insEs = onRoute ? M(this.cmdAltEs(alt, s.altFt, A), ', autorizado para la aproximación I L S a la pista ', this.rwyEsM(re.ident)) : M(aligned ? '' : M(this.hdgEsM(vh.hdg, s.trk), ', '), s.altFt > alt + 300 ? this.cmdAltEs(alt, s.altFt, A) : M('mantenga ', this.altEsM(alt, A)), ' hasta establecerse en el localizador, autorizado para la aproximación I L S a la pista ', this.rwyEsM(re.ident));
         this.atc('APP', M(CS, ', ', ins, '.'), 0.6, null,
-          { rb: { label: `cleared ILS ${re.ident}`, m: M(cap(ins), ', ', CS, '.'), fcu: { alt, hdg: onRoute ? null : vh.hdg }, then: () => { this.flags.appClr = true; c.armIls(onRoute ? null : vh.hdg, alt); this.assignAlt(alt); this.assignHdg(null); this.assignSpd(null); } } });
+          { rb: { label: `cleared ILS ${re.ident}`, m: M(cap(ins), ', ', CS, '.'), mEs: M(insEs, ', ', this.CSp(), '.'), fcu: { alt, hdg: onRoute ? null : vh.hdg }, then: () => { this.flags.appClr = true; c.armIls(onRoute ? null : vh.hdg, alt); this.assignAlt(alt); this.assignHdg(null); this.assignSpd(null); } } });
         return;
       }
-      if (!this.flags.appClr && this.hdgA && this.t - (this.flags.vecT || 0) > 50) { const hd = Math.round(g.ipHdg / 5) * 5; if (Math.abs(wrap180(hd - this.hdgA.hdg)) > 25) { this.flags.vecT = this.t; this.atc('APP', M(CS, ', ', this.hdgM(hd, s.trk), '.'), 0.5, null, { rb: { label: 'heading ' + hdgD(hd), m: M(this.hdgM(hd, s.trk), ', ', CS, '.'), fcu: { hdg: hd }, then: () => this.assignHdg(hd) } }); return; } }
+      if (!this.flags.appClr && this.hdgA && this.t - (this.flags.vecT || 0) > 50) { const hd = Math.round(g.ipHdg / 5) * 5; if (Math.abs(wrap180(hd - this.hdgA.hdg)) > 25) { this.flags.vecT = this.t; this.atc('APP', M(CS, ', ', this.hdgM(hd, s.trk), '.'), 0.5, null, { rb: { label: 'heading ' + hdgD(hd), m: M(this.hdgM(hd, s.trk), ', ', CS, '.'), mEs: M(this.hdgEsM(hd, s.trk), ', ', this.CSp(), '.'), fcu: { hdg: hd }, then: () => this.assignHdg(hd) } }); return; } }
       if (this.flags.appClr && s.thrNm < 11 && (s.locCaptured || Math.abs(s.locDots) < 1 || s.thrNm < 6)) { this.atc('APP', M(CS, ', ', this.contactM('TWR', this.arr), '.'), 0.5, () => { this.setPhase('to_twr_arr'); this.hdgA = null; }, { ho: { to: 'TWR', from: 'APP' } }); return; }
     }
     // arrival tower: no check-in on short final, continue → land, unstable approach, go-around, vacate
@@ -629,8 +681,9 @@ export class ATC {
   goAround(cmd, why) {
     const CS = this.CSm(), re = this.o.ctx.arrEnd(), alt = this.appAlt, A = this.arr; this.flags.gaCmd = true; this.ho = null;
     const ins = M('fly runway heading, ', this.cmdAlt(alt, alt - 1, A));
+    const insEs = M('mantenga el rumbo de pista, ', this.cmdAltEs(alt, alt - 1, A));
     const m = cmd ? M(CS, ', go around, I say again, go around', why ? M(', ', why) : '', '. ', ins, '.') : M(CS, ', ', this.pick('gaR', ['roger, ', 'roger the go-around, ']), ins, '.');
-    this.atc('TWR', m, cmd ? 0.1 : 1.2, () => this.setPhase('go_around'), { rb: { label: 'go around, runway heading, ' + altD(alt, this.ta(A)), m: M(cmd ? M('Going around, ', ins) : cap(ins), ', ', CS, '.'), fcu: { alt, hdg: Math.round(re.hdg) }, then: () => { this.assignAlt(alt); } } });
+    this.atc('TWR', m, cmd ? 0.1 : 1.2, () => this.setPhase('go_around'), { rb: { label: 'go around, runway heading, ' + altD(alt, this.ta(A)), m: M(cmd ? M('Going around, ', ins) : cap(ins), ', ', CS, '.'), mEs: M(cmd ? M('Frustrando, ', insEs) : insEs, ', ', this.CSp(), '.'), fcu: { alt, hdg: Math.round(re.hdg) }, then: () => { this.assignAlt(alt); } } });
   }
   // readback / handoff reminders and altitude / heading / speed checks
   monitorTimers(s, easy, dt) {
@@ -656,12 +709,12 @@ export class ATC {
   setAssigned(ft) { this.assignAlt(ft); }
   // ---------------------------------------------------------------- emergencies: MAYDAY / PAN-PAN, priority handling and the nearest suitable runway
   declare(kind) {
-    const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), k = this.curK(), F = this.fac(k), em = c.emergency && c.emergency(); const may = kind === 'mayday';
+    const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), ES = this.pilotSpanish(), CPS = this.CSp(), k = this.curK(), F = this.fac(k), em = c.emergency && c.emergency(); const may = kind === 'mayday';
     const nat = em ? em.nature : may ? 'emergency' : 'technical problem'; const div = c.divert ? c.divert().apt : this.arr; const back = div === this.dep;
     const fm = c.fuelMin ? c.fuelMin() : 120, fh = Math.floor(fm / 60), fmm = Math.round((fm % 60) / 5) * 5; const souls = c.souls ? c.souls() : 156;
     this.flags.emer = kind; this.flags.emerT = this.t; this.rb = null; this.ho = null; this.queue = this.queue.filter(x => !x.chatter); this.dropChatter();
     const word = may ? ['MAYDAY, MAYDAY, MAYDAY', 'Mayday, Mayday, Mayday'] : ['PAN-PAN, PAN-PAN, PAN-PAN', 'Pan pan, pan pan, pan pan'];
-    this.me(k, M(word, ', ', F.name, ', ', CS, ', ', nat, ', ', s.onGround ? 'stopping on the runway' : back ? 'request immediate return to ' + this.city(div) : 'request diversion to ' + this.city(div), s.onGround ? '' : M(', ', this.altRep(s, this.alt?.ft ?? null)), ', ', [souls + ' souls on board', souls + ' souls on board'], ', fuel ', [`${fh} h ${String(fmm).padStart(2, '0')} min`, `${fh ? fh + (fh > 1 ? ' hours ' : ' hour ') : ''}${fmm ? fmm + ' minutes' : ''}`], '.'));
+    this.me(k, ES ? M(word, ', ', F.name, ', ', CPS, ', ', this.natEs(nat), ', ', s.onGround ? 'deteniéndome en la pista' : back ? 'solicito retorno inmediato a ' + this.city(div) : 'solicito desvío a ' + this.city(div), s.onGround ? '' : M(', ', this.altRepEs(s, this.alt?.ft ?? null)), ', ', [souls + ' almas a bordo', souls + ' almas a bordo'], ', combustible ', [`${fh} h ${String(fmm).padStart(2, '0')} min`, `${fh ? numEsW(fh) + (fh > 1 ? ' horas ' : ' hora ') : ''}${fmm ? numEsW(fmm) + ' minutos' : ''}`], '.') : M(word, ', ', F.name, ', ', CS, ', ', nat, ', ', s.onGround ? 'stopping on the runway' : back ? 'request immediate return to ' + this.city(div) : 'request diversion to ' + this.city(div), s.onGround ? '' : M(', ', this.altRep(s, this.alt?.ft ?? null)), ', ', [souls + ' souls on board', souls + ' souls on board'], ', fuel ', [`${fh} h ${String(fmm).padStart(2, '0')} min`, `${fh ? fh + (fh > 1 ? ' hours ' : ' hour ') : ''}${fmm ? fmm + ' minutes' : ''}`], '.'));
     this.atc(k, M(CS, ', ', this.idM(k), 'roger ', may ? 'MAYDAY' : ['PAN-PAN', 'pan pan'], '.'), 1.4, null, { reply: true });
     if (may) this.atc(k, M('All stations, ', F.name, ', stop transmitting, MAYDAY in progress.'), 0.5, null, { reply: true });
     if (s.onGround) { this.atc(k, M(CS, ', fire and rescue are on their way. Hold position.'), 0.6, () => { c.rescue && c.rescue(); }, { reply: true }); return; }
@@ -669,13 +722,14 @@ export class ATC {
     if (div !== this.arr) { c.setArr && c.setArr(div); this.arr = div; } this.appAlt = Math.max(2000, r100(div.elevFt + 3000));
     const g = c.approachGeo(), re = c.arrEnd(), hd = Math.round(g.ipHdg / 5) * 5, tgt = s.altFt > 10300 ? Math.max(this.appAlt, 10000) : s.altFt < this.appAlt ? this.appAlt : Math.max(this.appAlt, r100(s.altFt));
     const altIns = Math.abs(tgt - s.altFt) < 300 ? M('maintain ', this.Am(tgt, div)) : this.cmdAlt(tgt, s.altFt, div);
+    const altInsEs = Math.abs(tgt - s.altFt) < 300 ? M('mantenga ', this.altEsM(tgt, div)) : this.cmdAltEs(tgt, s.altFt, div);
     const ins = M(this.hdgM(hd, s.trk), ', ', altIns, ', vectors I L S runway ', this.rwyM(re.ident), ' at ', this.city(div));
     this.atc(k, M(CS, ', ', ins, ', runway of your choice, fire and rescue will be standing by.'), 0.8, () => { this.setPhase('app'); Object.assign(this.flags, { appClr: false, vecT: this.t, advise: false, gaCmd: false, twrCall: false, vacate: false }); this.contacted.add(this.fac('APP').name); this.ctrApt = div; this.emit(); },
-      { reply: true, rb: { label: `heading ${hdgD(hd)}, ${altD(tgt, this.ta(div))}, ILS ${re.ident} ${this.city(div)}`, m: M(cap(ins), ', ', CS, '.'), fcu: { alt: tgt, hdg: hd }, then: () => { this.assignAlt(tgt); this.assignHdg(hd); } } });
+      { reply: true, rb: { label: `heading ${hdgD(hd)}, ${altD(tgt, this.ta(div))}, ILS ${re.ident} ${this.city(div)}`, m: M(cap(ins), ', ', CS, '.'), mEs: M(this.hdgEsM(hd, s.trk), ', ', altInsEs, ', vectores para el I L S de la pista ', this.rwyEsM(re.ident), ' en ', this.city(div), ', ', CPS, '.'), fcu: { alt: tgt, hdg: hd }, then: () => { this.assignAlt(tgt); this.assignHdg(hd); } } });
   }
   cancelEmer() {
     const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), k = this.curK(), F = this.fac(k), may = this.flags.emer === 'mayday';
-    this.me(k, M(CS, ', cancel ', may ? 'MAYDAY' : ['PAN-PAN', 'pan pan'], s.onGround ? ', we can vacate the runway.' : ', the situation is under control.'));
+    this.me(k, this.pilotSpanish() ? M(this.CSp(), ', cancelo el ', may ? 'MAYDAY' : ['PAN-PAN', 'pan pan'], s.onGround ? ', puedo liberar la pista.' : ', la situación está bajo control.') : M(CS, ', cancel ', may ? 'MAYDAY' : ['PAN-PAN', 'pan pan'], s.onGround ? ', we can vacate the runway.' : ', the situation is under control.'));
     this.atc(k, M(CS, ', roger, ', may ? 'MAYDAY' : ['PAN-PAN', 'pan pan'], ' cancelled.'), 1.4, null, { reply: true });
     if (may) this.atc(k, M('All stations, ', F.name, ', distress traffic ended.'), 0.5, null, { reply: true });
     this.flags.emer = null;
