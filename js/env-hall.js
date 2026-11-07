@@ -364,8 +364,34 @@ export function buildHall(opts, rnd) {
     }
     floorMat.color.copy(mat.color); crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
   };
-  crowd.commit(0);
   const spawn = dep ? { pos: W(13, F, D * 0.92), yaw: 0 } : { pos: W(dx, F, 2.0), yaw: 0 };
+  // ---- spawn keep-out (black-terminal fix, Nov 7): onfoot seeds this build with
+  // Date.now(), so every boot rolls a different crowd — and the long walker paths run
+  // straight through the landside spawn zone: a Monte Carlo of the path formulas puts a
+  // walker path inside the 4.3 m spawn disc on ~88% of rolls and within 1 m of the
+  // third-person camera's rest spot (boom 3.23 m behind the spawn) on ~63%. The boom
+  // collision grid only contains hall geometry, never people, so a walker standing on
+  // the camera eclipses the whole frame — pitch black, HUD/flow fine, any quality tier
+  // (owner's MPTO report). Guarantee the disc on every roll: relocate anyone placed
+  // inside it, push walk-path waypoints out, and break any segment that would chord
+  // through it with a pushed-out midpoint. R = 4.3 m > boom 3.23 + body radius.
+  {
+    const sx = dep ? 13 : dx, sz = dep ? D * 0.92 : 2.0, R = 4.3;
+    const pushOut = (o, kx, kz, RR = R) => { const ddx = o[kx] - sx, ddz = o[kz] - sz, d = Math.hypot(ddx, ddz); if (d >= RR) return; if (d < 1e-4) { o[kx] = sx + RR; o[kz] = sz; } else { o[kx] = sx + ddx / d * RR; o[kz] = sz + ddz / d * RR; } };
+    for (const p of crowd.p) {
+      if (Math.hypot(p.x - sx, p.z - sz) < R) { if (p.mode === 'sit') { p.mode = 'stand'; p.act = 'idle'; } pushOut(p, 'x', 'z'); }
+      if (p._home && Math.hypot(p._home[0] - sx, p._home[1] - sz) < R) { const o = { x: p._home[0], z: p._home[1] }; pushOut(o, 'x', 'z'); p._home = [o.x, o.z]; }
+      if (p.path) {
+        for (const w of p.path) { const o = { x: w[0], z: w[1] }; pushOut(o, 'x', 'z'); w[0] = o.x; w[1] = o.z; }
+        // segment repair, iterated: a pushed midpoint can leave a sub-segment dipping
+        // back under R, so overshoot inserts to R + 0.3 and repeat until clean
+        for (let pass = 0; pass < 5; pass++) { let bad = false;
+          for (let i = p.path.length - 1; i >= 0; i--) { const a = p.path[i], b = p.path[(i + 1) % p.path.length]; const abx = b[0] - a[0], abz = b[1] - a[1]; const tt = Math.max(0, Math.min(1, ((sx - a[0]) * abx + (sz - a[1]) * abz) / (abx * abx + abz * abz || 1))); const qx = a[0] + abx * tt, qz = a[1] + abz * tt; if (Math.hypot(qx - sx, qz - sz) < R) { const o = { x: qx, z: qz }; pushOut(o, 'x', 'z', R + 0.3); p.path.splice(i + 1, 0, [o.x, o.z]); bad = true; } }
+          if (!bad) break; }
+      }
+    }
+  }
+  crowd.commit(0);
   // ---- the player-facing flow contract (departures): check-in points and the security
   // process geometry, so onfoot.js can run tray -> arch -> collect and gate airside for real
   const flow = dep ? {
