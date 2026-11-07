@@ -65,19 +65,28 @@ export class PA {
       ftEn, ftEs, ftKo, cruiseEn, greet, greetEs, temp: c.temp, wxEn: w[0], wxEs: w[1], wxKo: w[2], timeEn: `${h12}:${String(t.mm).padStart(2, '0')} ${ampm}`, timeEs: `${t.h}:${String(t.mm).padStart(2, '0')}`, timeKo: `${t.h >= 12 ? '오후' : '오전'} ${h12}시 ${t.mm}분` };
     return this.c;
   }
-  voiceFor(lang) { let vs = []; try { vs = speechSynthesis.getVoices(); } catch (e) { } const rank = v => (/natural|neural/i.test(v.name) ? 3 : 0) + (/online|google/i.test(v.name) ? 2 : 0); return vs.filter(v => v.lang.toLowerCase().startsWith(lang)).sort((a, b) => rank(b) - rank(a))[0] || null; }
+  voiceFor(lang) { let vs = []; try { vs = speechSynthesis.getVoices(); } catch (e) { }
+    // reliability first, same rule as the ATC auto picker: local voices outrank network ones — the old ranking put
+    // "online / natural" network voices on top, and those silently fail on real Windows Chrome lists (that is why
+    // the English and Korean PAs were mute while the local-only Spanish pool worked). speech.js re-validates the
+    // pick at speak time and substitutes / retries if it still fails.
+    const rank = v => (v.localService ? 100 : 0) + (/natural|neural/i.test(v.name) ? 30 : 0) + (/online|google/i.test(v.name) ? 15 : 0) + (/microsoft/i.test(v.name) ? 8 : 0);
+    const pool = vs.filter(v => v.lang.toLowerCase().replace(/_/g, '-').startsWith(lang)).sort((a, b) => rank(b) - rank(a));
+    const bad = v => this.speech && this.speech.voiceBad && this.speech.voiceBad(v);
+    return pool.find(v => !bad(v)) || pool[0] || null; }
   // returns { text, lang actually used, note }
   announce(id, custom) {
     const L = PA_LINES.find(l => l.id === id) || PA_EMERG.find(l => l.id === id); let lang = this.lang, text, note = '';
     if (custom != null) text = custom; else { const f = L[lang] || L.en; text = f(this.c || {}); if (!L[lang]) { lang = 'en'; note = 'No ' + this.lang.toUpperCase() + ' version of this line; spoken in English.'; } }
     if (custom != null) lang = /[\uac00-\ud7af]/.test(custom) ? 'ko' : /[ñáéíóú¿¡]/i.test(custom) ? 'es' : lang === 'ko' ? 'en' : lang; // typed text: pick the voice from the script
     let voice = this.voiceFor(lang === 'ko' ? 'ko' : lang === 'es' ? 'es' : 'en');
-    if (!voice && lang !== 'en' && custom == null) { note = `No ${lang === 'ko' ? 'Korean' : 'Spanish'} voice is installed in this browser; shown in ${lang === 'ko' ? 'Korean' : 'Spanish'}, spoken in English.`; voice = this.voiceFor('en'); text = (L.en)(this.c || {}) ; }
+    let fbEn = false; // the SPOKEN language: when no voice exists for the shown language, the text is swapped to English — the speech lang tag and voice must follow the text, not the display language
+    if (!voice && lang !== 'en' && custom == null) { note = `No ${lang === 'ko' ? 'Korean' : 'Spanish'} voice is installed in this browser; shown in ${lang === 'ko' ? 'Korean' : 'Spanish'}, spoken in English.`; voice = this.voiceFor('en'); text = (L.en)(this.c || {}); fbEn = true; }
     this.log.push({ id: id || 'custom', text, lang, t: Date.now() }); if (this.log.length > 30) this.log.shift();
     const A = this.audio; A && A.paChime && A.paChime();
     const said = custom != null ? custom : (L[this.lang] || L.en)(this.c || {});
     if (this.speech) { // shared speech manager: PA outranks ATC / ATIS / chatter and is never cancelled by them
-      const vl = lang === 'ko' ? 'ko' : lang === 'es' ? 'es' : 'en';
+      const vl = fbEn ? 'en' : lang === 'ko' ? 'ko' : lang === 'es' ? 'es' : 'en';
       this.speech.say({ channel: 'pa', text, display: said, who: custom != null ? 'PA · YOU' : L && L.who === 'crew' ? 'PA · PURSER' : 'PA · CAPTAIN', delay: 1.3, voice: () => this.voiceFor(vl), lang: vl === 'ko' ? 'ko-KR' : vl === 'es' ? 'es-ES' : 'en-US',
         rate: 0.95, pitch: L?.who === 'crew' ? 1.15 : 0.95, volume: Math.min(1, (A?.vol ?? 0.7) + 0.2), mute: A?.voice === false,
         onstart: () => A && A.paHiss && A.paHiss(true), onend: () => A && A.paHiss && A.paHiss(false) });
@@ -88,7 +97,8 @@ export class PA {
       try {
         if (A?.voice !== false && 'speechSynthesis' in window) {
           const chunks = text.split(/(?<=[.。])\s*/).filter(Boolean);
-          chunks.forEach((c, i) => { const u = new SpeechSynthesisUtterance(c); try { if (voice) u.voice = voice; } catch (e) { } u.lang = voice?.lang || (lang === 'ko' ? 'ko-KR' : lang === 'es' ? 'es-ES' : 'en-US'); u.rate = 0.95; u.pitch = L?.who === 'crew' ? 1.15 : 0.95; u.volume = Math.min(1, (A?.vol ?? 0.7) + 0.2); if (i === chunks.length - 1) { u.onend = fin; u.onerror = fin; } speechSynthesis.speak(u); });
+          const spL = fbEn ? 'en' : lang;
+          chunks.forEach((c, i) => { const u = new SpeechSynthesisUtterance(c); const tag = spL === 'ko' ? 'ko-KR' : spL === 'es' ? 'es-ES' : 'en-US'; try { if (voice && String(voice.lang || '').toLowerCase().slice(0, 2) === spL) u.voice = voice; } catch (e) { } u.lang = tag; u.rate = 0.95; u.pitch = L?.who === 'crew' ? 1.15 : 0.95; u.volume = Math.min(1, (A?.vol ?? 0.7) + 0.2); if (i === chunks.length - 1) { u.onend = fin; u.onerror = fin; } speechSynthesis.speak(u); });
         }
       } catch (e) { }
       setTimeout(fin, Math.min(30000, 1500 + text.length * 70));

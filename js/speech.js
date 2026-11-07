@@ -22,7 +22,7 @@ export class Speech {
   constructor() {
     this.items = []; this.cur = null; this.n = 0; this.tok = 0; this.timer = null; this.watch = null; this.wait = null;
     this.enabled = true; this.available = typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
-    this.silent = false; this.quick = 0; this.listeners = []; this.log = [];
+    this.silent = false; this.quick = 0; this.listeners = []; this.log = []; this.badVoices = new Set(); // voices that failed on this machine (session only)
     if (this.available) { try { const v = () => this.emit('voices'); speechSynthesis.addEventListener ? speechSynthesis.addEventListener('voiceschanged', v) : (speechSynthesis.onvoiceschanged = v); } catch (e) { } }
   }
   on(f) { this.listeners.push(f); } emit(ev, it) { for (const f of this.listeners) try { f(ev, it, this); } catch (e) { } }
@@ -54,23 +54,53 @@ export class Speech {
     if (it.ready > now) { this.wait = setTimeout(() => this.pump(), it.ready - now + 5); return; }
     this.speak(it);
   }
+  // ---------------------------------------------------------------- voice resolution: never hand the browser a voice that
+  // cannot speak. Callers (ATC personas, the PA) pick voices from lists that can go stale, and on real machines the
+  // top-ranked "natural / online" voices are network voices that can fail silently — that is what muted the
+  // controllers on Auto while a hand-picked Settings voice worked. So at speak time every request is re-validated
+  // against a FRESH getVoices() (matched by name + lang, never a cached object), skipped if it already failed this
+  // session, and only used when its language matches the utterance's; otherwise the best same-language voice is
+  // substituted (local voices first — they cannot die with the network), and failing that the utterance goes out
+  // lang-only on the browser's default voice. A voice that errors or ends instantly is blocklisted and the chunk is
+  // re-spoken once with the next candidate, so one dead voice can never mute a channel.
+  voiceKey(v) { return v ? String(v.name || v.voiceURI || '') + '|' + String(v.lang || '') : ''; }
+  voiceBad(v) { return !!(v && this.badVoices.has(this.voiceKey(v))); }
+  markBad(v) { if (v) this.badVoices.add(this.voiceKey(v)); }
+  static rankV(v) { return (v.localService ? 100 : 0) + (/natural|neural/i.test(v.name) ? 30 : 0) + (/google/i.test(v.name) ? 15 : 0) + (/microsoft/i.test(v.name) ? 8 : 0) + (v.default ? 4 : 0) - (/compact|espeak/i.test(v.name) ? 60 : 0); }
+  resolveVoice(req, lang) {
+    const list = this.voices(); if (!list.length) return null;
+    const l2 = s => String(s || '').toLowerCase().replace(/_/g, '-').slice(0, 2);
+    const tgt = l2(lang || (req && req.lang) || 'en');
+    if (req && typeof req === 'object' && req.name) { const f = list.find(x => x.name === req.name && l2(x.lang) === l2(req.lang)); if (f && !this.voiceBad(f) && l2(f.lang) === tgt) return f; }
+    const pool = list.filter(v => l2(v.lang) === tgt && !this.voiceBad(v)).sort((a, b) => Speech.rankV(b) - Speech.rankV(a));
+    return pool[0] || null;
+  }
   speak(it) {
     this.cur = it; if (!it.started) { it.started = true; it.o.onstart && it.o.onstart(); this.log.push({ ch: it.channel, text: it.o.text, t: performance.now() }); if (this.log.length > 60) this.log.shift(); this.emit('start', it); }
-    const text = it.chunks[it.i] || ''; const tok = ++this.tok; const rate = it.o.rate || 1; const t0 = performance.now();
+    const text = it.chunks[it.i] || ''; const tok = ++this.tok;
+    const fin1 = (x, d) => { const n = Number(x); return Number.isFinite(n) ? n : d; };
+    const rate = Math.min(2, Math.max(0.5, fin1(it.o.rate, 1))), pitch = Math.min(2, Math.max(0, fin1(it.o.pitch, 1))), volume = Math.min(1, Math.max(0, fin1(it.o.volume, 1)));
+    const t0 = performance.now();
     const next = () => { if (tok !== this.tok) return; clearTimeout(this.timer); clearTimeout(this.watch); it.i++; if (it.i >= it.chunks.length) { this.cur = null; this.items = this.items.filter(i => i !== it); this.end(it, false); this.pump(); } else this.timer = setTimeout(() => { if (tok === this.tok) this.speak(it); }, 60); };
     this.emit('chunk', it);
     if (!text || !this.canSpeak() || it.o.mute) { this.timer = setTimeout(next, est(text, rate) * 1000); return; }
     try {
-      const u = new SpeechSynthesisUtterance(text); const v = typeof it.o.voice === 'function' ? it.o.voice() : it.o.voice;
-      try { if (v) u.voice = v; } catch (e) { } u.lang = (v && v.lang) || it.o.lang || 'en-US'; u.rate = rate; u.pitch = it.o.pitch ?? 1; u.volume = Math.min(1, it.o.volume ?? 1);
-      u.onend = () => { if (tok !== this.tok) return; if (performance.now() - t0 < 60 && text.length > 25) { if (++this.quick >= 3) this.goSilent('speech ends instantly'); } else this.quick = 0; next(); };
-      u.onerror = e => { if (tok !== this.tok) return; const er = e && e.error; if (er === 'interrupted' || er === 'canceled') return; if (er === 'not-allowed') this.goSilent('not allowed yet'); next(); };
+      const u = new SpeechSynthesisUtterance(text);
+      const want = typeof it.o.voice === 'function' ? it.o.voice() : it.o.voice;
+      const v = this.resolveVoice(want, it.o.lang); it.curVoice = v || null;
+      u.lang = it.o.lang || (v && v.lang) || 'en-US'; // the requested language rules; a voice never overrides it
+      try { if (v) u.voice = v; } catch (e) { }
+      u.rate = rate; u.pitch = pitch; u.volume = volume;
+      const retry = () => { if (it.retried) return false; it.retried = true; this.markBad(it.curVoice); clearTimeout(this.watch); this.speak(it); return true; };
+      u.onend = () => { if (tok !== this.tok) return; if (performance.now() - t0 < 60 && text.length > 25) { if (it.curVoice && retry()) return; if (++this.quick >= 3) this.goSilent('speech ends instantly'); } else this.quick = 0; next(); };
+      u.onerror = e => { if (tok !== this.tok) return; const er = e && e.error; if (er === 'interrupted' || er === 'canceled') return; if (er === 'not-allowed') { this.goSilent('not allowed yet'); next(); return; } if (it.curVoice && /synthesis|network|voice|language|audio/.test(er || '') && retry()) return; next(); };
       this.watch = setTimeout(() => { if (tok === this.tok) { try { speechSynthesis.cancel(); } catch (e) { } next(); } }, est(text, rate) * 2200 + 3000);
       speechSynthesis.speak(u);
     } catch (e) { this.timer = setTimeout(next, est(text, rate) * 1000); }
   }
   end(it, aborted) { this.emit('end', it); it.o.onend && it.o.onend(aborted); }
   goSilent(why) { if (this.silent) return; this.silent = why !== 'not allowed yet'; this.emit('silent', null); if (!this.silent) { this.silentSoft = true; } }
-  // called when the user interacts again (speech may now be allowed)
-  unlock() { if (this.silentSoft) { this.silentSoft = false; } }
+  // called when the user interacts again (speech may now be allowed); also the recovery from the instant-end
+  // latch, which used to be one-way and could mute every channel for the rest of the session
+  unlock() { this.silent = false; this.quick = 0; if (this.silentSoft) { this.silentSoft = false; } }
 }
