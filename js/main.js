@@ -1365,6 +1365,7 @@ function footInput(dt) {
   return f;
 }
 function footInteract() {
+  if (foot.interactFlow && foot.interactFlow()) return; // terminal flow (check-in / security) uses E first
   if (W.footMode === 'dep' && foot.pos.distanceTo(foot.seat) < 1.3) takeSeat();
   else if (W.footMode === 'arr' && foot.pos.distanceTo(foot.exitPos) < 6.5) finishTrip();
 }

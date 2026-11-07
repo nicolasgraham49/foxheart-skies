@@ -147,19 +147,42 @@ function fidsCanvas(o, title) {
 export function buildHall(opts, rnd) {
   const { icao, mode, gate, dest } = opts, dep = mode === 'dep';
   const at = buildAtlas(icao, gate, dest), A = at.accent; const mat = atlasMat(at.tex), floorMat = atlasMat(at.tex, { transparent: true, opacity: 0.9, depthWrite: true });
-  const F = 4.6, D = Math.max(46, opts.depth - 4), HW = 44, HC = 11, big = D >= 60, dx = opts.doorX;
+  const F = 4.6, rawD = Math.max(40, (opts.depth || 40) - 4), big = rawD >= 60;
+  const D = Math.max(46, rawD) + (big ? 6 : 4), HW = big ? 58 : 46, HC = 11, dx = opts.doorX;
+  // ---- terminal layout (Terminal rebuild): a SEQUENCE of rooms, sized by airport class.
+  // z runs from the apron glass (0) to the landside wall (D): gate pier -> airside market ->
+  // [passport] -> security room -> check-in hall. Ceiling heights step 7.2 / 11 / 4.3 / 15|13
+  // so every room reads as its own volume, and security is a real walled room whose only
+  // openings are its lanes (see the wall runs in the security section).
+  const ceilPier = 7.2, ceilAir = 11, ceilSec = dep ? 4.3 : 5.2, ceilLand = big ? 15 : 13, Hmax = ceilLand;
+  const zS = 23, sDepth = big ? 9 : 6, zPierEnd = 17;
+  const zP = big ? zS + sDepth + 1.6 : 0; // passport booth line (large airports)
+  const z0sec = big ? zP + 2.8 : 25.4, z1sec = Math.min(z0sec + (big ? 7 : 6), D * 0.68 - 0.6), zm = (z0sec + z1sec) / 2;
+  const wallOut = z0sec - 1.0, wallIn = z1sec + 1.0; // security room wall planes (airside exit / landside entry)
+  const lanes = [0, -6.5, 6.5, -19.5, 19.5, -26, 26].filter(x => Math.abs(x) < HW - 9);
+  const qRows = dep ? (big ? 3 : 1) : 0, qz = z1sec + 1.4;
+  const ckZ = Math.min(D - 5, Math.max(qz + qRows * 1.3 + 4.5, D * 0.82));
+  const ckIslands = big ? [-52, -26, 0, 26, 52] : [-26, 0, 26];
+  const kioskXZ = [[-12, ckZ - 5.5], [-9.5, ckZ - 5.5], [18, ckZ - 5.5], [20.5, ckZ - 5.5], ...(big ? [[-38, ckZ - 5.5], [38, ckZ - 5.5]] : [])];
+  const ceilAt = z => z < zPierEnd ? ceilPier : z < wallOut ? ceilAir : z < wallIn ? ceilSec : ceilLand;
   const zAxis = new THREE.Vector3(-opts.n.x, 0, -opts.n.z).normalize(), xAxis = new THREE.Vector3(0, 1, 0).cross(zAxis);
   const O = opts.O.clone(); const W = (x, y, z) => new THREE.Vector3(O.x + xAxis.x * x + zAxis.x * z, O.y + y, O.z + xAxis.z * x + zAxis.z * z);
   const group = new THREE.Group(); group.position.copy(O); group.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, new THREE.Vector3(0, 1, 0), zAxis));
   // baked light: daylight from the glass wall, skylights down the middle, ceiling line lights, darker corners and under counters
   const light = (p, n) => { const winK = Math.exp(-Math.max(0, p.z) / 17), up = Math.max(0, n.y) * 0.14, low = Math.abs(n.y) < 0.5 ? -0.14 * Math.exp(-(p.y - F) / 0.7) : 0, down = Math.max(0, -n.y) * -0.08, corner = -0.08 * Math.exp(-(HW - Math.abs(p.x)) / 3) - 0.06 * Math.exp(-(D - p.z) / 3), sky = 0.05 * Math.exp(-p.x * p.x / 300);
-    const L = 0.74 + winK * 0.34 + up + low + down + corner + sky; return [L * (1.03 + 0.09 * winK), L * (1.0 + 0.015 * winK), L * (0.95 - 0.07 * winK)]; };
+    const L = 0.74 + winK * 0.34 + up + low + down + corner + sky; let rgb = [L * (1.03 + 0.09 * winK), L * (1.0 + 0.015 * winK), L * (0.95 - 0.07 * winK)];
+    // room character (Terminal rebuild): the check-in hall gets daylight pools under its three
+    // skylight strips, the security room is dimmer and warmer, the gate pier stays soft
+    if (p.z > wallIn) { const pool = Math.exp(-Math.pow(p.x / 3.6, 2)) + Math.exp(-Math.pow((p.x - HW / 2) / 3.6, 2)) + Math.exp(-Math.pow((p.x + HW / 2) / 3.6, 2)); const g = 0.16 * pool * (n.y > 0.5 ? 1 : n.y < -0.5 ? 0.3 : 0.45); rgb = [rgb[0] + g * 1.05, rgb[1] + g, rgb[2] + g * 0.88]; }
+    else if (p.z > wallOut) rgb = [rgb[0] * 0.92, rgb[1] * 0.86, rgb[2] * 0.73];
+    else if (p.z < zPierEnd) rgb = [rgb[0] * 0.99, rgb[1] * 0.97, rgb[2] * 0.94];
+    return rgb; };
   const B = new Builder(light), BF = new Builder(light), BM = new Builder(() => 1); // main, polished floor, mirrored brights
   const wm = new Walk(); const wc = (x, z) => W(x, 0, z); const blk = (x, z, hx, hz) => wm.block(wc(x, z), xAxis, hx, hz);
   const glow = (cx, cy, cz, sx, sy, sz, tile, o) => { B.box(cx, cy, cz, sx, sy, sz, tile, o); const sw = s => s && s.replace(/py|ny/g, m => m === 'py' ? 'ny' : 'py'); const swap = obj => obj && Object.fromEntries(Object.entries(obj).map(([k, v]) => [k === 'py' ? 'ny' : k === 'ny' ? 'py' : k, v]));
     const emit = swap(o.emit), k = o.mirrorK ?? 1.6; BM.box(cx, 2 * F - cy, cz, sx, sy, sz, tile, { ...o, faces: sw(o.faces), tiles: swap(o.tiles), emit: emit && Object.fromEntries(Object.entries(emit).map(([a, v]) => [a, v * k])) }); };
   const sign = (name, x, y, z, w, h, ry = 0, e = 1.25) => glow(x, y, z, w, h, 0.12, 'steel', { ry, tiles: { pz: name }, emit: { pz: e }, faces: 'pznz' });
-  const hang = (name, x, y, z, w, h, ry = 0) => { glow(x, y, z, w, h, 0.12, 'steel', { ry, tiles: { pz: name, nz: name }, emit: { pz: 1.25, nz: 1.25 }, faces: 'pznzpyny' }); for (const s of [-1, 1]) B.box(x + Math.cos(ry) * s * w * 0.4, (y + F + HC) / 2 + h / 4, z - Math.sin(ry) * s * w * 0.4, 0.03, F + HC - y - h / 2, 0.03, 'steel'); };
+  const hang = (name, x, y, z, w, h, ry = 0, ceil = ceilAir) => { glow(x, y, z, w, h, 0.12, 'steel', { ry, tiles: { pz: name, nz: name }, emit: { pz: 1.25, nz: 1.25 }, faces: 'pznzpyny' }); for (const s of [-1, 1]) B.box(x + Math.cos(ry) * s * w * 0.4, (y + F + ceil) / 2 + h / 4, z - Math.sin(ry) * s * w * 0.4, 0.03, Math.max(0.1, F + ceil - y - h / 2), 0.03, 'steel'); };
   // ---- floor: polished stone (reflective, separate mesh), carpet at the gate
   BF.box(0, F - 0.15, D / 2, HW * 2, 0.3, D, 'stone', { faces: 'py', rep: 2 });
   B.box(0, F + 0.006, 8, HW * 2 - 2, 0.01, 14, 'carpet', { faces: 'py', rep: 3 });
@@ -167,31 +190,46 @@ export function buildHall(opts, rnd) {
   B.box(0, F + 0.25, 0.1, HW * 2, 0.5, 0.2, 'steel', { faces: 'pxnxpypz' });
   for (let x = -HW; x <= HW; x += 3) if (Math.abs(x - dx) > 2.2) B.box(x, F + HC / 2, 0.05, 0.14, HC, 0.3, 'steel');
   for (const y of [3.3, 7.4]) B.box(0, F + y, 0.05, HW * 2, 0.1, 0.24, 'steel'); B.box(0, F + HC, 0.08, HW * 2, 0.4, 0.4, 'steel');
-  // ---- walls, perforated metal ceiling with linear lights, structural columns
-  B.box(-HW, F + HC / 2, D / 2, 0.4, HC, D, 'white', { faces: 'px', rep: 3 }); B.box(HW, F + HC / 2, D / 2, 0.4, HC, D, 'white', { faces: 'nx', rep: 3 }); B.box(0, F + HC / 2, D, HW * 2, HC, 0.4, 'white', { faces: 'nz', rep: 3 });
-  B.box(0, F + HC + 0.1, D / 2, HW * 2, 0.2, D, 'perf', { faces: 'ny', rep: 1.2 });
-  for (let x = -HW + 3; x < HW - 1; x += 4.5) glow(x, F + HC - 0.02, D / 2 + 1, 0.14, 0.05, D - 6, 'light', { faces: 'ny', emit: { ny: 1.9 }, mirrorK: 1.4 });
-  for (let z = 6; z < D - 3; z += 12) B.box(0, F + HC - 0.15, z, HW * 2, 0.3, 0.25, 'steel', { faces: 'nypznz' });
+  // ---- walls rise to the tallest room; every room gets its own ceiling (Terminal rebuild)
+  B.box(-HW, F + Hmax / 2, D / 2, 0.4, Hmax, D, 'white', { faces: 'px', rep: 3 }); B.box(HW, F + Hmax / 2, D / 2, 0.4, Hmax, D, 'white', { faces: 'nx', rep: 3 }); B.box(0, F + Hmax / 2, D, HW * 2, Hmax, 0.4, 'white', { faces: 'nz', rep: 3 });
+  const slab = (z0, z1, h, tint) => B.box(0, F + h + 0.1, (z0 + z1) / 2, HW * 2, 0.2, z1 - z0, 'white', { faces: 'ny', rep: 3, tint });
+  slab(0.9, zPierEnd, ceilPier); // gate pier: a low coffered ceiling, timber beams + warm light panels
+  for (let x = -HW + 6; x < HW - 4; x += 6) B.box(x, F + ceilPier - 0.22, zPierEnd / 2, 0.28, 0.45, zPierEnd - 1.4, 'wood', { faces: 'nypznz' });
+  for (let x = -HW + 8; x < HW - 6; x += 12) for (const z of [4.2, 9.2, 14.2]) glow(x, F + ceilPier - 0.03, z, 2.6, 0.05, 0.8, 'light', { faces: 'ny', emit: { ny: 1.55 }, mirrorK: 1.2 });
+  slab(zPierEnd, wallOut, ceilAir); // airside market: folded-plate ribs ride under the slab
+  for (let z = zPierEnd + 1.4; z < wallOut - 1.2; z += 3.2) { const zm2 = z + 1.6, n1 = new THREE.Vector3(0, -0.88, 0.47).normalize(), n2 = new THREE.Vector3(0, -0.88, -0.47).normalize();
+    B.quad(new THREE.Vector3(-HW, F + ceilAir - 0.05, z), new THREE.Vector3(HW, F + ceilAir - 0.05, z), new THREE.Vector3(HW, F + ceilAir - 0.62, zm2), new THREE.Vector3(-HW, F + ceilAir - 0.62, zm2), n1, 'white', 0, 0, HW / 1.5, 0.55);
+    B.quad(new THREE.Vector3(-HW, F + ceilAir - 0.62, zm2), new THREE.Vector3(HW, F + ceilAir - 0.62, zm2), new THREE.Vector3(HW, F + ceilAir - 0.05, z + 3.2), new THREE.Vector3(-HW, F + ceilAir - 0.05, z + 3.2), n2, 'white', 0, 0, HW / 1.5, 0.55);
+    glow(0, F + ceilAir - 0.68, zm2, HW * 2 - 6, 0.04, 0.34, 'light', { faces: 'ny', emit: { ny: 1.5 }, mirrorK: 1.1 }); }
+  B.box(0, F + (ceilPier + ceilAir) / 2, zPierEnd, HW * 2, ceilAir - ceilPier, 0.3, 'white', { faces: 'pznz', rep: 3 }); // bulkhead between pier and market
+  slab(wallOut, wallIn, ceilSec, [0.6, 0.56, 0.5]); // security: low, warm and baffled
+  for (let z = wallOut + 0.7; z < wallIn - 0.4; z += 0.95) B.box(0, F + ceilSec - 0.26, z, HW * 2, 0.52, 0.09, 'wood', { faces: 'pznz' });
+  for (let z = wallOut + 1.2; z < wallIn - 0.8; z += 1.9) glow(0, F + ceilSec - 0.03, z, HW * 2 - 8, 0.04, 0.3, 'light', { faces: 'ny', emit: { ny: 1.5 }, mirrorK: 1.1 });
+  slab(wallIn, D, ceilLand); // check-in hall: tall span, beam grid and three skylight strips
+  for (let z = wallIn + 3; z < D - 1.5; z += 6) B.box(0, F + ceilLand - 0.3, z, HW * 2, 0.6, 0.35, 'white', { faces: 'nypznz', rep: 3 });
+  for (let x = -HW + 12; x < HW - 8; x += 12) B.box(x, F + ceilLand - 0.3, (wallIn + D) / 2, 0.35, 0.6, D - wallIn - 2, 'white', { faces: 'nypxnx', rep: 3 });
+  for (const sx of [-HW / 2, 0, HW / 2]) glow(sx, F + ceilLand - 0.02, (wallIn + D) / 2, 3.2, 0.05, D - wallIn - 3.5, 'light', { faces: 'ny', emit: { ny: 1.9 }, mirrorK: 1.3 });
   const cols = []; for (const x of [-22, 22]) for (const z of [18, D - 12]) cols.push([x, z]);
-  for (const [x, z] of cols) { B.box(x, F + HC / 2, z, 0.7, HC, 0.7, 'wood', { faces: 'pxnxpznz', rep: 2 }); B.box(x, F + 0.32, z, 0.86, 0.64, 0.86, 'steel', { faces: 'pxnxpznz' }); B.box(x, F + HC - 0.3, z, 0.86, 0.6, 0.86, 'wood', { faces: 'pxnxpznz' }); blk(x, z, 0.5, 0.5); }
+  for (const [x, z] of cols) { const ch = ceilAt(z); B.box(x, F + ch / 2, z, 0.7, ch, 0.7, 'wood', { faces: 'pxnxpznz', rep: 2 }); B.box(x, F + 0.32, z, 0.86, 0.64, 0.86, 'steel', { faces: 'pxnxpznz' }); B.box(x, F + ch - 0.3, z, 0.86, 0.6, 0.86, 'wood', { faces: 'pxnxpznz' }); blk(x, z, 0.5, 0.5); }
   { // suspended art over the airside promenade: a slow fan of timber + accent fins (DESIGN T-F6)
-    for (let i = 0; i < 9; i++) { const x = -8 + i * 2, z = 13.5 + Math.sin(i * 1.7) * 1.6, y = F + 7.7 + Math.cos(i * 2.3) * 0.7, len = 3.6 - Math.abs(i - 4) * 0.24; B.box(x, (y + F + HC) / 2, z, 0.03, F + HC - y - 0.1, 0.03, 'steel'); B.box(x, y, z, len, 0.09, 0.55, A.art === 'accent' ? 'accent' : A.art === 'metal' ? (i % 3 === 1 ? 'accent' : 'metal') : (i % 3 === 1 ? 'accent' : 'wood'), { ry: i * 0.35, faces: 'pynypznzpxnx' }); } }
+    for (let i = 0; i < 9; i++) { const x = -8 + i * 2, z = 20.2 + Math.sin(i * 1.7) * 1.6, y = F + 8.3 + Math.cos(i * 2.3) * 0.7, len = 3.6 - Math.abs(i - 4) * 0.24; B.box(x, (y + F + ceilAir) / 2, z, 0.03, F + ceilAir - y - 0.1, 0.03, 'steel'); B.box(x, y, z, len, 0.09, 0.55, A.art === 'accent' ? 'accent' : A.art === 'metal' ? (i % 3 === 1 ? 'accent' : 'metal') : (i % 3 === 1 ? 'accent' : 'wood'), { ry: i * 0.35, faces: 'pynypznzpxnx' }); } }
   // ---- side mezzanines with glass balustrades
   const mz0 = 18, mz1 = D - 1, gl = []; for (const s of [-1, 1]) { const x0 = s * (HW - 3.5);
     B.box(x0, F + 5.6, (mz0 + mz1) / 2, 7, 0.45, mz1 - mz0, 'white', { faces: 'pynypxnx', rep: 3 }); B.box(s * (HW - 7.02), F + 5.6, (mz0 + mz1) / 2, 0.06, 0.45, mz1 - mz0, 'steel', { faces: s > 0 ? 'nx' : 'px' });
     for (let z = mz0 + 2; z < mz1; z += 5) glow(x0, F + 5.35, z, 4, 0.04, 0.5, 'light', { faces: 'ny', emit: { ny: 1.5 } });
     B.box(s * (HW - 7.05), F + 6.95, (mz0 + mz1) / 2, 0.08, 0.06, mz1 - mz0, 'steel'); B.box(s * (HW - 7.05), F + 7.02, (mz0 + mz1) / 2, 0.17, 0.07, mz1 - mz0, 'wood', { faces: 'pypznz' }); gl.push([s * (HW - 7.05), F + 6.32, (mz0 + mz1) / 2, mz1 - mz0]); }
   // ---- gate lounge: linked seats (instanced), charging pillars, gate desk + screens, gate sign
-  if (dep) { glow(dx + 7, F + 2.6, 3.2, 3.6, 0.9, 0.12, 'steel', { tiles: { pz: 'gateDesk' }, emit: { pz: 1.25 }, faces: 'pznz' }); B.box(dx + 7, F + 0.55, 3.5, 3.4, 1.1, 0.9, 'counter', { tiles: { nz: 'counter', py: 'stone' } }); for (const o of [-0.8, 0.8]) glow(dx + 7 + o, F + 1.35, 3.3, 0.5, 0.32, 0.04, 'steel', { tiles: { pz: 'kiosk' }, emit: { pz: 1.1 }, faces: 'pznz' }); hang('signGate', dx, F + 3.9, 1.0, 4.4, 1.1); blk(dx + 7, 3.5, 1.8, 0.6); }
-  else hang('signArr', dx, F + 3.9, 1.0, 4.4, 1.1);
+  if (dep) { glow(dx + 7, F + 2.6, 3.2, 3.6, 0.9, 0.12, 'steel', { tiles: { pz: 'gateDesk' }, emit: { pz: 1.25 }, faces: 'pznz' }); B.box(dx + 7, F + 0.55, 3.5, 3.4, 1.1, 0.9, 'counter', { tiles: { nz: 'counter', py: 'stone' } }); for (const o of [-0.8, 0.8]) glow(dx + 7 + o, F + 1.35, 3.3, 0.5, 0.32, 0.04, 'steel', { tiles: { pz: 'kiosk' }, emit: { pz: 1.1 }, faces: 'pznz' }); hang('signGate', dx, F + 3.9, 1.0, 4.4, 1.1, 0, ceilPier); blk(dx + 7, 3.5, 1.8, 0.6); }
+  else hang('signArr', dx, F + 3.9, 1.0, 4.4, 1.1, 0, ceilPier);
   B.box(dx, F + HC - 0.75, 0.42, 30, 1.1, 0.22, 'accent', { faces: 'pznz' }); // gate identity band over the glass
   const bb = new Builder(() => 0.95); for (let k = 0; k < 6; k++) { const x = k * 0.62 - 1.55; bb.box(x, 0.45, 0, 0.54, 0.1, 0.52, 'leather'); bb.box(x, 0.8, 0.25, 0.54, 0.6, 0.08, 'leather', { ry: 0 }); if (k < 5) bb.box(x + 0.31, 0.62, 0.02, 0.05, 0.05, 0.45, 'steel'); }
   bb.box(0, 0.36, 0.02, 3.9, 0.06, 0.12, 'steel'); for (const x of [-1.6, 1.6]) { bb.box(x, 0.18, 0.02, 0.06, 0.36, 0.06, 'steel'); bb.box(x, 0.02, 0.02, 0.06, 0.04, 0.5, 'steel'); }
-  const benchPos = []; for (const z of [5.5, 8.6, 11.7]) for (const x of [-34, -27, -20, -13, 13, 20, 27, 34]) if (Math.abs(x - dx) > 5 && Math.abs(x - dx - 7) > 3) benchPos.push([x, z]);
+  const benchPos = []; const benchXs = []; for (let bx = 13; bx <= HW - 10; bx += 7) benchXs.push(bx); for (const z of [5.5, 8.6, 11.7]) for (const bx of benchXs) for (const x of [-bx, bx]) if (Math.abs(x - dx) > 5 && Math.abs(x - dx - 7) > 3) benchPos.push([x, z]);
   const benches = new THREE.InstancedMesh(bb.geometry(), mat, benchPos.length); const M = new THREE.Matrix4(); benchPos.forEach(([x, z], i) => { M.makeTranslation(x, F, z); benches.setMatrixAt(i, M); blk(x, z, 1.95, 0.45); }); benches.frustumCulled = false; group.add(benches);
-  for (const x of [-30.5, -16.5, 16.5, 30.5]) if (Math.abs(x - dx) > 4) { glow(x, F + 0.55, 8.6, 0.42, 1.1, 0.42, 'steel', { tiles: { pz: 'charge', nz: 'charge' }, emit: { pz: 1.05, nz: 1.05 }, faces: 'pznzpxnxpy' }); blk(x, 8.6, 0.3, 0.3); }
+  const chargeXs = [-30.5, -16.5, 16.5, 30.5]; if (big) chargeXs.push(-44.5, 44.5);
+  for (const x of chargeXs) if (Math.abs(x - dx) > 4) { glow(x, F + 0.55, 8.6, 0.42, 1.1, 0.42, 'steel', { tiles: { pz: 'charge', nz: 'charge' }, emit: { pz: 1.05, nz: 1.05 }, faces: 'pznzpxnxpy' }); blk(x, 8.6, 0.3, 0.3); }
   // ---- airside shopping street: shop + café units both sides, washrooms, café seating, wayfinding
-  const zS = 23, sDepth = big ? 9 : 6; const units = big ? [['shop0', 'cafe'], ['shop1'], ['shop4'], ['shop2'], ['wc'], ['shop6', 'cafe']] : [['shop0', 'cafe'], ['shop4']];
+  const units = big ? [['shop0', 'cafe'], ['shop1'], ['shop4'], ['shop2'], ['wc'], ['shop6', 'cafe']] : [['shop0', 'cafe'], ['shop4']];
   let ui = 0;
   for (const s of [-1, 1]) for (let x0 = big ? 5 : 31; x0 + 11 <= HW - 0.5 && ui < units.length; x0 += 11.5) {
     const [nm, kind] = units[ui++], x = s * (x0 + 5.5), zc = zS + sDepth / 2;
@@ -206,46 +244,54 @@ export function buildHall(opts, rnd) {
   if (big) B.box(0, F + 5.3, zS + sDepth / 2, HW * 2, 0.2, sDepth, 'perf', { faces: 'ny', rep: 1.2 }); // shop soffit
   hang('wayG', 0, F + 3.6, 19, 6, 1.5, 0); hang('wayWC', -18, F + 3.6, 19, 6, 1.5, 0);
   // ---- passport control (large airports), security checkpoint, queue
-  const zP = zS + sDepth + 1.6; let z0sec;
   if (big) { for (const x of [-14, -8.6, -3.2, 3.2, 8.6, 14]) { B.box(x, F + 0.6, zP, 2.2, 1.2, 2.4, 'wood', { tiles: { py: 'white' } }); B.box(x, F + 1.5, zP - 0.6, 2.2, 0.6, 0.05, 'mirror', { faces: 'pznz', tint: [0.9, 0.95, 1.0] }); B.box(x, F + 2.3, zP, 2.4, 0.12, 2.6, 'white'); blk(x, zP, 1.15, 1.25); }
-    for (const x of [-11.3, -5.9, 5.9, 11.3]) B.box(x, F + 1.0, zP + 1.2, 0.05, 2.0, 2.2, 'glassD', { faces: 'pxnx' }); hang('passport', 0, F + 4.0, zP + 2.6, 5, 1.25, 0); hang('wayP', -26, F + 4.0, zP + 2.6, 6, 1.5, 0);
-    z0sec = zP + 2.8; } else z0sec = zS + 0.6;
-  const z1sec = Math.min(z0sec + 7, D * 0.68 - 0.6), zm = (z0sec + z1sec) / 2, lanes = [0, -6.5, 6.5, -19.5, 19.5, -26, 26].filter(x => Math.abs(x) < HW - 9);
+    for (const x of [-11.3, -5.9, 5.9, 11.3]) B.box(x, F + 1.0, zP + 1.2, 0.05, 2.0, 2.2, 'glassD', { faces: 'pxnx' }); hang('passport', 0, F + 4.0, wallOut - 1.2, 5, 1.25, 0); hang('wayP', -26, F + 4.0, wallOut - 1.2, 6, 1.5, 0); }
   if (dep) for (const xc of lanes) {
     const cx = xc + 1.9, L = z1sec - z0sec; B.box(cx, F + 0.42, zm, 0.9, 0.08, L, 'rubber', { rep: 0.6, tiles: { py: 'rubber' } }); for (const o of [-0.47, 0.47]) B.box(cx + o, F + 0.5, zm, 0.06, 0.14, L, 'steel'); for (const z of [z0sec + 0.3, z1sec - 0.3]) for (const o of [-0.4, 0.4]) B.box(cx + o, F + 0.2, z, 0.06, 0.4, 0.06, 'steel');
     B.box(cx, F + 0.95, zm, 1.2, 1.1, 2.2, 'xray', { tiles: { px: 'xray', nx: 'xray', pz: 'metal', nz: 'metal', py: 'metal' } }); for (const z of [zm - 1.12, zm + 1.12]) for (let i = 0; i < 5; i++) B.box(cx - 0.36 + i * 0.18, F + 0.82, z, 0.16, 0.6, 0.01, 'rubber', { faces: 'pznz' });
     glow(cx + 0.9, F + 1.2, zm - 0.3, 0.05, 0.4, 0.6, 'steel', { tiles: { px: 'kiosk' }, emit: { px: 1.1 }, faces: 'px' }); B.box(cx + 0.9, F + 0.5, zm - 0.3, 0.5, 1.0, 0.7, 'metal');
-    for (let i = 0; i < 4; i++) B.box(cx, F + 0.5, z0sec + 0.8 + i * (L - 1.6) / 3 + (i > 1 ? 1.2 : -0.2) * 0, 0.6, 0.08, 0.45, 'tray', { faces: 'pypxnxpznz', tiles: { py: 'tray' } });
     for (const o of [-0.48, 0.48]) B.box(xc + o, F + 1.05, zm + 1.5, 0.1, 2.1, 0.5, 'wtmd', { tiles: { pz: 'wtmd', nz: 'wtmd', px: 'metal', nx: 'metal' } }); B.box(xc, F + 2.15, zm + 1.5, 1.06, 0.18, 0.5, 'wtmd', { tiles: { pz: 'wtmd', nz: 'wtmd' } });
     B.box(xc - 1.8, F + 1.15, zm - 0.6, 1.4, 2.3, 1.4, 'scan', { tiles: { px: 'scan', nx: 'scan', pz: 'scan', nz: 'scan', py: 'metal' } }); blk(xc - 1.8, zm - 0.6, 0.75, 0.75);
     B.box(cx, F + 0.42, z1sec + 0.6, 1.4, 0.84, 0.9, 'steel'); blk(cx, zm, 0.6, L / 2 + 0.5);
   }
-  if (dep) { hang('signSec', 0, F + 4.4, z1sec + 2.2, 6, 1.4, 0); hang('wayS', 26, F + 4.0, z1sec + 2.2, 6, 1.5, 0); }
-  // queue stanchions with belt barriers (visual; you can duck under them)
-  const qz = z1sec + 1.4, q1 = dep ? (big ? 3 : 1) : 0; for (let r = 0; r < q1; r++) { const z = qz + r * 1.3; for (let x = -16; x <= 16; x += 2.2) { B.box(x, F + 0.5, z, 0.07, 1.0, 0.07, 'steel'); B.box(x, F + 0.01, z, 0.36, 0.02, 0.36, 'steel', { faces: 'py' }); } for (let x = -16; x < 16; x += 2.2) if (!((r % 2 ? x > 13 : x < -13))) B.box(x + 1.1, F + 0.92, z, 2.1, 0.05, 0.01, 'navy', { faces: 'pznz' }); }
-  // ---- check-in (departures) or baggage claim + customs exit (arrivals)
-  const ckZ = Math.min(D - 5, Math.max(qz + q1 * 1.3 + 4.5, D * 0.82));
+  // ---- security is a real ROOM (Terminal rebuild): solid walls between the entry and exit
+  // planes; the only openings are the lanes themselves, so airside is physically gated
+  const trayState = { t: 0, per: 6, player: { lane: -1, u: 0 }, alarm: [] };
+  let trayMesh = null; const archLights = [];
   if (dep) {
-    for (const x of [-26, 0, 26]) { B.box(x, F + 1.3, ckZ + 1.2, 10, 2.6, 0.4, 'white'); glow(x, F + 2.2, ckZ + 0.98, 9.6, 1.6, 0.06, 'logo', { tiles: { nz: 'logo' }, emit: { nz: 1.15 }, faces: 'nz' }); glow(x, F + 2.2, ckZ + 1.42, 9.6, 1.6, 0.06, 'logo', { tiles: { pz: 'logo' }, emit: { pz: 1.1 }, faces: 'pz' });
+    const wallRun = (z, hg, hdrTo) => { let last = -HW; const segs = []; for (const xc of [...lanes].sort((a, b) => a - b)) { segs.push([last, xc - hg]); last = xc + hg; } segs.push([last, HW]);
+      for (const [a, b] of segs) { if (b - a < 0.1) continue; const cxw = (a + b) / 2; B.box(cxw, F + ceilSec / 2, z, b - a, ceilSec, 0.36, 'white', { faces: 'pznz', rep: 3 }); blk(cxw, z, (b - a) / 2, 0.18); }
+      if (hdrTo > ceilSec + 0.1) B.box(0, F + (ceilSec + hdrTo) / 2, z, HW * 2, hdrTo - ceilSec, 0.36, 'white', { faces: 'pznz', rep: 3 }); }; // the band above the doorways is solid across the whole width — no slots into the roof void
+    wallRun(wallIn, 1.2, ceilLand); wallRun(wallOut, 1.1, ceilAir);
+    const tb = new Builder(light); tb.box(0, 0, 0, 0.6, 0.08, 0.45, 'tray', { faces: 'pypxnxpznz', tiles: { py: 'tray' } });
+    trayMesh = new THREE.InstancedMesh(tb.geometry(), mat, lanes.length * trayState.per + 1); trayMesh.frustumCulled = false; group.add(trayMesh);
+    for (const xc of lanes) { const lm = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.1), new THREE.MeshBasicMaterial({ color: 0x2bd576, toneMapped: false, side: THREE.DoubleSide })); lm.position.set(xc, F + 2.27, zm + 1.5); group.add(lm); archLights.push(lm); trayState.alarm.push(0); }
+  }
+  if (dep) { hang('signSec', 0, F + 4.4, z1sec + 2.2, 6, 1.4, 0, ceilLand); hang('wayS', 26, F + 4.0, z1sec + 2.2, 6, 1.5, 0, ceilLand); }
+  // queue stanchions with belt barriers (visual; you can duck under them)
+  for (let r = 0; r < qRows; r++) { const z = qz + r * 1.3; for (let x = -16; x <= 16; x += 2.2) { B.box(x, F + 0.5, z, 0.07, 1.0, 0.07, 'steel'); B.box(x, F + 0.01, z, 0.36, 0.02, 0.36, 'steel', { faces: 'py' }); } for (let x = -16; x < 16; x += 2.2) if (!((r % 2 ? x > 13 : x < -13))) B.box(x + 1.1, F + 0.92, z, 2.1, 0.05, 0.01, 'navy', { faces: 'pznz' }); }
+  // ---- check-in (departures) or baggage claim + customs exit (arrivals)
+  if (dep) {
+    for (const x of ckIslands) { B.box(x, F + 1.3, ckZ + 1.2, 10, 2.6, 0.4, 'white'); glow(x, F + 2.2, ckZ + 0.98, 9.6, 1.6, 0.06, 'logo', { tiles: { nz: 'logo' }, emit: { nz: 1.15 }, faces: 'nz' }); glow(x, F + 2.2, ckZ + 1.42, 9.6, 1.6, 0.06, 'logo', { tiles: { pz: 'logo' }, emit: { pz: 1.1 }, faces: 'pz' });
       for (let i = 0; i < 4; i++) { const cx = x - 3.6 + i * 2.4; B.box(cx, F + 0.55, ckZ, 1.5, 1.1, 1.0, 'counter', { tiles: { nz: 'counter', py: 'white' } }); glow(cx, F + 1.32, ckZ - 0.1, 0.42, 0.3, 0.04, 'steel', { tiles: { nz: 'kiosk' }, emit: { nz: 1.05 }, faces: 'nz' }); B.box(cx + 1.0, F + 0.25, ckZ - 0.15, 0.6, 0.5, 1.6, 'rubber', { tiles: { py: 'belt' } }); glow(cx + 1.0, F + 0.62, ckZ - 1.0, 0.36, 0.2, 0.04, 'steel', { tiles: { nz: 'scale' }, emit: { nz: 1.1 }, faces: 'nz' }); }
       blk(x, ckZ, 5.1, 0.8);
       for (let r = 0; r < 2; r++) for (let k = 0; k <= 4; k++) { const sx = x - 4.4 + k * 2.2, sz = ckZ - 2.2 - r * 1.4; B.box(sx, F + 0.5, sz, 0.07, 1.0, 0.07, 'steel'); if (k < 4) B.box(sx + 1.1, F + 0.92, sz, 2.1, 0.05, 0.01, 'navy', { faces: 'pznz' }); } }
-    for (const [x, z] of [[-12, ckZ - 5.5], [-9.5, ckZ - 5.5], [18, ckZ - 5.5], [20.5, ckZ - 5.5]]) { B.box(x, F + 0.5, z, 0.5, 1.0, 0.4, 'metal'); glow(x, F + 1.25, z - 0.05, 0.5, 0.7, 0.12, 'steel', { tiles: { nz: 'kiosk' }, emit: { nz: 1.15 }, faces: 'nzpy', ry: 0 }); blk(x, z, 0.3, 0.3); }
+    for (const [x, z] of kioskXZ) { B.box(x, F + 0.5, z, 0.5, 1.0, 0.4, 'metal'); glow(x, F + 1.25, z - 0.05, 0.5, 0.7, 0.12, 'steel', { tiles: { nz: 'kiosk' }, emit: { nz: 1.15 }, faces: 'nzpy', ry: 0 }); blk(x, z, 0.3, 0.3); }
     hang('signDep', 0, F + 6.8, D - 0.6, 12, 1.5, Math.PI);
   } else {
     for (const x of [-16, 16]) { const zc = (z0sec + D) / 2 - 2; B.box(x, F + 0.35, zc, 14, 0.7, 4, 'metal'); B.box(x, F + 0.72, zc, 13.4, 0.04, 3.4, 'belt', { faces: 'py', tiles: { py: 'belt' } }); B.box(x, F + 1.3, zc, 1.0, 1.2, 1.2, 'metal'); glow(x, F + 3.8, zc - 2.4, 3.2, 1.0, 0.1, 'steel', { tiles: { nz: 'signBag', pz: 'signBag' }, emit: { nz: 1.2, pz: 1.2 }, faces: 'pznz' }); blk(x, zc, 7.1, 2.1); }
-    hang('wayX', 0, F + 4.0, D - 6, 7, 1.75, 0); B.box(0, F + 1.4, D - 0.25, 6, 2.8, 0.1, 'glassD', { faces: 'nz' }); hang('signHello', 0, F + 6.4, D - 0.6, 16, 2.0, Math.PI);
-    if (big) hang('wayB', -24, F + 4, z0sec + 2, 6, 1.5, Math.PI);
+    hang('wayX', 0, F + 4.0, D - 6, 7, 1.75, 0, ceilLand); B.box(0, F + 1.4, D - 0.25, 6, 2.8, 0.1, 'glassD', { faces: 'nz' }); hang('signHello', 0, F + 6.4, D - 0.6, 16, 2.0, Math.PI);
+    if (big) hang('wayB', -24, F + 4, z0sec + 2, 6, 1.5, Math.PI, ceilSec);
   }
   // posters (light boxes) on the side walls, planters with the local plants
   for (const [x, z, n] of [[-HW + 0.25, zS - 4, 'poster0'], [HW - 0.25, zS - 4, 'poster1'], [-HW + 0.25, D - 10, 'poster1'], [HW - 0.25, D - 10, 'poster0']]) glow(x, F + 2.2, z, 0.08, 2.0, 4.0, 'steel', { tiles: { px: n, nx: n }, emit: { px: 1.15, nx: 1.15 }, faces: x < 0 ? 'px' : 'nx' });
-  const planters = [[-38, 13], [38, 13], [-38, 21.5], [38, 21.5], [-38, D - 4], [38, D - 4]];
+  const planters = [[-(HW - 8), 13], [HW - 8, 13], [-(HW - 8), 21.5], [HW - 8, 21.5], [-(HW - 8), D - 4], [HW - 8, D - 4]];
   for (const [x, z] of planters) { B.box(x, F + 0.4, z, 1.6, 0.8, 1.6, 'wood'); blk(x, z, 0.9, 0.9);
     if (A.plant === 'palm') { for (let k = 0; k < 5; k++) B.box(x, F + 1.2 + k * 0.9, z, 0.32 - k * 0.03, 0.9, 0.32 - k * 0.03, 'trunk'); for (let k = 0; k < 7; k++) { const a = k / 7 * Math.PI * 2; B.box(x + Math.cos(a) * 1.3, F + 5.15, z + Math.sin(a) * 1.3, 2.6, 0.06, 0.6, 'leaf', { ry: -a }); } }
     else if (A.plant === 'tropical') { for (let k = 0; k < 9; k++) { const a = k / 9 * Math.PI * 2; B.box(x + Math.cos(a) * 0.6, F + 1.5 + (k % 3) * 0.4, z + Math.sin(a) * 0.6, 1.4, 0.05, 0.7, 'leaf', { ry: -a }); } }
     else { B.box(x, F + 1.5, z, 0.2, 1.4, 0.2, 'trunk'); B.box(x, F + 2.8, z, 1.4, 1.8, 1.4, 'leaf'); } }
   if (A.lattice) for (const x of [-34, 34]) B.box(x, F + 2, zS - 3, 6, 4, 0.15, 'lattice', { faces: 'pznz' });
-  for (const s of [-1, 1]) for (const dz of [-1.7, 1.7]) { const x = s * 41.2, z = 15.5 + dz; B.box(x, F + 0.44, z, 0.85, 0.13, 0.85, 'leather'); B.box(x + s * 0.44, F + 0.88, z, 0.13, 1.0, 0.85, 'leather'); B.box(x - s * 0.05, F + 0.2, z, 0.72, 0.4, 0.72, 'wood'); blk(x, z, 0.55, 0.55); }
+  for (const s of [-1, 1]) for (const dz of [-1.7, 1.7]) { const x = s * (HW - 2.8), z = 15.5 + dz; B.box(x, F + 0.44, z, 0.85, 0.13, 0.85, 'leather'); B.box(x + s * 0.44, F + 0.88, z, 0.13, 1.0, 0.85, 'leather'); B.box(x - s * 0.05, F + 0.2, z, 0.72, 0.4, 0.72, 'wood'); blk(x, z, 0.55, 0.55); }
   // ---- meshes: mirror (under the floor), polished floor (transparent), main, glass, FIDS boards, light shafts
   const mirror = new THREE.Mesh(BM.geometry(), mat); mirror.frustumCulled = false; group.add(mirror);
   const floor = new THREE.Mesh(BF.geometry(), floorMat); floor.frustumCulled = false; floor.renderOrder = 1; group.add(floor);
@@ -256,11 +302,11 @@ export function buildHall(opts, rnd) {
   for (const [x, y, z, l] of gl) { const p = new THREE.Mesh(new THREE.PlaneGeometry(l, 1.1), balM); p.position.set(x, y, z); p.rotation.y = Math.PI / 2; group.add(p); }
   const shaftC = document.createElement('canvas'); shaftC.width = 64; shaftC.height = 256; { const c = shaftC.getContext('2d'); const g = c.createLinearGradient(0, 0, 0, 256); g.addColorStop(0, 'rgba(255,240,210,0.9)'); g.addColorStop(1, 'rgba(255,240,210,0)'); c.fillStyle = g; c.fillRect(0, 0, 64, 256); const h = c.createLinearGradient(0, 0, 64, 0); h.addColorStop(0, 'rgba(0,0,0,1)'); h.addColorStop(0.25, 'rgba(0,0,0,0)'); h.addColorStop(0.75, 'rgba(0,0,0,0)'); h.addColorStop(1, 'rgba(0,0,0,1)'); c.globalCompositeOperation = 'destination-out'; c.fillStyle = h; c.fillRect(0, 0, 64, 256); }
   const shaftT = new THREE.CanvasTexture(shaftC); const shaftM = new THREE.MeshBasicMaterial({ map: shaftT, transparent: true, opacity: 0.17, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-  for (let x = -36; x <= 36; x += 9) { const sh = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 15), shaftM); sh.position.set(x + 2, F + 5.2, 5.5); sh.rotation.set(-0.85, 0.15, 0); group.add(sh); }
+  for (let x = -(HW - 8); x <= HW - 8; x += 9) { const sh = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 15), shaftM); sh.position.set(x + 2, F + 5.2, 5.5); sh.rotation.set(-0.85, 0.15, 0); group.add(sh); }
   { const patchGeo = new THREE.PlaneGeometry(3.1, 13); patchGeo.rotateZ(0.42); // low-sun pools on the floor inside the glass
-    for (let x = -36; x <= 36; x += 9) { const p = new THREE.Mesh(patchGeo, shaftM); p.position.set(x + 3.4, F + 0.03, 7.4); p.rotation.set(-Math.PI / 2, 0, 0); p.renderOrder = 2; group.add(p); } }
+    for (let x = -(HW - 8); x <= HW - 8; x += 9) { const p = new THREE.Mesh(patchGeo, shaftM); p.position.set(x + 3.4, F + 0.03, 7.4); p.rotation.set(-Math.PI / 2, 0, 0); p.renderOrder = 2; group.add(p); } }
   const board = fidsCanvas(opts, dep ? 'DEPARTURES' : 'ARRIVALS'); const fm = new THREE.MeshBasicMaterial({ map: board, toneMapped: false });
-  const boards = dep ? [[-8, F + 4.2, D - 0.3, Math.PI, 1], [8, F + 4.2, D - 0.3, Math.PI, 1], [-22, F + 3.2, 18 - 0.4, 0, 0.45], [22, F + 3.2, 18 - 0.4, 0, 0.45], [0, F + 3.4, zS - 1.0, 0, 0.5]] : [[0, F + 4.0, z0sec + 3, Math.PI, 0.7], [-22, F + 3.2, 18 - 0.4, 0, 0.45]];
+  const boards = dep ? [[-8, F + 4.2, D - 0.3, Math.PI, 1], [8, F + 4.2, D - 0.3, Math.PI, 1], [-22, F + 3.2, 18 - 0.4, 0, 0.45], [22, F + 3.2, 18 - 0.4, 0, 0.45], [0, F + 3.4, zS - 1.0, 0, 0.5]] : [[0, F + 3.6, z0sec + 3, Math.PI, 0.7], [-22, F + 3.2, 18 - 0.4, 0, 0.45]];
   for (const [x, y, z, ry, s] of boards) { const bm = new THREE.Mesh(new THREE.PlaneGeometry(12 * s, 3.75 * s), fm); bm.position.set(x, y, z); bm.rotation.y = ry; group.add(bm); const rf = bm.clone(); rf.position.y = 2 * F - y; rf.scale.y = -1; rf.material = new THREE.MeshBasicMaterial({ map: board, toneMapped: false, side: THREE.DoubleSide, color: 0x666666 }); group.add(rf); }
   // ---- people: seated at the gate, check-in queues, security staff + passengers, shoppers, walkers
   const NP = dep ? 212 : 96; const crowd = new People(group, NP, rnd); let k = 0; const walkers = [];
@@ -268,10 +314,18 @@ export function buildHall(opts, rnd) {
   const usedBench = new Set(); // bench seats already taken (ambient sitters first, then the flight's load)
   for (const [x, z] of benchPos) for (let sI = 0; sI < 6; sI++) if (rnd() < 0.3 && k < 26) { const p = crowd.p[k++]; usedBench.add(x + ':' + sI); Object.assign(p, { x: x + sI * 0.62 - 1.55, y: F, z: z + 0.06, yaw: Math.PI, mode: 'sit', act: ACTS[(rnd() * ACTS.length) | 0], talkSide: rnd() < 0.5 ? 1 : -1, windowSide: 0 }); }
   const staff = (x, z, yaw, mode = 'stand') => { if (k >= NP - 1) return; const i = k++; crowd.setCrew(i); Object.assign(crowd.p[i], { x, y: F, z, yaw, mode, act: 'idle' }); };
-  if (dep) for (const xc of lanes) { staff(xc + 2.9, zm - 0.3, -Math.PI / 2); if (rnd() < 0.7 && k < NP - 2) { const p = crowd.p[k++]; Object.assign(p, { x: xc, y: F, z: z1sec + 0.6, yaw: Math.PI, mode: 'stand', act: rnd() < 0.4 ? 'phone' : 'idle', suitcase: false }); } }
+  // ---- live flow machines (Terminal rebuild): passengers who MOVE through check-in queues
+  // and two security lanes on their own loops, so the terminal's core processes visibly work.
+  // A mover walks a list of [x, z, waitSec?] points, then fires its callback (hide/recycle).
+  const ckFlows = [], secFlows = [];
+  const sendP = (p, pts, speed, cb, keepHidden) => { if (!keepHidden) p.hidden = false; p._mv = { pts, i: 0, speed: speed || 1.05, cb }; p.mode = 'walk'; p.act = 'idle'; };
+  const stepMover = (p, dt) => { const mv = p._mv; if (!mv) return; if (p._waitT > 0) { p._waitT -= dt; return; } const tg = mv.pts[mv.i]; if (!tg) { p._mv = null; p.mode = 'stand'; if (mv.cb) mv.cb(); return; } const dxp = tg[0] - p.x, dzp = tg[1] - p.z, d = Math.hypot(dxp, dzp); if (d < 0.12) { if (tg[2] > 0) p._waitT = tg[2]; mv.i++; return; } p.x += dxp / d * mv.speed * dt; p.z += dzp / d * mv.speed * dt; p.yaw = Math.atan2(dxp, dzp); };
+  const flowLaneIdx = [0, 2]; // lanes[0] and lanes[2] run live passenger cycles; the rest keep a standing passenger
+  if (dep) for (const xc of lanes) { staff(xc + 2.9, zm - 0.3, -Math.PI / 2); const li = lanes.indexOf(xc); if (flowLaneIdx.indexOf(li) < 0 && rnd() < 0.7 && k < NP - 2) { const p = crowd.p[k++]; Object.assign(p, { x: xc, y: F, z: z1sec + 0.6, yaw: Math.PI, mode: 'stand', act: rnd() < 0.4 ? 'phone' : 'idle', suitcase: false }); } }
   if (big) for (const x of [-8.6, 3.2, 14]) staff(x, zP + 0.4, Math.PI, 'sit');
-  if (dep) { for (const x of [-26, 0, 26]) { for (let i = 0; i < 2; i++) staff(x - 3.6 + i * 4.8, ckZ + 0.7, Math.PI); for (let q = 0; q < 4 && k < NP - 22; q++) { const p = crowd.p[k++]; Object.assign(p, { x: x - 2.5 + (q % 2) * 0.3, y: F, z: ckZ - 1.7 - q * 0.85, yaw: 0, mode: 'stand', act: rnd() < 0.3 ? 'phone' : 'idle', suitcase: rnd() < 0.7 }); } }
-    for (let q = 0; q < 6 && k < NP - 16; q++) { const p = crowd.p[k++]; Object.assign(p, { x: -12 + q * 2.4 + (q % 2) * 0.5, y: F, z: qz + 0.6 + (q % 3) * 1.3, yaw: Math.PI, mode: 'stand', act: 'idle', suitcase: rnd() < 0.5 }); } }
+  if (dep) { for (const x of ckIslands) { for (let i = 0; i < 2; i++) staff(x - 3.6 + i * 4.8, ckZ + 0.7, Math.PI); const fl = { island: x, slots: [], timer: 3 + rnd() * 6 }; for (let q = 0; q < 4 && k < NP - 22; q++) { const p = crowd.p[k++]; Object.assign(p, { x: x - 2.5 + (q % 2) * 0.3, y: F, z: ckZ - 1.7 - q * 0.85, yaw: 0, mode: 'stand', act: rnd() < 0.3 ? 'phone' : 'idle', suitcase: rnd() < 0.7 }); p._home = [p.x, p.z]; fl.slots.push(p); } ckFlows.push(fl); }
+    for (let q = 0; q < 6 && k < NP - 16; q++) { const p = crowd.p[k++]; Object.assign(p, { x: -12 + q * 2.4 + (q % 2) * 0.5, y: F, z: qz + 0.6 + (q % 3) * 1.3, yaw: Math.PI, mode: 'stand', act: 'idle', suitcase: rnd() < 0.5 }); }
+    for (const li of flowLaneIdx) { const xc = lanes[li]; if (xc === undefined) continue; const sf = { lane: li, timer: 1.5 + li * 2.5, people: [] }; for (let q = 0; q < 3 && k < NP - 14; q++) { const p = crowd.p[k++]; Object.assign(p, { x: xc + (q - 1) * 0.55, y: F, z: z1sec + 1.1 + q * 0.75, yaw: Math.PI, mode: 'stand', act: 'idle', suitcase: false }); p.hidden = true; p._home = [p.x, p.z]; sf.people.push(p); } secFlows.push(sf); } }
   else for (const x of [-16, 16]) for (let q = 0; q < 5 && k < NP - 14; q++) { const p = crowd.p[k++]; const a = q / 5 * Math.PI * 2; Object.assign(p, { x: x + Math.cos(a) * 8, y: F, z: (z0sec + D) / 2 - 2 + Math.sin(a) * 3.2, yaw: Math.atan2(-Math.cos(a), -Math.sin(a)), mode: 'stand', act: 'idle' }); }
   for (let i = 0; i < 4 && k < NP - 12; i++) { const p = crowd.p[k++]; Object.assign(p, { x: -6 + i * 4, y: F, z: zS - 1.4, yaw: i % 2 ? Math.PI / 2 : -Math.PI / 2, mode: 'sit', act: ACTS[i % ACTS.length] }); }
   // ---- this flight's passengers (departures): the gate lounge starts FULL — the whole cabin load waits
@@ -292,9 +346,34 @@ export function buildHall(opts, rnd) {
   wm.rect(wc(0, D / 2), xAxis, HW - 0.6, D / 2 - 0.8, O.y + F, O.y + F, 'hall');
   const update = (dt, t, cam) => {
     for (const p of walkers) { const tg = p.path[p.seg]; const ox = p.family ? -p.family * 0.8 : 0; const dxp = tg[0] + ox - p.x, dzp = tg[1] + (p.family ? p.family * 0.5 : 0) - p.z, d = Math.hypot(dxp, dzp); if (d < 0.5) { p.seg = (p.seg + 1) % p.path.length; continue; } p.x += dxp / d * p.speed * dt; p.z += dzp / d * p.speed * dt; p.yaw = Math.atan2(dxp, dzp); }
+    // live queues + security flows + tray belts (Terminal rebuild)
+    if (dep) {
+      for (const p of crowd.p) if (p._mv || p._waitT > 0 || p._unhide > 0) { if (p._unhide > 0) { p._unhide -= dt; if (p._unhide <= 0 && !p._mv) p.hidden = false; } stepMover(p, dt); }
+      for (const fl of ckFlows) { if (!fl.slots.length || fl.slots.some(p => p._mv)) continue; fl.timer -= dt; if (fl.timer > 0) continue; fl.timer = 4 + rnd() * 6; const head = fl.slots[0];
+        sendP(head, [[fl.island - 1.2, ckZ - 0.95, 4 + rnd() * 3.5]], 1.05, () => { sendP(head, [[fl.island * 0.3, wallIn + 2.4]], 1.3, () => { // served: stroll off, vanish, reappear behind the queue tail
+          head.hidden = true; head.x = fl.island - 2.5; head.z = ckZ - 5.6; sendP(head, [[fl.island - 2.5, ckZ - 5.6, 0.9]], 1.2, () => { sendP(head, [head._home], 1.0, null); fl.slots.push(head); }, true); }); });
+        fl.slots.shift(); for (const p of fl.slots) { const hi = fl.slots.indexOf(p); p._home = [fl.island - 2.5 + (hi % 2) * 0.3, ckZ - 1.7 - hi * 0.85]; if (!p._mv) sendP(p, [p._home], 1.0, null); } }
+      for (const sf of secFlows) { if (sf.people.some(p => p._mv)) continue; sf.next = ((sf.next || 0) + 1) % sf.people.length; const p = sf.people[sf.next]; if (!p || !p.hidden) continue; sf.timer -= dt; if (sf.timer > 0) continue; sf.timer = 5 + rnd() * 5; const xc = lanes[sf.lane], cx = xc + 1.9;
+        p.x = p._home[0]; p.z = p._home[1]; sendP(p, [[cx - 0.55, z1sec - 0.7, 1.8], [xc, zm + 2.5, 0.3], [xc, zm + 0.3, 0.2], [cx, z0sec + 0.95, 1.4], [xc * 0.4, wallOut - 2.2]], 0.95, () => { p.hidden = true; }); }
+      if (trayMesh) { const per = trayState.per, zHi = z1sec - 0.6, zLo = z0sec + 0.6; trayState.t += dt;
+        for (let li = 0; li < lanes.length; li++) for (let j = 0; j < per; j++) { const u = (trayState.t * 0.05 + j / per + li * 0.37) % 1; M.makeTranslation(lanes[li] + 1.9, F + 0.55, zHi + (zLo - zHi) * u); trayMesh.setMatrixAt(li * per + j, M); }
+        const pi = lanes.length * per;
+        if (trayState.player.lane >= 0) { trayState.player.u = Math.min(1, trayState.player.u + dt / 13); M.makeTranslation(lanes[trayState.player.lane] + 1.9, F + 0.55, zHi + (zLo - zHi) * trayState.player.u); } else M.makeScale(0.001, 0.001, 0.001).setPosition(0, F - 50, 0);
+        trayMesh.setMatrixAt(pi, M); trayMesh.instanceMatrix.needsUpdate = true;
+        for (let li = 0; li < archLights.length; li++) if (trayState.alarm[li] > 0) { trayState.alarm[li] -= dt; archLights[li].material.color.setHex(trayState.alarm[li] > 0 ? 0xff4444 : 0x2bd576); } }
+    }
     floorMat.color.copy(mat.color); crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
   };
   crowd.commit(0);
   const spawn = dep ? { pos: W(13, F, D * 0.92), yaw: 0 } : { pos: W(dx, F, 2.0), yaw: 0 };
-  return { group, walk: wm, update, crowd, mat, shafts: shaftM, spawn, xAxis, zAxis, O, F, D, doorX: dx, flightPax, exitPos: W(0, F, D - 2), world: W, dispose() { group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); at.tex.dispose(); board.dispose(); } };
+  // ---- the player-facing flow contract (departures): check-in points and the security
+  // process geometry, so onfoot.js can run tray -> arch -> collect and gate airside for real
+  const flow = dep ? {
+    ck: [...ckIslands.map(x => ({ x: x - 1.2, z: ckZ - 1.3 })), ...kioskXZ.map(([x, z]) => ({ x, z: z - 0.7 }))],
+    sec: { wallIn, wallOut, archZ: zm + 1.5, lanes: lanes.map(x => ({ x, beltX: x + 1.9, divest: { x: x + 1.9, z: z1sec - 0.6 }, collect: { x: x + 1.9, z: z0sec + 0.9 } })),
+      setPlayerTray(li) { trayState.player.lane = li; trayState.player.u = 0; },
+      clearPlayerTray() { trayState.player.lane = -1; trayState.player.u = 0; },
+      archAlarm(li) { trayState.alarm[li] = 1.6; if (archLights[li]) archLights[li].material.color.setHex(0xff4444); } }
+  } : null;
+  return { group, walk: wm, update, crowd, mat, shafts: shaftM, spawn, xAxis, zAxis, O, F, D, doorX: dx, flightPax, exitPos: W(0, F, D - 2), world: W, flow, dispose() { group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); at.tex.dispose(); board.dispose(); } };
 }
