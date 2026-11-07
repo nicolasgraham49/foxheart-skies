@@ -689,9 +689,9 @@ export function buildCockpit(displays, opts = {}) {
     const cam = ctx.camera; const vm = cam.matrixWorldInverse;
     FL_LOCAL.forEach((p, i) => { vTmp.copy(p); g.localToWorld(vTmp); vTmp.applyMatrix4(vm); FLOOD.p[i].set(vTmp.x, vTmp.y, vTmp.z, FL_FALL[i]); });
     FLOOD.c[0].set(1.0, 0.9, 0.76).multiplyScalar(1.5 * dome); FLOOD.c[1].set(1.0, 0.92, 0.8).multiplyScalar(1.1 * flood); FLOOD.c[2].copy(FLOOD.c[1]); FLOOD.c[3].set(1.0, 0.92, 0.8).multiplyScalar(0.9 * ped + (dc ? sw.console : 0) * 0.35);
-    const spill = ac ? 0.05 * night : 0; FLOOD.c[4].set(0.4, 0.62, 0.85).multiplyScalar(spill); FLOOD.c[5].copy(FLOOD.c[4]);
+    const spill = ac ? 0.14 * night : 0; FLOOD.c[4].set(0.4, 0.62, 0.85).multiplyScalar(spill); FLOOD.c[5].copy(FLOOD.c[4]); // [Playtest2] display spill 0.05 -> 0.14 at night
     st.light = { dome, flood, disp: ac ? 1 : 0 };
-    const day = THREE.MathUtils.clamp(ctx.daylight ?? 1, 0, 1); FLOOD.amb.set(0.30, 0.31, 0.33).multiplyScalar(0.88 * day * day);
+    const day = THREE.MathUtils.clamp(ctx.daylight ?? 1, 0, 1); FLOOD.amb.set(0.30, 0.31, 0.33).multiplyScalar(0.88 * day * day + (dc ? sw.integ : 0) * 0.45 * night); // [Playtest2] the deck ambient term was daylight-only, so at night (dome OFF, floods at 0) the panel fell to black even with integral lighting at 0.55; integral light now gives the panel a night floor (0.45: validation showed the main panel readable but the overhead still too dark at 0.30)
     // readouts (throttled)
     st.rd += dt; if (st.rd > 0.25) { st.rd = 0; st.k = (st.k || 0) + 1; drawFcu(ctx); if (st.k % 2 === 0) drawEfis(ctx); if (st.k % 4 === 0) { drawRmp(ctx); drawElec(ctx); drawClock(ctx.tod, st.t); clockS.mat.map.needsUpdate = true; } if (st.k % 12 === 1) drawMcdu(ctx); if (ac && ctx.S) { drawIsis(ctx.S); isisS.mat.map.needsUpdate = true; } }
   }

@@ -43,7 +43,7 @@ export function bldMats() {
       { vec3 Nw = normalize(inverseTransformDirection(normal, viewMatrix)); vec3 Vw = normalize(vAtmRel); vec3 Rw = reflect(Vw, Nw);
         float fr = 0.05 + 0.95 * pow(1.0 - clamp(dot(-Vw, Nw), 0.0, 1.0), 5.0);
         vec3 sk = atmSky(normalize(vec3(Rw.x, max(Rw.y, 0.03), Rw.z))); sk = mix(sk * vec3(0.32, 0.31, 0.29), sk, smoothstep(-0.08, 0.06, Rw.y));
-        vec3 room = uNight * step(0.28, gRnd) * vec3(1.0, 0.8, 0.55) * (0.5 + 0.7 * gRnd) * 1.4 + (1.0 - uNight) * vec3(0.035, 0.04, 0.04) * (0.6 + 0.8 * gRnd);
+        vec3 room = uNight * step(0.30, gRnd) * vec3(1.0, 0.78, 0.52) * (0.24 + 0.30 * gRnd) * 0.72 + (1.0 - uNight) * vec3(0.035, 0.04, 0.04) * (0.6 + 0.8 * gRnd); // [Playtest2] lit-cell emission was up to ~1.7 HDR before exposure: the facade read as a blinding checkerboard. First cut (peak 0.58) still read as a bright wall head-on through the windshield, so peak is now ~0.39: warm lit rooms, no white-out, same pattern at every airport (identity tint still multiplies via vColor)
         totalEmissiveRadiance += (1.0 - gFrame) * (sk * (0.18 + 0.82 * fr) * 0.75 + room * vColor); }`);
   };
   const sign = new THREE.MeshBasicMaterial({ vertexColors: true }); sign.userData.key = 'bldSign';
@@ -130,7 +130,7 @@ export function buildBridges(group, stands, f, along, floorY = 4.6) {
   const B = stands.map((st, i) => {
     const F1 = along(st.s, f.dep / 2 + 6), F0 = { x: F1.x + lx * 6.98, z: F1.z + lz * 6.98 }, s = st.parkS || 1, dsx = st.x - nx * (2 + 13 * s) + lx * 1.98 * s, dsz = st.z - nz * (2 + 13 * s) + lz * 1.98 * s;
     const R = { x: F0.x + nx * 10, z: F0.z + nz * 10 };
-    const dock = { x: dsx + lx * 0.4, z: dsz + lz * 0.4, y: st.parkS ? 3.05 * s : 2.85, yaw: Math.atan2(lx, lz) }; // cab back sits outboard of the door; cab faces the fuselage (-l)
+    const dock = { x: dsx + lx * 4.75, z: dsz + lz * 4.75, y: st.parkS ? 3.05 * s : 2.85, yaw: Math.atan2(lx, lz) }; // cab ORIGIN sits 4.75 m outboard of the door: the bellows reach 4.6 m from the origin, so the docked front stops ≈0.15 m OUTSIDE the hull skin (C-F1 — at the old 0.4 m offset the bellows/bumper stabbed up to ~1.7 m into the fuselage)
     const u0 = Math.atan2(-(dock.x - R.x), -(dock.z - R.z)); const ret = { yaw: u0 - 0.42, L: 16.5, y: 3.6 };
     const b = { i, st, R, dock, ret, e: st.parkS ? 1 : 0, target: st.parkS ? 1 : 0, hidden: false, F0 };
     st.jb = new THREE.Object3D(); st.jb.name = 'jetbridge';
@@ -307,7 +307,7 @@ export function buildAirportArt(group, ctx) {
     for (let k = 0; k <= stands.length; k++) { const s0 = stands.length ? (k < stands.length ? stands[k].s - 32.5 : stands[stands.length - 1].s + 32.5) : 0; const p = along(s0, f.dep / 2 - 45 - 35);
       B.add('metal', new THREE.LatheGeometry([[0.45, 0], [0.4, 10], [0.24, 32]].map(([r, y]) => new THREE.Vector2(r, y)), 10), M4(p.x, 0, p.z), 0x9ca2a8);
       B.add('dark', box(4.4, 1.2, 0.5), M4(p.x, 32.4, p.z, Math.atan2(-f.adz, f.adx)), 0x3a3f45); for (let j = -1.5; j <= 1.5; j += 1) B.add('lamp', box(0.8, 0.5, 0.05), M4(p.x + nx * 0.28 + f.adx * j, 32.2, p.z + nz * 0.28 + f.adz * j, Math.atan2(nx, nz)), C(0xfff1d6).multiplyScalar(1.4));
-      lights.add(p.x + nx * 0.6, 32.2, p.z + nz * 0.6, [1, 0.86, 0.62], 0, [0, 0, 0], [1, 0.86, 0.62], 0, 2.6); }
+      lights.add(p.x + nx * 0.6, 32.2, p.z + nz * 0.6, [1, 0.86, 0.62], 0, [0, 0, 0], [1, 0.86, 0.62], 0, 1.25); } // [Playtest2] floodlight sprite size 2.6 -> 1.25: in the light shader size is also brightness, so the masts threw huge additive discs that washed out the apron and bloomed into a glare core at the stand
     // ---- runway furniture: windsocks, ILS antennas, approach-light stanchions, taxiway signs
     const ends = ctx.g.ends || [];
     for (const r of ctx.g.runways) for (const E of [r.a, r.b]) {

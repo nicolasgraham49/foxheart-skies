@@ -175,7 +175,7 @@ export class Sky {
     this.lut.texture.wrapS = THREE.RepeatWrapping;
     ATM.uSkyLUT.value = this.lut.texture;
     this.lutMat = new THREE.ShaderMaterial({ vertexShader: LUT_VS, fragmentShader: LUT_FS, depthTest: false, depthWrite: false,
-      uniforms: { uSun: { value: new THREE.Vector3(0, 1, 0) }, uAlt: { value: 10 }, uSunI: { value: 22 }, uMie: { value: 1 }, uOvercast: { value: 0 }, uNightFloor: { value: new THREE.Vector3(0.0012, 0.0019, 0.0042) } } });
+      uniforms: { uSun: { value: new THREE.Vector3(0, 1, 0) }, uAlt: { value: 10 }, uSunI: { value: 22 }, uMie: { value: 1 }, uOvercast: { value: 0 }, uNightFloor: { value: new THREE.Vector3(0.0045, 0.0068, 0.013) } } }); // [Playtest2] night floor raised ~3x: the old floor left the airborne world a black void
     this.lutScene = new THREE.Scene(); this.lutCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.lutScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.lutMat));
 
@@ -300,12 +300,13 @@ export class Sky {
       this.sun.color.setRGB(tr[0], tr[1], tr[2]); this.sun.intensity = 3.0 * sunVis * ocDim;
     } else {
       this.sun.position.copy(this.moonDir).multiplyScalar(1000).add(camera.position);
-      this.sun.color.setRGB(0.55, 0.65, 0.9); this.sun.intensity = 0.06 * (1 - w.overcast * 0.8);
+      this.sun.color.setRGB(0.55, 0.65, 0.9); this.sun.intensity = 0.15 * (1 - w.overcast * 0.8); // [Playtest2] moonlight was 0.06: airframes/terrain read as black silhouettes
     }
     this.sun.target.position.copy(camera.position);
-    this.amb.color.setRGB(0.32, 0.38, 0.55); this.amb.intensity = 0.06 * night + 0.25 * w.overcast * sunUp;
+    this.amb.color.setRGB(0.32, 0.38, 0.55); this.amb.intensity = 0.17 * night + 0.25 * w.overcast * sunUp; // [Playtest2] night ambient floor 0.06 -> 0.17
     // exposure: daylight vs twilight vs night (simple auto-exposure)
-    let ex = this.sunElev > 12 ? 0.55 : this.sunElev > 0 ? THREE.MathUtils.lerp(1.0, 0.55, this.sunElev / 12) : this.sunElev > -8 ? THREE.MathUtils.lerp(1.0, 2.6, -this.sunElev / 8) : 2.6;
+    // [Playtest2] night cap 2.6 -> 1.75: at 2.6 every emissive (glass, lamps, floodlight sprites) clipped to white and bloomed into a white-out, while normally lit geometry stayed black. 1.75 keeps night readable without blowing the lit surfaces.
+    let ex = this.sunElev > 12 ? 0.55 : this.sunElev > 0 ? THREE.MathUtils.lerp(1.0, 0.55, this.sunElev / 12) : this.sunElev > -8 ? THREE.MathUtils.lerp(1.0, 1.75, -this.sunElev / 8) : 1.75;
     ex *= 1 + w.overcast * 0.55 * sunUp;
     this.exposure = ex;
 
@@ -333,7 +334,7 @@ export class Sky {
 
   skyApprox() { // rough zenith/ambient colour for non-PBR shaders
     const s = THREE.MathUtils.smoothstep(this.sunElev, -8, 20), n = 1 - THREE.MathUtils.smoothstep(this.sunElev, -10, -2);
-    const c = new THREE.Color(0.20 * s + 0.010 * n, 0.32 * s + 0.016 * n, 0.55 * s + 0.032 * n);
+    const c = new THREE.Color(0.20 * s + 0.048 * n, 0.32 * s + 0.064 * n, 0.55 * s + 0.10 * n); // [Playtest2] night ambient (terrain/clouds) was ~0.03: ground invisible from the air
     const g = this.weather.overcast; const l = (c.r + c.g + c.b) / 3;
     return c.lerp(new THREE.Color(l * 1.1, l * 1.12, l * 1.18), g);
   }

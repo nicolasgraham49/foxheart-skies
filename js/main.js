@@ -117,7 +117,15 @@ function foGesture(name) { if (!fo || !name) return; const t = performance.now()
 function foGestureFor(text) { const s = String(text || ''); if (/master|thrust|lever|idle|flap|spoiler|speed ?brake|park|radio|frequency|contact|squawk|transponder/i.test(s)) return 'pedestal'; if (/heading|altitude|flight level|climb|descend|knots|speed|maintain|direct/i.test(s)) return 'fcu'; if (/pump|gen|bleed|pack|fire|agent|apu|hyd|fuel|elec|bat|ptu|ignition|seat ?belt|light/i.test(s)) return 'overhead'; if (/gear|e ?c ?a ?m|checklist|clear/i.test(s)) return 'glareshield'; return null; }
 function foStep(dt) { if (!fo) return;
   if (W._foFl !== fdm.flapIdx || W._foGr !== fdm.gearDown) { if (W._foFl != null && W.started && !W.menuMode) foGesture(W._foGr !== fdm.gearDown ? 'glareshield' : 'pedestal'); W._foFl = fdm.flapIdx; W._foGr = fdm.gearDown; }
-  const v = deckVisible(); fo.object3d.visible = v; if (!v) return; aircraft.updateMatrixWorld(); fo.update(W.paused ? 0 : dt, { exposure: sky.exposure, camPos: aircraft.worldToLocal(_foCam.copy(camera.position)) }); }
+  const v = deckVisible(); if (!v) { fo.object3d.visible = false; return; }
+  aircraft.updateMatrixWorld(); const camL = aircraft.worldToLocal(_foCam.copy(camera.position));
+  // [Playtest2] near-camera guard: the FO's head anchor in aircraft frame is ~(0.56, 1.12, -15.36); if any camera
+  // (deck eye at a wide FOV, a dragged look, the on-foot eye in the deck) comes within 0.55 m of it, the frame fills
+  // with the inside of his head model — the owner's Panama cockpit shot. Fade him out inside that radius instead;
+  // at every normal viewing distance he is fully visible, design unchanged.
+  const headD = Math.hypot(camL.x - 0.56, camL.y - 1.12, camL.z + 15.36);
+  fo.object3d.visible = headD > 0.55; if (!fo.object3d.visible) return;
+  fo.update(W.paused ? 0 : dt, { exposure: sky.exposure, camPos: camL }); }
 function foSay(text) { foGesture(foGestureFor(text) || 'glareshield'); speech.say({ channel: 'crew', text, display: text.replace(/E C A M/g, 'ECAM').replace(/A P U/g, 'APU').replace(/P T U/g, 'PTU'), who: 'FO', voice: () => atc.voiceFor('ME'), lang: 'en-US', rate: 1.12, pitch: 0.94, volume: Math.min(1, audio.vol + 0.2), mute: audio.voice === false, maxWait: 15 }); }
 const fails = new Failures({ fdm, sys, audio, say: foSay, toast: t => toast(t, 4500), pa: id => paSay(id), assist: () => fdm.assist, onAlert: F => toast(F.title + (F.c === 'r' ? ' · master warning' : ' · master caution'), 4000) });
 function rescueDispatch() { if (!W.started || W.menuMode) return; const b = W.primary; const c = b ? new THREE.Vector3(b.x + (b.geom.cx || 0), 0, b.z + (b.geom.cz || 0)) : fdm.pos.clone(); const d = c.sub(fdm.pos).setY(0); if (d.lengthSq() < 1) d.set(1, 0, 0); const from = fdm.pos.clone().addScaledVector(d.normalize(), 520); from.y = ground(from.x, from.z).h;
@@ -1227,7 +1235,7 @@ function cabinStep(dt) { // flight cabin (people, crew director) + cabin crew ph
 }
 const _c2s = {}, _cabCam = new THREE.Vector3();
 function renderRest(dt, night) {
-  renderer.toneMappingExposure = sky.exposure; bloom.threshold = 1.15 / sky.exposure; bloom.strength = 0.25 + 0.3 * night;
+  renderer.toneMappingExposure = sky.exposure; bloom.threshold = Math.max(1.0, 1.15 / sky.exposure); bloom.strength = 0.22 + 0.06 * night; bloom.radius = 0.38; // [Playtest2] the old 1.15/exposure threshold fell to ~0.44 at night, so every lamp and lit window bloomed into one white wash; floor it at 1.0 (only true light sources bloom), keep the night strength gain small, and tighten the radius (was 0.55) so a stand floodlight blooms as a lamp halo, not a screen-wide glare core
   LIGHT_U.uDay.value = 1 - ATM.uNight.value; aircraft.userData.parts.lightPts.mat.uniforms.uPx.value = renderer.getPixelRatio();
   sky.rainMat.uniforms.uVel.value.copy(fdm.vel);
   // blob shadow
