@@ -93,7 +93,7 @@ export class ATC {
   // ---------------------------------------------------------------- setup per flight
   setup(o) {
     this.o = o; this.dep = o.dep; this.arr = o.arr || o.dep; this.stopAtis(); this.log = []; this.queue = []; this.tx = null; this.gapT = 0;
-    this.rb = null; this.ho = null; this.alt = null; this.hdgA = null; this.spdA = null; this.flags = {}; this.heard = {}; this.contacted = new Set(); this.personas = {}; this.lastInstr = null; this.taxiRoute = null; this.exitName = null; this.minAgl = 1e9; this.chatT = 14; this.chatLog = []; this.phT = 0;
+    this.rb = null; this.ho = null; this.alt = null; this.hdgA = null; this.spdA = null; this.flags = {}; this.heard = {}; this.contacted = new Set(); this.personas = {}; this.lastInstr = null; this.taxiRoute = null; this.exitName = null; this.minAgl = 1e9; this.chatT = 14; this.chatLog = []; this.phT = 0; this.divertApt = null; this.divertedFrom = null;
     let sq; do { sq = String(2 + (Math.random() * 5 | 0)) + [0, 0, 0].map(() => Math.random() * 8 | 0).join(''); } while (/^(2000|7000|1200)$/.test(sq)); this.squawk = sq;
     const dep = this.dep, arr = this.arr, d = gcNm(dep.lat, dep.lon, arr.lat, arr.lon), crs = gcBrg(dep.lat, dep.lon, arr.lat, arr.lon);
     let cr = Math.max(8000, Math.min(37000, Math.round(d * 1.4 / 10) * 1000)); if (((cr / 1000) % 2 === 1) !== (crs < 180)) cr += cr >= 37000 ? -1000 : 1000; // semicircular rule: eastbound odd, westbound even
@@ -402,6 +402,13 @@ export class ATC {
     if (this.flags.emer && !this.waiting() && (!em || (s.onGround && s.gsKt < 5))) add('cancel', this.curK(), s.onGround ? `Cancel ${this.flags.emer === 'mayday' ? 'MAYDAY' : 'PAN-PAN'}, vacate the runway` : `Cancel ${this.flags.emer === 'mayday' ? 'MAYDAY' : 'PAN-PAN'}`, false, true);
     if (this.atisWanted(s)) { const A = this.apt(); add('atis', 'ATIS', `Listen to ATIS (${this.city(A)})`, false, false); }
     if (this.flags.tfc) { const k = this.tuned?.kind || 'APP'; add('tfc_sight', k, 'Traffic in sight', false, false); add('tfc_look', k, 'Looking for the traffic', true, false); }
+    // diversion (pilot's choice, never auto): offer the nearest suitable airport while airborne. An active
+    // emergency runs its own divert through declare(), so this is only for a voluntary diversion — or for
+    // cancelling one and continuing to the planned destination.
+    if (!s.onGround && !this.flags.emer && !this.rb && !this.ho && !this.waiting()) {
+      if (this.divertApt) add('canceldiv', this.curK(), `Cancel diversion — continue to ${this.city(this.divertedFrom || this.arr)}`, false, false);
+      else { const dv = c.divert && c.divert(); if (dv && dv.apt && dv.apt !== this.arr) add('divert', this.curK(), `Divert to ${this.city(dv.apt)} (${dv.apt.icao}) — nearest suitable${dv.distNm != null ? ', ' + Math.round(dv.distNm) + ' NM' : ''}`, false, false); }
+    }
     if (this.lastInstr && this.t - this.lastInstr.t < 150 && !this.waiting()) add('sayagain', this.lastInstr.kind, 'Say again', false, false);
     // emergencies always come LAST in the list (number keys of normal calls never shift onto them). With a real failure they are offered
     // directly; without one they sit behind an 'Emergency…' entry that needs a second, deliberate confirm (opened menu times out after 20 s)
@@ -432,6 +439,8 @@ export class ATC {
       case 'emer_back': this.emerAsk = null; this.emit(); return;
       case 'mayday': case 'pan': this.emerAsk = null; return this.declare(id);
       case 'cancel': return this.cancelEmer();
+      case 'divert': return this.requestDivert();
+      case 'canceldiv': return this.cancelDivert();
       case 'ils': { const re = c.arrEnd(); this.me('APP', this.pilotSpanish() ? M(this.fac('APP').name, ', ', this.CSp(), ', solicito aproximación I L S a la pista ', this.rwyEsM(re.ident), '.') : M(this.fac('APP').name, ', ', CS, ', request the I L S runway ', this.rwyM(re.ident), '.')); this.atc('APP', M(CS, ', roger, expect vectors for the I L S runway ', this.rwyM(re.ident), '.'), 1.6, null, { reply: true }); this.flags.ilsReq = true; return; }
     }
   }
@@ -718,14 +727,57 @@ export class ATC {
     this.atc(k, M(CS, ', ', this.idM(k), 'roger ', may ? 'MAYDAY' : ['PAN-PAN', 'pan pan'], '.'), 1.4, null, { reply: true });
     if (may) this.atc(k, M('All stations, ', F.name, ', stop transmitting, MAYDAY in progress.'), 0.5, null, { reply: true });
     if (s.onGround) { this.atc(k, M(CS, ', fire and rescue are on their way. Hold position.'), 0.6, () => { c.rescue && c.rescue(); }, { reply: true }); return; }
-    // vectors to the nearest suitable runway (longest nearby), "runway of your choice"
-    if (div !== this.arr) { c.setArr && c.setArr(div); this.arr = div; } this.appAlt = Math.max(2000, r100(div.elevFt + 3000));
+    // vectors to the nearest suitable runway, "runway of your choice"
+    this.vectorToDivert(div, k, true);
+  }
+  // point the flight at a divert airport: the arrival switches (the session destination follows via
+  // ctx.setArr), the planned destination is remembered for a later cancel, the nav map lights the target
+  // amber (ctx.divertShown), and the current facility vectors you to its ILS with a readback — the exact
+  // contract declare() has always used, shared now with a voluntary diversion.
+  vectorToDivert(div, k, emer) {
+    const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), CPS = this.CSp();
+    if (div !== this.arr) { if (!this.divertedFrom) this.divertedFrom = this.arr; c.setArr && c.setArr(div); this.arr = div; this.divertApt = div; c.divertShown && c.divertShown(div); }
+    this.appAlt = Math.max(2000, r100(div.elevFt + 3000));
     const g = c.approachGeo(), re = c.arrEnd(), hd = Math.round(g.ipHdg / 5) * 5, tgt = s.altFt > 10300 ? Math.max(this.appAlt, 10000) : s.altFt < this.appAlt ? this.appAlt : Math.max(this.appAlt, r100(s.altFt));
     const altIns = Math.abs(tgt - s.altFt) < 300 ? M('maintain ', this.Am(tgt, div)) : this.cmdAlt(tgt, s.altFt, div);
     const altInsEs = Math.abs(tgt - s.altFt) < 300 ? M('mantenga ', this.altEsM(tgt, div)) : this.cmdAltEs(tgt, s.altFt, div);
     const ins = M(this.hdgM(hd, s.trk), ', ', altIns, ', vectors I L S runway ', this.rwyM(re.ident), ' at ', this.city(div));
-    this.atc(k, M(CS, ', ', ins, ', runway of your choice, fire and rescue will be standing by.'), 0.8, () => { this.setPhase('app'); Object.assign(this.flags, { appClr: false, vecT: this.t, advise: false, gaCmd: false, twrCall: false, vacate: false }); this.contacted.add(this.fac('APP').name); this.ctrApt = div; this.emit(); },
+    const msg = emer ? M(CS, ', ', ins, ', runway of your choice, fire and rescue will be standing by.') : M(CS, ', diversion approved, ', ins, '.');
+    this.atc(k, msg, 0.8, () => { this.setPhase('app'); Object.assign(this.flags, { appClr: false, vecT: this.t, advise: false, gaCmd: false, twrCall: false, vacate: false }); this.contacted.add(this.fac('APP').name); this.ctrApt = div; this.emit(); },
       { reply: true, rb: { label: `heading ${hdgD(hd)}, ${altD(tgt, this.ta(div))}, ILS ${re.ident} ${this.city(div)}`, m: M(cap(ins), ', ', CS, '.'), mEs: M(this.hdgEsM(hd, s.trk), ', ', altInsEs, ', vectores para el I L S de la pista ', this.rwyEsM(re.ident), ' en ', this.city(div), ', ', CPS, '.'), fcu: { alt: tgt, hdg: hd }, then: () => { this.assignAlt(tgt); this.assignHdg(hd); } } });
+  }
+  // a voluntary diversion (the DIVERT button / U key / radio option): nearest suitable airport, ATC clears
+  // you to it, no emergency declared. Emergencies keep their own path through declare().
+  requestDivert() {
+    const c = this.o?.ctx; if (!c) return; const s = this.ctxS();
+    if (this.flags.emer) return; // declare() owns the emergency divert
+    if (s.onGround) { this.note('Divert is for when you are airborne.'); return; }
+    if (this.rb || this.ho || this.waiting()) { this.note('Divert: finish the current ATC call first.'); return; }
+    const dv = c.divert && c.divert(), div = dv && dv.apt;
+    if (!div) { this.note('No suitable airport within reach.'); return; }
+    if (div === this.arr) { this.note(this.city(div) + ' is already your destination — and the nearest suitable airport.'); return; }
+    const CS = this.CSm(), ES = this.pilotSpanish(), CPS = this.CSp(), k = this.curK(), F = this.fac(k);
+    this.me(k, ES ? M(F.name, ', ', CPS, ', solicito desvío a ', this.city(div), '.') : M(F.name, ', ', CS, ', request diversion to ', this.city(div), '.'));
+    this.vectorToDivert(div, k, false);
+  }
+  // cancel the diversion and continue to the planned destination (also how a cancelled emergency restores it)
+  cancelDivert() {
+    const c = this.o?.ctx; if (!c) return; const s = this.ctxS(); const orig = this.divertedFrom; if (!orig || s.onGround) return;
+    if (this.rb || this.ho || this.waiting()) { this.note('Cancel diversion: finish the current ATC call first.'); return; }
+    const CS = this.CSm(), ES = this.pilotSpanish(), CPS = this.CSp(), k = this.curK(), F = this.fac(k);
+    this.me(k, ES ? M(F.name, ', ', CPS, ', cancelo el desvío, solicito continuar a ', this.city(orig), '.') : M(F.name, ', ', CS, ', cancel diversion, request to continue to ', this.city(orig), '.'));
+    this.atc(k, M(CS, ', roger, continue to ', this.city(orig), '.'), 1.4, null, { reply: true });
+    this.restoreDivert();
+  }
+  restoreDivert() { // state only: arrival back to the planned destination, divert light out, enroute flow re-armed
+    const c = this.o.ctx, orig = this.divertedFrom; if (!orig) return;
+    this.divertedFrom = null; this.divertApt = null;
+    c.setArr && c.setArr(orig); this.arr = orig; c.divertShown && c.divertShown(null);
+    this.appAlt = Math.max(2000, r100(orig.elevFt + 3000));
+    this.bottom = Math.min(this.cruise, Math.round((orig.elevFt + (this.ta(orig) >= 10000 ? 11000 : 7000)) / 1000) * 1000);
+    this.rb = null; this.ho = { to: 'CTR', from: 'CTR', apt: orig, t: this.t, n: 0, skipBye: true, quiet: true }; this.ctrApt = orig;
+    Object.assign(this.flags, { appClr: false, desc: false, vecT: 0, advise: false, gaCmd: false, twrCall: false, vacate: false, sector: true });
+    this.setPhase('to_ctr');
   }
   cancelEmer() {
     const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), k = this.curK(), F = this.fac(k), may = this.flags.emer === 'mayday';
@@ -733,6 +785,7 @@ export class ATC {
     this.atc(k, M(CS, ', roger, ', may ? 'MAYDAY' : ['PAN-PAN', 'pan pan'], ' cancelled.'), 1.4, null, { reply: true });
     if (may) this.atc(k, M('All stations, ', F.name, ', distress traffic ended.'), 0.5, null, { reply: true });
     this.flags.emer = null;
+    if (!s.onGround && this.divertedFrom) this.restoreDivert(); // emergency over: the flight continues to its planned destination (the divert light goes out with it)
     if (s.onGround) { const ex = c.exitInfo(); this.exitName = ex.name; this.atc('TWR', M(CS, ', vacate ', ex.side, ex.name ? M(' via ', [ex.name, twyS(ex.name)]) : ' when able', ', ', this.contactM('GND', this.arr), '.'), 0.8, () => this.setPhase('to_gnd'), { ho: { to: 'GND', from: 'TWR' } }); }
   }
   curK() { const k = this.tuned?.kind, air = this.o && !this.ctxS().onGround; if (k && k !== 'ATIS' && !(air && (k === 'DEL' || k === 'GND'))) return k; return { to_dep: 'TWR', takeoff_clr: 'TWR', dep: 'DEP', to_ctr: 'DEP', ctr: 'CTR', to_app: 'CTR', app: 'APP', to_twr_arr: 'APP', land_clr: 'TWR', twr_continue: 'TWR', go_around: 'TWR' }[this.phase] || (air ? 'APP' : 'GND'); }

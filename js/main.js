@@ -312,7 +312,7 @@ async function startFlight(cfg) {
   if (cfg.start !== 'route') { W.route = null; }
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
-  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false);
+  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false);
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
@@ -502,6 +502,29 @@ function finishTrip() {
   $('#result').hidden = false; $('#rMenu').onclick = () => { $('#result').hidden = true; toMenu(); }; $('#rCont').onclick = () => { $('#result').hidden = true; W.tripDone = false; };
 }
 function nearestFreeStand(maxD) { const b = W.primary; if (!b || !b.full) return null; let best = null, bd = maxD; for (const st of b.b.stands) { if (st.used && st !== W.arrStand) continue; const d = Math.hypot(b.x + st.x - fdm.pos.x, b.z + st.z - fdm.pos.z); if (d < bd) { bd = d; best = st; } } return best; }
+// The nearest airport this jet can actually land at, from the whole world data (every airport object
+// carries its runway lengths — no need to be built or streamed in first, so a mid-ocean emergency still
+// finds the real nearest field). Suitable = longest PAVED runway >= 1,900 m, the game's own landing floor
+// (the same 1,900 m the old built-only divert used). Nearest by direct distance wins, nothing else scores:
+// the origin and the destination are ordinary candidates — the origin is picked only when it genuinely
+// is the closest suitable field, never because it is where you came from.
+let _suitMemo = null;
+function nearestSuitable(lat, lon) {
+  const key = Math.round(lat * 20) + ',' + Math.round(lon * 20); // ~3 NM cells: the radio options ask often
+  if (_suitMemo && _suitMemo.key === key) return _suitMemo.out;
+  let best = null, bd = 1e18, brwy = 0;
+  for (const a of World.airports) {
+    let L = 0; for (const r of a.runways) if ((r.surface === 'A' || r.surface === 'C') && r.lengthFt * FT > L) L = r.lengthFt * FT;
+    if (L < 1900) continue;
+    const d = haversine(lat, lon, a.lat, a.lon); if (d < bd) { bd = d; best = a; brwy = L; }
+  }
+  const out = best ? { apt: best, distNm: bd / NM, rwyM: Math.round(brwy) } : null;
+  _suitMemo = { key, out }; return out;
+}
+function updateDivertBtn() { const b = $('#divertBtn'); if (!b) return; const A = atc.divertApt || W.divertApt; const on = !!A;
+  if (b.classList.contains('on') !== on) b.classList.toggle('on', on);
+  b.title = on ? `Diverting to ${A.icao} (${SHORT[A.icao] || A.city}) — click to cancel the diversion and continue to ${atc.divertedFrom ? atc.divertedFrom.icao + ' (' + (SHORT[atc.divertedFrom.icao] || atc.divertedFrom.city) + ')' : 'your destination'}` : 'Divert to the nearest suitable airport (U) — ATC clears you there and the map lights it up amber'; }
+function clearDivertDisplay() { if (W.divertApt || nav.divert) { nav.setDivert(null); W.divertApt = null; if (atc.divertApt) atc.divertApt = null; updateDivertBtn(); } }
 const atcCtx = {
   state() { const d = W.ils ? ilsDeviation(W.ils, fdm.pos) : null; const arr = atc.arr; const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z);
     const gs = Math.hypot(fdm.vel.x, fdm.vel.z); const arrIls = W.ils && W.ils.apt === arr && W.ils !== W.depIls ? W.ils : (W.cfg?.start === 'final' ? W.ils : null);
@@ -519,11 +542,10 @@ const atcCtx = {
   approachGeo() { const A = atc.arr, E = atcCtx.arrEnd(); const il = ilsFor(A, E, aptPos(A)); const d = ilsDeviation(il, fdm.pos); const ix = il.thr.x - il.dir.x * 14 * NM - fdm.pos.x, iz = il.thr.z - il.dir.z * 14 * NM - fdm.pos.z;
     return { ipHdg: (Math.atan2(ix, -iz) * R2D + 360) % 360, ipNm: Math.hypot(ix, iz) / NM, thrNm: d.thrDist / NM, crossNm: d.cross / NM }; },
   exitInfo() { const e = exitConn(); return { side: atcCtx.exitSide(), name: e ? e.conn.name : null }; },
-  // emergencies: what is wrong, souls on board, endurance, the nearest suitable airport (longest runways among those built nearby)
+  // emergencies: what is wrong, souls on board, endurance, the nearest suitable airport (see nearestSuitable)
   emergency: () => fails.emergency ? { kind: fails.emergency, nature: fails.nature() } : null, souls: () => W.souls || 156, fuelMin: () => Math.round(fdm.fuel / 2500 * 60),
-  divert() { const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z); let best = null, bs = 1e18;
-    for (const b of W.built) { const L = Math.max(0, ...b.geom.runways.map(r => r.L || 0)); if (L < 1900) continue; const d = haversine(ll.lat, ll.lon, b.apt.lat, b.apt.lon); const sc = d - L * 2 - (b.apt === atc.dep ? 12000 : 0) - (b.apt === atc.arr ? 8000 : 0); if (sc < bs) { bs = sc; best = b.apt; } }
-    return { apt: best || atc.arr || atc.dep }; },
+  divert() { const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z); const c = nearestSuitable(ll.lat, ll.lon); return c ? { apt: c.apt, distNm: c.distNm, rwyM: c.rwyM } : { apt: atc.arr || atc.dep }; },
+  divertShown(A) { W.divertApt = A || null; nav.setDivert(A || null); updateDivertBtn(); }, // ATC lights / clears the amber divert target on the ND + HUD strip
   setArr(A) { atc.arr = A; W.dest = A; if (W.ils && W.ils.apt !== A) { W.ils = fdm.ap.ils = null; } },
   rescue: () => rescueDispatch(),
   weather() { const A = atc.apt(); const temp = Math.round(({ desert: 31, tropical: 29, subtropical: 26, mediterranean: 21, temperate: 13, 'temperate-green': 12, boreal: 4 })[climateFor(A.lat, A.lon)] ?? 18) - (W.wx === 'rain' ? 3 : 0);
@@ -561,6 +583,7 @@ function renderRadio() {
   const opts = atc.options(); $('#rOpts').innerHTML = opts.length ? opts.map((o, i) => `<button class="ropt" data-id="${o.id}"><kbd>${i + 1}</kbd><span>${o.label}</span><small>${o.kind} ${o.freq}</small></button>`).join('') : '<div class="rnone">Nothing to say right now. Fly the aircraft; ATC will call you.</div>';
   $$('#rOpts .ropt').forEach(b => b.onclick = () => { atc.choose(b.dataset.id); canvas.focus(); });
   { const ra = $('#rAuto'), rs = $('#rSpeak'); if (ra) ra.checked = atc.auto; if (rs) rs.checked = atc.speakMe; }
+  updateDivertBtn();
   // (spoken lines are shown by the shared subtitle bar, in sync with the voice)
 }
 atc.on(() => renderRadio()); atc.onNote = t => toast(t, 4000);
@@ -741,6 +764,7 @@ addEventListener('keydown', e => {
     case 'KeyT': if (e.shiftKey) { fdm.tl = 1; ap.athr = false; toast('TOGA'); } break;
     case 'KeyB': break;
     case 'KeyJ': { const s = nextStep(); if (s && s.run) { audio.start(); s.run(); toast(s.label, 2500); } else toast(s ? s.label : 'Nothing to do right now', 2000); break; } // smart next step on the keyboard (checklists, ATC, ECAM actions)
+    case 'KeyU': if (atc.divertApt) atc.choose('canceldiv'); else atc.choose('divert'); break; // divert to the nearest suitable airport (again: cancel the diversion)
   }
   if (k === '?') $('#help').hidden = !$('#help').hidden;
 });
@@ -1171,14 +1195,14 @@ function handleEvents() {
   for (const ev of fdm.events) {
     switch (ev.t) {
       case 'gear': audio.gearClunk(); toast('Gear ' + (ev.v ? 'down' : 'up')); pad.rumble(0.25, 0.15, 120); break;
-      case 'touchdown': audio.touchdown(ev.v); onTouchdown(); { const k = Math.min(1, Math.abs(ev.v) / 3); pad.rumble(0.3 + 0.7 * k, 0.6, 260); } break;
+      case 'touchdown': audio.touchdown(ev.v); onTouchdown(); clearDivertDisplay(); { const k = Math.min(1, Math.abs(ev.v) / 3); pad.rumble(0.3 + 0.7 * k, 0.6, 260); } break; // the divert target is reached: the amber light goes out, the arrival flow continues to this airport
       case 'call': audio.call(ev.v); callout(ev.v); (W.callLog ||= []).push(ev.v); break;
       case 'retard': audio.call('RETARD'); callout('RETARD'); (W.callLog ||= []).push('RETARD'); break;
       case 'apoff': audio.apOff(); toast('Autopilot disconnected' + (ev.v === 'rollout complete' ? '' : '')); break;
       case 'mode': toast(ev.v + ' captured'); break;
       case 'crash': audio.thump(1); showCrash(ev.v); break;
       case 'tailstrike': toast('Tail strike!'); break;
-      case 'belly': audio.thump(1); audio.noiseHit(2.5, 2600, 300, 0.4); fails.touchdown(true); W.bellyT = W.simTime; toast('Belly landing! Keep the wings level and the nose straight…', 5000); pad.rumble(1, 1, 900); break;
+      case 'belly': audio.thump(1); audio.noiseHit(2.5, 2600, 300, 0.4); fails.touchdown(true); clearDivertDisplay(); W.bellyT = W.simTime; toast('Belly landing! Keep the wings level and the nose straight…', 5000); pad.rumble(1, 1, 900); break;
       case 'liftoff': toast('Liftoff'); break;
       case 'wp': toast('Next waypoint: ' + (W.route?.[ev.v]?.name || '')); break;
     }
@@ -1630,6 +1654,7 @@ function buildMenu() {
   bindFCU();
   $('#engStartBtn').onclick = () => { startEngines(); canvas.focus(); };
   $('#radioBtn').onclick = () => { toggleRadio(); canvas.focus(); }; $('#svcBtn').onclick = () => { toggleSvc(); canvas.focus(); }; $('#pSvc').onclick = () => toggleSvc(true); $('#paBtn').onclick = () => { togglePA(); canvas.focus(); }; $('#rClose').onclick = () => toggleRadio(false);
+  $('#divertBtn').onclick = () => { audio.start(); if (atc.divertApt) atc.choose('canceldiv'); else atc.choose('divert'); canvas.focus(); };
   { const ra = $('#rAuto'); if (ra) ra.onchange = () => { atc.auto = ra.checked; settings.atcAuto = atc.auto; store.set('settings', settings); }; const rs = $('#rSpeak'); if (rs) rs.onchange = () => { atc.speakMe = rs.checked; }; }
   $$('#pLights button').forEach(b => b.onclick = () => { settings.cabinLights = b.dataset.c; store.set('settings', settings); syncLightsUI(); toast('Cabin lights: ' + b.textContent.replace('Lights: ', '')); }); syncLightsUI();
   $('#pMusic').onclick = () => { settings.music = settings.music === false; store.set('settings', settings); applySettings('music'); toast('Boarding music ' + (settings.music ? 'on' : 'off')); };
@@ -1720,6 +1745,7 @@ const KEYS = [['W S / ↑ ↓', 'Pitch (↑ nose down)'], ['A D / ← →', 'Rol
   ['FCU strip (top centre)', 'Scroll = adjust · drag up/down = turn the knob · click a value, type a number, Enter = set it (Esc cancels)'],
   ['Ctrl ← → / ↑ ↓', 'FCU heading −/+ · altitude +/− (hold Shift for ×10 steps)'],
   ['Alt ← → / ↑ ↓', 'FCU speed −/+ · V/S +/− (hold Shift for ×5 steps)'],
+  ['U / DIVERT button', 'Divert to the nearest suitable airport: ATC clears you there and the navigation map lights the target amber (the same DIVERT option appears in the radio list). Press again to cancel the diversion and continue to your planned destination. In a declared emergency the divert to the nearest suitable field happens automatically'],
   ['Mouse drag', 'Look / orbit camera'], ['Wheel', 'Zoom'], ['M', 'Mouse yoke'], ['N', 'Navigation display overlay — route map with distance and ETA to destination (the bottom-left strip always shows the flight progress)'], ['H', 'Outside views: clean HUD ↔ full HUD + PFD'], ['. ,', 'Time acceleration'], ['P / Esc', 'Pause / menu'], ['?', 'This help'],
   ['On foot', 'WASD walk, Shift run, mouse look / orbit, wheel zoom, V third / first person, E interact, J skip ahead, Y PA'],
   ['Xbox controller', 'Left stick flies (Easy assist: let go and it levels) and steers on the ground; right stick looks, R3 recentres; RT / LT thrust (LT on the landing roll: reverse); A next step (shown on screen); B brakes (hold); X ATC menu; Y PA menu; LB / RB flaps up / down; hold LB + A gear, + X autopilot, + B spoilers, + Y lights; D-pad views; View camera, hold View for help; Menu pause'],

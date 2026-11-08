@@ -30,7 +30,7 @@ export class NavPlan {
   constructor() { this.dep = null; this.arr = null; this.divert = null; this.totalNm = 0; this.gsKt = 0; this.info = null; }
   setFlight(dep, arr) {
     dep = dep || null; arr = arr || null;
-    if (arr && dep && arr.icao === dep.icao) arr = null; // a flight to itself has no plan
+    if (arr && dep && arr.icao === dep.icao && !(this.divert && this.divert.icao === arr.icao)) arr = null; // a flight to itself has no plan — unless it is a divert back to the departure airport, which is a real plan
     if ((dep && dep.icao) === (this.dep && this.dep.icao) && (arr && arr.icao) === (this.arr && this.arr.icao)) return;
     this.dep = dep; this.arr = arr; this.gsKt = 0;
     this.totalNm = dep && arr ? haversine(dep.lat, dep.lon, arr.lat, arr.lon) / NM : 0;
