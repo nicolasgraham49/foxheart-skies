@@ -111,7 +111,7 @@ void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position
 }`;
 const CLOUD_WORLD = { value: new THREE.Vector2() };
 const CLOUD_FS = /* glsl */`
-varying vec3 vW; uniform float uCover; uniform float uScale; uniform vec2 uOff; uniform vec2 uWorld; uniform vec3 uSunCol; uniform vec3 uAmbCol; uniform float uLayer; uniform float uDark; uniform float uFade;
+varying vec3 vW; uniform float uCover; uniform float uScale; uniform vec2 uOff; uniform vec2 uWorld; uniform vec3 uSunCol; uniform vec3 uAmbCol; uniform float uLayer; uniform float uDark; uniform float uFade; uniform float uDetail;
 ${ATM_GLSL}
 ${NOISE_GLSL}
 float dens(vec2 p){
@@ -119,6 +119,7 @@ float dens(vec2 p){
   float n = fbm5(p * uScale + uOff) ;
   float m = fbm5(p * uScale * 4.3 - uOff*1.7 + 11.0);
   float v = n*0.75 + m*0.35;
+  v += (vnoise(p * uScale * 13.7 - uOff*2.9 + 7.0) - 0.5) * 0.24 * uDetail; // [Weather] fine billow detail erodes the blobby edges (tier-scaled)
   return smoothstep(1.02 - uCover, 1.02 - uCover + 0.28, v);
 }
 void main(){
@@ -149,15 +150,22 @@ void main(){
 const RAIN_VS = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_vertex>
-attribute float aEnd; uniform float uT; uniform vec3 uCam; uniform vec3 uVel; varying float vA;
+attribute float aEnd; attribute float aRnd; uniform float uT; uniform vec3 uCam; uniform vec3 uVel; uniform float uBox; uniform float uLen;
+uniform mat4 uInMat[3]; uniform vec3 uInMin[3]; uniform vec3 uInMax[3]; uniform int uInCount;
+varying float vA;
+// [Weather] interior occlusion: a streak whose world position falls inside any registered
+// interior volume (terminal hall, jet bridge, aircraft cabin/flight deck — world->local
+// matrices supplied by main.js) contributes nothing. Rain outside the volumes is untouched,
+// so looking out of a window at the rain still works; rain simply never falls indoors.
+float inVol(vec3 w){ for (int i = 0; i < 3; i++) { if (i >= uInCount) break; vec3 q = (uInMat[i] * vec4(w, 1.0)).xyz; if (all(greaterThanEqual(q, uInMin[i])) && all(lessThanEqual(q, uInMax[i]))) return 1.0; } return 0.0; }
 void main(){
-  vec3 p = position; float box = 60.0;
-  p.y = mod(p.y - uT * 9.0, box) - box*0.5;
+  vec3 p = position; float box = uBox;
+  p.y = mod(p.y - uT * 10.5, box) - box*0.5;
   p.xz = mod(p.xz - uCam.xz + box*0.5, box) - box*0.5;
   vec3 w = uCam + p;
-  vec3 streak = (vec3(0.0, -9.0, 0.0) - uVel) * 0.035;
+  vec3 streak = (vec3(0.0, -10.5, 0.0) - uVel) * uLen * (0.55 + 0.95 * aRnd);
   w += streak * aEnd;
-  vA = (1.0 - aEnd*0.7) * (1.0 - smoothstep(10.0, 30.0, length(p)));
+  vA = (1.0 - aEnd*0.7) * (1.0 - smoothstep(box*0.18, box*0.5, length(p))) * (0.5 + 0.7 * aRnd) * (1.0 - inVol(w));
   gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
   #include <logdepthbuf_vertex>
 }`;
@@ -206,21 +214,27 @@ export class Sky {
     this.sun = new THREE.DirectionalLight(0xffffff, 3); this.sun.position.set(0, 1, 0); scene.add(this.sun); scene.add(this.sun.target);
     this.amb = new THREE.AmbientLight(0x223344, 0.0); scene.add(this.amb);
 
-    // clouds: two stacked procedural layers following the camera
+    // clouds: stacked procedural layers following the camera (3rd layer is Ultra-only)
     this.clouds = [];
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < 3; i++) {
       const m = new THREE.ShaderMaterial({ vertexShader: CLOUD_VS, fragmentShader: '#include <common>\n#include <logdepthbuf_pars_fragment>\n' + CLOUD_FS, transparent: true, depthWrite: false, side: THREE.DoubleSide,
         blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
-        uniforms: { ...ATM, uCover: { value: 0 }, uScale: { value: 1 / 5200 }, uOff: { value: new THREE.Vector2(i * 37.1, i * 11.3) }, uWorld: CLOUD_WORLD, uLayer: { value: i }, uDark: { value: 0 }, uFade: { value: 70000 } } });
+        uniforms: { ...ATM, uCover: { value: 0 }, uScale: { value: 1 / 5200 }, uOff: { value: new THREE.Vector2(i * 37.1, i * 11.3) }, uWorld: CLOUD_WORLD, uLayer: { value: i }, uDark: { value: 0 }, uFade: { value: 70000 }, uDetail: { value: 0 } } });
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(160000, 160000, 1, 1).rotateX(-Math.PI / 2), m);
       mesh.frustumCulled = false; mesh.renderOrder = 5 + i; mesh.visible = false; scene.add(mesh); this.clouds.push(mesh);
     }
-    // rain
-    const RN = 5000, rp = new Float32Array(RN * 6), re = new Float32Array(RN * 2);
-    for (let i = 0; i < RN; i++) { const x = (Math.random() - .5) * 60, y = (Math.random() - .5) * 60, z = (Math.random() - .5) * 60; rp.set([x, y, z, x, y, z], i * 6); re[i * 2] = 0; re[i * 2 + 1] = 1; }
-    const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(rp, 3)); rg.setAttribute('aEnd', new THREE.BufferAttribute(re, 1));
+    // rain: one LineSegments draw at every tier; the tier only changes how many drops are
+    // drawn (draw range), the size of the rain volume around the camera and streak length.
+    this.rainTier = { low: { n: 3000, box: 48, len: 0.030 }, medium: { n: 7000, box: 56, len: 0.036 }, high: { n: 11000, box: 64, len: 0.042 }, ultra: { n: 16000, box: 72, len: 0.048 } }[quality] || { n: 11000, box: 64, len: 0.042 };
+    const RN = 16000, rp = new Float32Array(RN * 6), re = new Float32Array(RN * 2), rr = new Float32Array(RN * 2);
+    for (let i = 0; i < RN; i++) { const x = (Math.random() - .5) * 72, y = (Math.random() - .5) * 72, z = (Math.random() - .5) * 72; rp.set([x, y, z, x, y, z], i * 6); re[i * 2] = 0; re[i * 2 + 1] = 1; const r = Math.random(); rr[i * 2] = r; rr[i * 2 + 1] = r; }
+    const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(rp, 3)); rg.setAttribute('aEnd', new THREE.BufferAttribute(re, 1)); rg.setAttribute('aRnd', new THREE.BufferAttribute(rr, 1));
+    rg.setDrawRange(0, this.rainTier.n * 2);
+    this.interiorVolumes = []; // [{name, m: Matrix4 world->local, min, max}] — see setInteriorVolumes
+    this.rainSuppress = true; // harness can disable for before/after proof (setRainSuppression)
     this.rainMat = new THREE.ShaderMaterial({ vertexShader: RAIN_VS, fragmentShader: RAIN_FS, transparent: true, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
-      uniforms: { uT: { value: 0 }, uCam: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3() }, uCol: { value: new THREE.Color(0.55, 0.6, 0.68) }, uAlpha: { value: 0.35 } } });
+      uniforms: { uT: { value: 0 }, uCam: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3() }, uCol: { value: new THREE.Color(0.55, 0.6, 0.68) }, uAlpha: { value: 0.35 }, uBox: { value: this.rainTier.box }, uLen: { value: this.rainTier.len },
+        uInMat: { value: [new THREE.Matrix4(), new THREE.Matrix4(), new THREE.Matrix4()] }, uInMin: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] }, uInMax: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] }, uInCount: { value: 0 } } });
     this.rain = new THREE.LineSegments(rg, this.rainMat); this.rain.frustumCulled = false; this.rain.visible = false; this.rain.renderOrder = 8; scene.add(this.rain);
 
     this.pmrem = new THREE.PMREMGenerator(renderer);
@@ -254,8 +268,47 @@ export class Sky {
       rain: { cover: 0.99, base: 500, thick: 2200, overcast: 0.96, rain: 1, vis: 5500, haze: 2.5, dark: 0.7 },
       fog: { cover: 0.9, base: 120, thick: 300, overcast: 0.7, rain: 0, vis: 700, haze: 2.5, dark: 0.3, fog: 1 },
     }[kind] || {};
-    this.weather = { kind, ...W, fog: W.fog || 0 };
+    this.weather = { kind, ...W, fog: W.fog || 0, windKt: (wind && wind.kt) || 0, windFrom: (wind && wind.from) ?? 270 };
     this.lutDirty = true; this.envAge = 1e9;
+  }
+
+  // [Weather] interior volumes for rain occlusion. Each volume is an oriented box given as a
+  // world->local matrix plus local min/max; the rain shader zeroes any streak inside one.
+  // main.js supplies [terminal, jet bridge, cabin] every frame; max 3 (shader loop bound).
+  setInteriorVolumes(list) {
+    const u = this.rainMat.uniforms;
+    this.interiorVolumes = (list || []).slice(0, 3);
+    for (let i = 0; i < 3; i++) {
+      const v = this.interiorVolumes[i];
+      if (v) { u.uInMat.value[i].copy(v.m); u.uInMin.value[i].copy(v.min); u.uInMax.value[i].copy(v.max); }
+    }
+    u.uInCount.value = this.rainSuppress ? this.interiorVolumes.length : 0;
+  }
+  setRainSuppression(on) { this.rainSuppress = !!on; const u = this.rainMat.uniforms; u.uInCount.value = this.rainSuppress ? this.interiorVolumes.length : 0; }
+
+  // [Weather] numeric probe mirroring RAIN_VS exactly (same wrap math, same volume test):
+  // for the camera position and time given, count the drawn drops whose aEnd=0 vertex lands
+  // inside each interior volume, and how many of those would still render (suppression off,
+  // or the volume not registered). Screenshots carry the visual proof; this carries the count.
+  rainProbe(camPos, time) {
+    const pos = this.rain.geometry.attributes.position, box = this.rainTier.box, n = this.rainTier.n;
+    const mod = (x, y) => x - y * Math.floor(x / y);
+    const inside = {}, rendered = {}; for (const v of this.interiorVolumes) { inside[v.name] = 0; rendered[v.name] = 0; }
+    const q = new THREE.Vector3(), w = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const bx = pos.getX(i * 2), by = pos.getY(i * 2), bz = pos.getZ(i * 2);
+      w.set(camPos.x + (mod(bx - camPos.x + box * 0.5, box) - box * 0.5),
+            camPos.y + (mod(by - time * 10.5, box) - box * 0.5),
+            camPos.z + (mod(bz - camPos.z + box * 0.5, box) - box * 0.5));
+      this.interiorVolumes.forEach((v, vi) => {
+        q.copy(w).applyMatrix4(v.m);
+        if (q.x >= v.min.x && q.x <= v.max.x && q.y >= v.min.y && q.y <= v.max.y && q.z >= v.min.z && q.z <= v.max.z) {
+          inside[v.name]++;
+          if (!this.rainSuppress || vi >= this.interiorVolumes.length) rendered[v.name]++;
+        }
+      });
+    }
+    return { drops: n, box, suppression: this.rainSuppress, inside, renderedInside: rendered };
   }
 
   // visibility in metres → haze extinction at sea level
@@ -316,11 +369,13 @@ export class Sky {
     this.stars.visible = night > 0.02 && w.overcast < 0.9;
     // clouds
     const scale = w.overcast > 0.5 ? 1 / 3800 : 1 / 5600;
+    const detail = this.quality === 'low' ? 0 : this.quality === 'medium' ? 0.55 : 1;
+    const drift = 0.00018 * (0.4 + (w.windKt || 0) / 12); // [Weather] cloud drift follows the actual wind
     this.clouds.forEach((c, i) => {
-      c.visible = w.cover > 0.02 && (i === 0 || this.quality !== 'low');
+      c.visible = w.cover > 0.02 && (i === 0 || (i === 1 && this.quality !== 'low') || (i === 2 && this.quality === 'ultra'));
       c.position.set(Math.round(camera.position.x / 500) * 500, w.base + i * w.thick * 0.55, Math.round(camera.position.z / 500) * 500);
-      const u = c.material.uniforms; u.uCover.value = i === 0 ? w.cover : w.cover * 0.85; u.uScale.value = scale * (i ? 1.3 : 1);
-      u.uOff.value.x += dt * 0.00018 * (i ? 1.2 : 1); u.uDark.value = w.dark || 0; u.uFade.value = w.vis < 8000 ? 30000 : 75000;
+      const u = c.material.uniforms; u.uCover.value = i === 0 ? w.cover : w.cover * (i === 1 ? 0.85 : 0.7); u.uScale.value = scale * (i === 1 ? 1.3 : i === 2 ? 1.8 : 1);
+      u.uOff.value.x += dt * drift * (i ? 1.2 : 1); u.uDark.value = w.dark || 0; u.uFade.value = w.vis < 8000 ? 30000 : 75000; u.uDetail.value = detail;
     });
     // rain
     this.rain.visible = w.rain > 0 && this.quality !== 'off';

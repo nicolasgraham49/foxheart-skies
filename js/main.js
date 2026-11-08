@@ -261,7 +261,7 @@ function setTimeOfDay(min) {
   sky.setSun(s.elev, s.az); W.sun = s;
 }
 function setWeather(kind, dirFrom, kt, gust) {
-  W.wx = kind; sky.setWeather(kind); W.windFrom = dirFrom ?? W.windFrom; W.windKt = kt ?? W.windKt; W.gust = gust ? Math.max(2, W.windKt * KT * 0.35) : (kind === 'rain' ? 2 : 0);
+  W.wx = kind; W.windFrom = dirFrom ?? W.windFrom; W.windKt = kt ?? W.windKt; sky.setWeather(kind, { from: W.windFrom, kt: W.windKt }); W.gust = gust ? Math.max(2, W.windKt * KT * 0.35) : (kind === 'rain' ? 2 : 0);
   const a = W.windFrom * D2R; W.wind.set(-Math.sin(a), 0, Math.cos(a)).multiplyScalar(W.windKt * KT);
   W.wet.value = kind === 'rain' ? 1 : kind === 'fog' ? 0.35 : 0; terrain.uniforms.uWet.value = W.wet.value;
 }
@@ -1353,10 +1353,42 @@ function cabinStep(dt) { // flight cabin (people, crew director) + cabin crew ph
   if (W.started && !W.menuMode) cabinPhaseStep(dt);
 }
 const _c2s = {}, _cabCam = new THREE.Vector3();
+// [Weather] interior volumes for rain occlusion (see Sky.setInteriorVolumes): the terminal
+// (the exact on-foot hall when it exists, else the airport-frame terminal block), the jet
+// bridge, and the aircraft cabin + flight deck. Slow volumes refresh at 4 Hz (the hall and
+// bridge are static or slow); the cabin volume follows the aircraft every frame.
+const _ivSlow = { t: -1, key: null, vols: [] };
+function interiorVolumesSlow() {
+  const parts0 = (typeof foot !== 'undefined' && foot) ? foot.parts : null;
+  const key = parts0 && parts0.term ? parts0.term : (W.primary || null);
+  // simTime restarts at 0 on every flight, so a plain time check would serve the PREVIOUS
+  // flight's volumes after a restart — the key (hall build / primary airport) must match too.
+  if (_ivSlow.key === key && W.simTime >= _ivSlow.t && W.simTime - _ivSlow.t < 0.25) return _ivSlow.vols;
+  _ivSlow.t = W.simTime; _ivSlow.key = key; const vols = [];
+  const parts = (typeof foot !== 'undefined' && foot) ? foot.parts : null;
+  if (parts && parts.term) {
+    const term = parts.term; term.group.updateMatrixWorld();
+    const HW = term.walk && term.walk.zones[0] ? term.walk.zones[0].hl + 0.6 : 46;
+    vols.push({ name: 'terminal', m: new THREE.Matrix4().copy(term.group.matrixWorld).invert(), min: new THREE.Vector3(-HW - 0.4, term.F - 0.4, -0.6), max: new THREE.Vector3(HW + 0.4, term.F + 15.6, term.D + 0.6) });
+    if (parts.bridge && parts.bridge.group) { const bb = new THREE.Box3().setFromObject(parts.bridge.group); if (!bb.isEmpty()) { bb.expandByScalar(0.3); vols.push({ name: 'bridge', m: new THREE.Matrix4(), min: bb.min, max: bb.max }); } }
+  } else if (W.primary && W.primary.b && W.primary.b.frame) {
+    const fr = W.primary.b.frame, C = new THREE.Vector3(W.primary.x + fr.ax, W.primary.elev, W.primary.z + fr.az);
+    const m = new THREE.Matrix4().makeBasis(new THREE.Vector3(fr.adx, 0, fr.adz), new THREE.Vector3(0, 1, 0), new THREE.Vector3(-fr.nx, 0, -fr.nz)).setPosition(C).invert();
+    vols.push({ name: 'terminal', m, min: new THREE.Vector3(-fr.L2 / 2 - 2, -1, fr.facadeD - 2), max: new THREE.Vector3(fr.L2 / 2 + 2, fr.termH + 2, fr.facadeD + fr.termDepth + 2) });
+  }
+  _ivSlow.vols = vols; return vols;
+}
+function updateInteriorVolumes() {
+  const vols = interiorVolumesSlow().slice();
+  aircraft.updateMatrixWorld();
+  vols.push({ name: 'cabin', m: new THREE.Matrix4().copy(aircraft.matrixWorld).invert(), min: new THREE.Vector3(-2.05, -0.8, -19.9), max: new THREE.Vector3(2.05, 2.15, 13.1) });
+  sky.setInteriorVolumes(vols);
+}
 function renderRest(dt, night) {
   renderer.toneMappingExposure = sky.exposure; bloom.threshold = Math.max(1.0, 1.15 / sky.exposure); bloom.strength = 0.22 + 0.06 * night; bloom.radius = 0.38; // [Playtest2] the old 1.15/exposure threshold fell to ~0.44 at night, so every lamp and lit window bloomed into one white wash; floor it at 1.0 (only true light sources bloom), keep the night strength gain small, and tighten the radius (was 0.55) so a stand floodlight blooms as a lamp halo, not a screen-wide glare core
   LIGHT_U.uDay.value = 1 - ATM.uNight.value; aircraft.userData.parts.lightPts.mat.uniforms.uPx.value = renderer.getPixelRatio();
-  sky.rainMat.uniforms.uVel.value.copy(fdm.vel);
+  sky.rainMat.uniforms.uVel.value.copy(fdm.vel).sub(W.wind); // [Weather] streaks slant with the weather wind, not just the aircraft's motion
+  updateInteriorVolumes();
   // blob shadow
   const gh = ground(fdm.pos.x, fdm.pos.z).h; const agl = fdm.pos.y - gh; blob.visible = settings.quality !== 'ultra' && agl < 80 && ATM.uNight.value < 0.95;
   if (blob.visible) { blob.position.set(fdm.pos.x, gh + 0.12, fdm.pos.z); const e = fdm.euler(); blob.rotation.y = -e.hdg * D2R; blob.scale.set(30, 1, 38); blob.material.opacity = (1 - agl / 80) * (1 - W.sky_oc) * 0.9; }
