@@ -179,6 +179,8 @@ select{background:rgba(0,0,0,.35);color:var(--ink);border:1px solid var(--line2)
 .fcub{display:grid;place-items:center;gap:3px;padding:4px 9px;border-radius:6px;font:700 10.5px var(--f-mono);letter-spacing:.06em;color:#c8d0dc}
 .fcub i{display:block;width:22px;height:3px;border-radius:2px;background:#2d3540}
 .fcub[aria-pressed=true] i{background:var(--green);box-shadow:0 0 8px var(--green)}
+#divertBtn.on{color:var(--amber)}
+#divertBtn.on i{background:var(--amber);box-shadow:0 0 8px rgba(255,184,77,.55)}
 .fcub:hover{background:rgba(255,255,255,.05)}
 .fcusep{width:1px;background:rgba(255,255,255,.08);margin:4px 4px}
 #info{position:absolute;top:max(12px,env(safe-area-inset-top,0px));right:max(16px,env(safe-area-inset-right,0px));padding:10px 14px;display:grid;gap:3px;font:11.5px var(--f-mono);min-width:190px}
@@ -457,6 +459,7 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
     <button class="fcub" data-b="nav" aria-pressed="false">NAV<i></i></button>
     <button class="fcub" data-b="loc" aria-pressed="false">LOC<i></i></button>
     <button class="fcub" data-b="appr" aria-pressed="false">APPR<i></i></button>
+    <button class="fcub" id="divertBtn" title="Divert to the nearest suitable airport (U) — click again to cancel the diversion and continue to your destination">DIVERT<i></i></button>
     <div class="fcusep"></div>
     <button class="fcub" id="radioBtn" style="color:var(--amber)">RADIO<i style="background:var(--amber)"></i></button>
     <button class="fcub pab" id="paBtn">PA<i></i></button>
