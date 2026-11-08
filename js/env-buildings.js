@@ -214,7 +214,13 @@ export function buildAirportArt(group, ctx) {
     // full-width test fails at hemmed-in airports (KTPA sits between two runways),
     // which silently deleted the departures curb + car park there entirely
     const curbOK = ctx.spot([[0, f.dep / 2 + 6 + TD + 13]], Lw + 280, 34, ['rw', 'tw']) || ctx.spot([[0, f.dep / 2 + 6 + TD + 13]], Lw * 0.62, 34, ['rw', 'tw']) || ctx.spot([[0, f.dep / 2 + 6 + TD + 13]], Lw * 0.4, 34, ['rw', 'tw']);
-    const parkOK = ctx.spot([[0, f.dep / 2 + 6 + TD + 60]], cpW + 60, 110, ['rw', 'tw']);
+    // [Airport design] the car park is built as two wings flanking a 38 m central corridor, so the
+    // world access road can leave the curb through the gap (it previously drove straight through the
+    // middle of the parked decks at every airport). Each wing is spot-tested on its own.
+    const cpGap = 19, cpWingW = Math.max(30, (cpW - cpGap * 2) / 2), cpWingX = cpGap + cpWingW / 2;
+    const parkWings = [];
+    for (const sd of [-1, 1]) if (ctx.spot([[sd * cpWingX, f.dep / 2 + 6 + TD + 60]], cpWingW + 10, 110, ['rw', 'tw'])) parkWings.push(sd);
+    const parkOK = parkWings.length > 0;
     if (curbOK) {
       B.add('dark', box(LR * 2, 0.1, 16), TM(0, 0.05, TD + 13), roadMat, 6); for (let x = -LR + 3; x < LR; x += 9) B.add('lamp', box(3, 0.02, 0.15), TM(x, 0.11, TD + 13), 0xd8d8d0);
       for (let x = -LR + 6; x < LR; x += 11) B.add('dark', box(3.4, 0.03, 0.28), TM(x, 0.115, TD + 15.4), 0xdcd9d0, 6); B.add('dark', box(LR * 2, 0.03, 0.3), TM(0, 0.115, TD + 6.4), 0xc79a1b, 6); // lane dashes + yellow curb line
@@ -240,17 +246,19 @@ export function buildAirportArt(group, ctx) {
         else { B.add('dark', box(0.2, 1.3, 0.2), TM(px, FL + 1.25, PZ), 0x6b4e33, 3); B.add('dark', new THREE.SphereGeometry(1.25, 7, 6), TM(px, FL + 2.6, PZ), LEAF, 3); B.add('dark', new THREE.SphereGeometry(0.85, 7, 6), TM(px + 0.8, FL + 2.1, PZ + 0.3), LEAF2, 3); } }
       for (const cxo of [-5.6, 5.9]) { B.add('metal', box(0.06, 0.95, 1.15), TM(cxo - 0.45, FL + 0.48, TD + 3.4), 0xb9bdc0, 3); B.add('metal', box(0.06, 0.95, 1.15), TM(cxo + 0.45, FL + 0.48, TD + 3.4), 0xb9bdc0, 3); B.add('metal', box(0.95, 0.06, 1.15), TM(cxo, FL + 0.12, TD + 3.4), 0x9aa0a4, 3); B.add('metal', box(0.95, 0.06, 0.06), TM(cxo, FL + 0.98, TD + 3.4), 0x9aa0a4, 3); B.add('car', box(0.8, 0.55, 0.55), TM(cxo, FL + 0.42, TD + 3.25), 0x7a1d1d, 3); B.add('car', box(0.7, 0.45, 0.5), TM(cxo + 0.05, FL + 0.36, TD + 3.62), 0x1d3557, 3); } // luggage carts by the doors
     }
-    if (parkOK) { // multi-storey car park
-      for (let k = 0; k <= 4; k++) { B.add('conc', box(cpW, 0.4, cpD), TM(0, k * 3.2 + 0.2, cpZ + cpD / 2), cC, 4); if (k) for (const s of [-1, 1]) B.add('conc', box(cpW, 1.0, 0.25), TM(0, k * 3.2 + 0.9, cpZ + (s > 0 ? cpD : 0)), cC, 4); }
-      for (let x = -cpW / 2 + 2; x < cpW / 2; x += 8.1) for (let z = 2; z < cpD; z += 9) B.add('conc', box(0.5, 12.8, 0.5), TM(x, 6.4, cpZ + z), cC, 2);
-      B.add('conc', box(14, 13.6, 10), TM(cpW / 2 + 7, 6.8, cpZ + 10), cC, 4); sign('park', 6, 3, TM(cpW / 2 + 7, 11, cpZ + 4.9, PI));
+    if (parkOK) { // multi-storey car park, one deck block per placed wing, road corridor between them
+      for (const sd of parkWings) { const wx = sd * cpWingX;
+        for (let k = 0; k <= 4; k++) { B.add('conc', box(cpWingW, 0.4, cpD), TM(wx, k * 3.2 + 0.2, cpZ + cpD / 2), cC, 4); if (k) for (const s of [-1, 1]) B.add('conc', box(cpWingW, 1.0, 0.25), TM(wx, k * 3.2 + 0.9, cpZ + (s > 0 ? cpD : 0)), cC, 4); }
+        for (let x = wx - cpWingW / 2 + 2; x < wx + cpWingW / 2; x += 8.1) for (let z = 2; z < cpD; z += 9) B.add('conc', box(0.5, 12.8, 0.5), TM(x, 6.4, cpZ + z), cC, 2);
+        if (sd > 0) { B.add('conc', box(14, 13.6, 10), TM(cpW / 2 + 7, 6.8, cpZ + 10), cC, 4); sign('park', 6, 3, TM(cpW / 2 + 7, 11, cpZ + 4.9, PI)); } }
     }
     if (curbOK || parkOK) { // parked + moving cars
       const carG = (() => { const b = new Bk(); b.add('panel', box(1.8, 0.75, 4.4), M4(0, 0.6, 0), 0xffffff, 3); b.add('panel', box(1.6, 0.6, 2.2), M4(0, 1.2, 0.2), 0x2a333c, 3); for (const sx of [-0.85, 0.85]) for (const sz of [-1.4, 1.4]) b.add('panel', cyl(0.33, 0.33, 0.25, 8).rotateZ(H), M4(sx, 0.33, sz), 0x161616); return b.geo('panel'); })();
       const COL = ID.cars || [0xe8e8e8, 0x1a1a1a, 0x8c949c, 0x7a1d1d, 0x1d3557, 0xc0c4c8, 0x2f4f3a, 0xd9d2c3];
-      const nPark = parkOK ? Math.min(220, Math.floor((cpW / 2.6) * 2 * 5 * 0.55)) : 0, nMove = curbOK ? Math.round(24 * (ID.traffic || 1)) : 0, cars = new THREE.InstancedMesh(carG, bldMats().car, nPark + nMove); cars.frustumCulled = false; cars.castShadow = sh; group.add(cars);
+      const nPark = parkOK ? Math.min(220, Math.floor((cpWingW * parkWings.length / 2.6) * 2 * 5 * 0.55)) : 0, nMove = curbOK ? Math.round(24 * (ID.traffic || 1)) : 0, cars = new THREE.InstancedMesh(carG, bldMats().car, nPark + nMove); cars.frustumCulled = false; cars.castShadow = sh; group.add(cars);
       let ci = 0; const cc = new THREE.Color();
-      for (let k = 0; k < 5 && ci < nPark; k++) for (const row of [cpZ + 6, cpZ + cpD - 6]) for (let x = -cpW / 2 + 3; x < cpW / 2 - 3 && ci < nPark; x += 2.6) { if (R() < 0.42) continue; const m = TM(x, k * 3.2 + 0.4, row + (R() - 0.5) * 0.3, (R() - 0.5) * 0.06); cars.setMatrixAt(ci, m); cars.setColorAt(ci++, cc.set(COL[(R() * COL.length) | 0])); }
+      for (const sd of parkWings) { const wx = sd * cpWingX;
+        for (let k = 0; k < 5 && ci < nPark; k++) for (const row of [cpZ + 6, cpZ + cpD - 6]) for (let x = wx - cpWingW / 2 + 3; x < wx + cpWingW / 2 - 3 && ci < nPark; x += 2.6) { if (R() < 0.42) continue; const m = TM(x, k * 3.2 + 0.4, row + (R() - 0.5) * 0.3, (R() - 0.5) * 0.06); cars.setMatrixAt(ci, m); cars.setColorAt(ci++, cc.set(COL[(R() * COL.length) | 0])); } }
       const mv = []; for (let j = 0; j < nMove; j++) { mv.push({ lane: j % 3, s: R() * LR * 2, v: 9 + R() * 5, i: ci }); cars.setColorAt(ci++, cc.set(COL[(R() * COL.length) | 0])); }
       for (let j = ci; j < nPark + nMove; j++) cars.setMatrixAt(j, ZERO);
       let last = performance.now(); cars.onBeforeRender = () => { const now = performance.now(), dt = Math.min(0.1, (now - last) / 1000); last = now; for (const c of mv) { c.s = (c.s + c.v * dt) % (LR * 2); const dir = c.lane === 2 ? -1 : 1, x = dir > 0 ? -LR + c.s : LR - c.s; const deck = c.lane === 0 && Math.abs(x) < Lw * 0.45; cars.setMatrixAt(c.i, TM(x, deck ? FL : 0.05, TD + (c.lane === 0 ? (deck ? 6 : 9.5) : c.lane === 1 ? 13 : 17.5), dir > 0 ? -H : H)); } cars.instanceMatrix.needsUpdate = true; };

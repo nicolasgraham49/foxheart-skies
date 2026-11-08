@@ -27,7 +27,7 @@ export const IDENTITY = {
   // aqua deco double band, deep-teal name sign with pink neon-leaning letters.
   KMIA: { roof: 'wave', panel: 0xf7e3d8, conc: 0xf2f0e6, roofTint: 0xd6ece4, glass: 0xffe9f1,
     signBg: '#0d3b3e', signFg: '#ffc7d9', stripe2: '#29c4c4', veg: 'palm',
-    cars: [0xf6ead8, 0xf3c6d3, 0xbfe3dd, 0xe8e8e8, 0x8c949c, 0x7a1d1d, 0x1d3557, 0xf0d9a0], traffic: 1.1, blocks: 0, landmark: null,
+    cars: [0xf6ead8, 0xf3c6d3, 0xbfe3dd, 0xe8e8e8, 0x8c949c, 0x7a1d1d, 0x1d3557, 0xf0d9a0], traffic: 1.1, blocks: 1, landmark: null,
     hall: { carpet: '#31586b', wall: '#f2e8dc', ceil: '#e3d9c8', signBg: '#123a44', signFg: '#ff9ebb', art: 'accent' } },
   // Incheon — sleek Korean modern: one sweeping pale arch, blue-grey metal and
   // glass, navy signage, pines at the curb.
@@ -35,20 +35,24 @@ export const IDENTITY = {
     signBg: '#0e2242', signFg: '#ffffff', stripe2: null, veg: 'pine',
     cars: [0xe8e8e8, 0xc0c4c8, 0x1a1a1a, 0xe8e8e8, 0x8c949c, 0x2a2f35, 0xd9d2c3, 0x1d3557], traffic: 1.2, blocks: 0, landmark: null,
     hall: { carpet: '#2c3e50', wall: '#e9e9e6', ceil: '#ccd4da', signBg: '#10243e', signFg: '#dbe9fa', art: 'metal' } },
-  RKSS: { roof: 'wave', panel: 0xe4e9ee, conc: 0xe9edf0, roofTint: 0xd8e2ea, glass: 0xdfeaf2,
-    signBg: '#0e2242', signFg: '#ffffff', stripe2: null, veg: 'pine',
-    cars: [0xe8e8e8, 0xc0c4c8, 0x1a1a1a, 0xe8e8e8, 0x8c949c, 0x2a2f35, 0xd9d2c3, 0x1d3557], traffic: 1.1, blocks: 0, landmark: null,
+  // Gimpo — the older domestic sibling of Incheon: warmer concrete, a brass
+  // second band, deep-green signage, one urban block on the landside.
+  RKSS: { roof: 'wave', panel: 0xe9e2d2, conc: 0xe9e6da, roofTint: 0xdcd2bc, glass: 0xe8e2d2,
+    signBg: '#123524', signFg: '#f2e8c8', stripe2: '#c8a028', veg: 'pine',
+    cars: [0xe8e8e8, 0xc0c4c8, 0x1a1a1a, 0xe8e8e8, 0x8c949c, 0x2a2f35, 0xd9d2c3, 0x1d3557], traffic: 1.1, blocks: 1, landmark: null,
     hall: { carpet: '#2c3e50', wall: '#e9e9e6', ceil: '#d3dade', signBg: '#10243e', signFg: '#dbe9fa', art: 'metal' } },
+  // Haneda — crisp white terminal with a restrained red second band.
   RJTT: { roof: 'wave', panel: 0xf0ece2, conc: 0xeeece6, roofTint: 0xe8e0cc, glass: 0xf2ece2,
-    signBg: '#1c1a24', signFg: '#f2d8d8', stripe2: null, veg: 'pine', cars: CARS_STD, traffic: 1.1, blocks: 0, landmark: null,
+    signBg: '#1c1a24', signFg: '#f2d8d8', stripe2: '#a6192e', veg: 'pine', cars: CARS_STD, traffic: 1.1, blocks: 0, landmark: null,
     hall: { carpet: '#33404d', wall: '#ecebe4', ceil: '#d8d2c4', signBg: '#1c1a24', signFg: '#f0d9a8', art: 'wood' } },
   // Los Angeles — basin light, warm sand, a low wide mesa roof, palms, and the
   // mid-century Theme Building standing on the landside.
   KLAX: { roof: 'mesa', panel: 0xf3e9d4, conc: 0xefe9da, roofTint: 0xeee0bc, glass: 0xfff2da,
     signBg: '#33241a', signFg: '#ffd9a0', stripe2: null, veg: 'palm', cars: CARS_STD, traffic: 1.2, blocks: 1, landmark: 'theme',
     hall: { carpet: '#3a4a56', wall: '#ece1cd', ceil: '#ddd2bc', signBg: '#241c14', signFg: '#ffc46b', art: 'wood' } },
+  // San Francisco — fog-grey slab with a bay-teal second band, cypress rows.
   KSFO: { roof: 'slab', panel: 0xe2e6e1, conc: 0xe6e8e2, roofTint: 0xd6dbd2, glass: 0xe4ecec,
-    signBg: '#26343a', signFg: '#ffd9c9', stripe2: null, veg: 'cypress', cars: CARS_STD, traffic: 1, blocks: 0, landmark: null,
+    signBg: '#26343a', signFg: '#ffd9c9', stripe2: '#1f7a6d', veg: 'cypress', cars: CARS_STD, traffic: 1, blocks: 0, landmark: null,
     hall: { carpet: '#2e4a4a', wall: '#e8e6de', ceil: '#cfd4cc', signBg: '#1e2c30', signFg: '#ffb59d', art: 'metal' } },
   // New York — glass-and-steel: cool blue-grey cladding, a dark flat slab roof,
   // a taxi-yellow second band, denser landside (extra blocks, more traffic).
@@ -56,20 +60,21 @@ export const IDENTITY = {
     signBg: '#0b0e13', signFg: '#d7e6ff', stripe2: '#f4b400', veg: 'tree',
     cars: [0x1a1a1a, 0xf4b400, 0xe8e8e8, 0x1a1a1a, 0x8c949c, 0xf4b400, 0x2a2f35, 0xc0c4c8], traffic: 1.6, blocks: 3, landmark: null,
     hall: { carpet: '#232a33', wall: '#e2e4e6', ceil: '#c9ccd0', signBg: '#0b0e13', signFg: '#ffffff', art: 'metal' } },
+  // Heathrow — grey steel slab with the Heathrow-purple second band.
   EGLL: { roof: 'slab', panel: 0xd8d5cd, conc: 0xdcdad4, roofTint: 0xaeb4ba, glass: 0xd8dde2,
-    signBg: '#1d1a26', signFg: '#e8ddff', stripe2: null, veg: 'shrub', cars: CARS_STD, traffic: 1.3, blocks: 1, landmark: null,
+    signBg: '#1d1a26', signFg: '#e8ddff', stripe2: '#572c84', veg: 'shrub', cars: CARS_STD, traffic: 1.3, blocks: 1, landmark: null,
     hall: { carpet: '#33383e', wall: '#e5e3de', ceil: '#c6c4bc', signBg: '#17141f', signFg: '#d9c8ff', art: 'metal' } },
   OMDB: { roof: 'wave', panel: 0xf5ecd6, conc: 0xf0e9d8, roofTint: 0xefdfba, glass: 0xfff4dc,
-    signBg: '#14342c', signFg: '#ffd98a', stripe2: null, veg: 'palm', cars: CARS_STD, traffic: 1.1, blocks: 1, landmark: null,
+    signBg: '#14342c', signFg: '#ffd98a', stripe2: null, veg: 'palm', cars: CARS_STD, traffic: 1.1, blocks: 2, landmark: null,
     hall: { carpet: '#274b45', wall: '#efe8da', ceil: '#ddd2ba', signBg: '#122b24', signFg: '#ffd98a', art: 'accent' } },
   WSSS: { roof: 'arch', panel: 0xe6efe6, conc: 0xe9efe6, roofTint: 0xd5e8d6, glass: 0xe6f2e4,
-    signBg: '#2c1030', signFg: '#ffd7f2', stripe2: null, veg: 'tropical', cars: CARS_STD, traffic: 1, blocks: 0, landmark: null,
+    signBg: '#2c1030', signFg: '#ffd7f2', stripe2: null, veg: 'tropical', cars: CARS_STD, traffic: 1, blocks: 1, landmark: null,
     hall: { carpet: '#2c4a3a', wall: '#e9e6da', ceil: '#d4dcc8', signBg: '#241028', signFg: '#ffb8e6', art: 'accent' } },
   // Tocumen, Panamá — tropical: terracotta-washed roof, orange + green double
   // band, lush broadleaf planting at the curb, Spanish signage (via ACCENTS).
   MPTO: { roof: 'wave', panel: 0xf7e7d0, conc: 0xf0e8d6, roofTint: 0xe8a075, glass: 0xfff4de,
     signBg: '#2c3418', signFg: '#ffe3b0', stripe2: '#2f9e5b', veg: 'tropical',
-    cars: [0xe8e8e8, 0xd94f30, 0x1a1a1a, 0x2f7d4f, 0xf0d9a0, 0x8c949c, 0x1d3557, 0xe8e8e8], traffic: 1, blocks: 0, landmark: null,
+    cars: [0xe8e8e8, 0xd94f30, 0x1a1a1a, 0x2f7d4f, 0xf0d9a0, 0x8c949c, 0x1d3557, 0xe8e8e8], traffic: 1, blocks: 1, landmark: null,
     hall: { carpet: '#2f5240', wall: '#f0e4cd', ceil: '#ded2b8', signBg: '#1d2b16', signFg: '#ffc46b', art: 'wood' } },
 };
 

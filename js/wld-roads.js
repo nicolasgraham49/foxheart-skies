@@ -47,26 +47,74 @@ export class Roads {
   build(ctx) {
     this.clear(); const b = ctx.b; if (!b || !b.b?.frame || this.q === 'low') return;
     const fr0 = b.b.frame, nx = fr0.nx, nz = fr0.nz, L = [-nx, -nz]; // landside direction (away from the runways)
-    const curb = [b.x + fr0.ax + L[0] * (fr0.facadeD + (fr0.termDepth || 40) + 13), b.z + fr0.az + L[1] * (fr0.facadeD + (fr0.termDepth || 40) + 13)];
-    // the access road leaves the curb in the landside direction if it can, else turns until it reaches the fence without crossing a runway strip
-    const rw = b.b.site ? b.b.site.rw : [], inRw = (x, z) => rw.some(o => { const dx = x - b.x - o.cx, dz = z - b.z - o.cz; return Math.abs(dx * o.ux + dz * o.uz) < o.hl && Math.abs(-dx * o.uz + dz * o.ux) < o.hw; });
-    let best = null; for (let k = 0; k < 24; k++) { const ang = Math.atan2(L[1], L[0]) + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 12, dir = [Math.cos(ang), Math.sin(ang)]; let s = 0, ok = true;
-      for (; s < 9000; s += 20) { const x = curb[0] + dir[0] * s, z = curb[1] + dir[1] * s; if (inRw(x, z)) { ok = false; break; } if (ctx.hullDist(x, z) < -40) break; }
-      if (ok && s < 9000) { const cost = s + Math.ceil(k / 2) * 250; if (!best || cost < best.cost) best = { dir, s, cost }; } }
-    if (!best) return; const Ld = best.dir, D = best.s + 650, I = [curb[0] + Ld[0] * D, curb[1] + Ld[1] * D], H = [-Ld[1], Ld[0]]; // interchange beyond the fence, highway direction
+    const curbD = fr0.facadeD + (fr0.termDepth || 40) + 13;
+    const curb = [b.x + fr0.ax + L[0] * curbD, b.z + fr0.az + L[1] * curbD];
+    // [Airport design] Protected ground: every Site box (runway strips, taxiway strips, the apron, every
+    // placed building) plus the terminal footprint itself. A road may touch ONLY its curb junction box.
+    // The old search tested runway strips alone, so at hemmed-in airports the winning "exit" ran parallel
+    // to the terminal (KTPA/KMIA/EGLL at ±90°) or doubled back across the apron and stands (RJTT −120°,
+    // WSSS −105° — the owner's Tokyo bug), and every airport's access road drove through the car park.
+    const site = b.b.site, prot = [];
+    if (site) {
+      for (const o of [...site.rw, ...site.tw, ...site.ap]) prot.push(o);
+      for (const o of site.placed) { const dx = o.cx - (fr0.ax - nx * curbD), dz = o.cz - (fr0.az - nz * curbD); if (dx * dx + dz * dz > 4) prot.push(o); } // skip the curb junction box itself
+      const TD = fr0.termDepth || 40, dd = fr0.dep / 2 + 6 + TD / 2;
+      prot.push({ cx: fr0.ax - nx * dd, cz: fr0.az - nz * dd, ux: fr0.adx, uz: fr0.adz, hl: fr0.L2 * 0.42, hw: TD / 2 + 12 }); // terminal + roof overhang
+    }
+    const inProt = (x, z) => prot.some(o => { const dx = x - b.x - o.cx, dz = z - b.z - o.cz; return Math.abs(dx * o.ux + dz * o.uz) < o.hl && Math.abs(-dx * o.uz + dz * o.ux) < o.hw; });
+    const acH = halfW(TYPES.acc), hwH = halfW(TYPES.hwy), rmH = halfW(TYPES.ramp);
+    // first index at which a polyline's corridor (centreline + both edges) enters protected ground, or -1
+    const lineHit = (pts, half, step = 1) => { for (let i = 0; i < pts.length; i += step) { const p = pts[i], q = pts[Math.min(i + 1, pts.length - 1)], r = pts[Math.max(0, i - 1)]; let tx = q[0] - r[0], tz = q[1] - r[1]; const l = Math.hypot(tx, tz) || 1; tx /= l; tz /= l;
+      for (const a of [0, half + 1.5, -half - 1.5]) if (inProt(p[0] - tz * a, p[1] + tx * a)) return i; } return -1; };
+    // walk a ray from an origin (stations past the 15 m junction): { exit } at the fence, or { block } at the first protected station
+    const ray = (o, dir) => { const px = -dir[1], pz = dir[0];
+      for (let s = 15; s < 9000; s += 10) { const x = o[0] + dir[0] * s, z = o[1] + dir[1] * s;
+        for (const a of [0, acH + 1.5, -acH - 1.5]) if (inProt(x + px * a, z + pz * a)) return { block: s };
+        if (ctx.hullDist(x, z) < -40) return { exit: s }; }
+      return { block: 9000 }; };
+    const sampleLine = (wps, step) => { const out = [wps[0]]; for (let i = 1; i < wps.length; i++) { const [ax, az] = wps[i - 1], [bx, bz] = wps[i], n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / step)); for (let k = 1; k <= n; k++) out.push([ax + (bx - ax) * k / n, az + (bz - az) * k / n]); } return out; };
+    // the access road leaves the curb toward the landside if it can, else turns (never more than ~75°
+    // off the landside direction, so it can never double back over the apron) until its whole corridor
+    // reaches the fence without crossing protected ground
+    let best = null; for (let k = 0; k < 24; k++) { const ang = Math.atan2(L[1], L[0]) + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 12, dir = [Math.cos(ang), Math.sin(ang)];
+      if (dir[0] * L[0] + dir[1] * L[1] < 0.25) continue;
+      const r = ray(curb, dir); if (r.exit) { const cost = r.exit + Math.ceil(k / 2) * 250; if (!best || cost < best.cost) best = { dir, s: r.exit, cost, bend: null }; } }
+    if (!best) { // [Airport design] bent exit for strip-hemmed landsides (KTPA, RJTT, KMIA…): run the
+      // frontage road out of the landside complex, travel along the terminal axis past the end of the
+      // strip that blocks the direct exit, then head out to the fence — how real hemmed-in airports work
+      const W1 = [curb[0] + L[0] * 150, curb[1] + L[1] * 150], axis = [fr0.adx, fr0.adz];
+      if (lineHit(sampleLine([curb, W1], 14), acH) < 0) for (const sd of [1, -1]) { const along = [axis[0] * sd, axis[1] * sd]; let bend = W1;
+        for (let t = 60; t <= 2600 && !best; t += 60) { const cand = [W1[0] + along[0] * t, W1[1] + along[1] * t];
+          if (lineHit(sampleLine([W1, cand], 14), acH) >= 0) break; // the frontage itself is blocked this way
+          const r = ray(cand, L); if (r.exit) best = { dir: L, s: r.exit, cost: 150 + t + r.exit, bend: cand, via: W1 }; } }
+    }
+    if (!best) { // hemmed in on every heading: a landside stub that stops short of the first obstruction
+      const r = ray(curb, L), stub = (r.block || 0) - 30;
+      if (stub >= 120) { const acc = []; for (let s = 0; s <= stub; s += 14) acc.push([curb[0] + L[0] * s, curb[1] + L[1] * s]); this.addRoad('acc', acc, ctx, { cars: 1 }); this.carsBuild(); }
+      return; }
+    const Ld = best.dir, D = best.s + 650, accBase = best.bend || curb, I = [accBase[0] + Ld[0] * D, accBase[1] + Ld[1] * D], H = [-Ld[1], Ld[0]]; // interchange beyond the fence, highway direction
     this.ix = { x: I[0], z: I[1], r: 330 };
     // highway control points: straight through the interchange, gentle bends further out, pushed out of the airport fence (it bends round the field)
     const ctrl = []; for (let k = -5; k <= 5; k++) { const s = k * 2600, off = Math.abs(k) <= 1 ? 0 : (h12(k * 3.1 + b.x * 0.001, 7.7) * 520) * (1 + Math.abs(k) * 0.15); const p = [I[0] + H[0] * s + Ld[0] * off, I[1] + H[1] * s + Ld[1] * off];
       for (let it = 0; it < 30 && ctx.hullDist(p[0], p[1]) > -180; it++) { p[0] += Ld[0] * 200; p[1] += Ld[1] * 200; } ctrl.push(p); }
-    const hw = catmull(ctrl, 14); this.addRoad('hwy', hw, ctx, { cars: 1 });
-    // access road: curb -> over the highway on a bridge -> a little beyond (to the city)
-    const acc = []; for (let s = 0; s <= D + 900; s += 14) acc.push([curb[0] + Ld[0] * s, curb[1] + Ld[1] * s]);
-    this.addRoad('acc', acc, ctx, { bridgeAt: D, bridgeH: 7.6, cars: 1 });
+    // [Airport design] the smoothed highway must also clear protected ground (the hull test guards the
+    // control points only; the curve between them clipped runway strips at KLAX/WSSS). Bend it further
+    // out, and if it still clips, drop the highway rather than draw it across a strip.
+    let hw = null; for (let round = 0; round < 4 && !hw; round++) { const cand = catmull(ctrl, 14); if (lineHit(cand, hwH, 2) < 0) hw = cand;
+      else for (let k = 0; k < ctrl.length; k++) if (k !== 5) { ctrl[k][0] += Ld[0] * 300; ctrl[k][1] += Ld[1] * 300; } }
+    if (hw) this.addRoad('hwy', hw, ctx, { cars: 1 });
+    // access road: curb -> over the highway on a bridge -> a little beyond (to the city);
+    // with a bent exit the bridge distance is measured along the frontage path
+    let acc, bridgeD = D;
+    if (best.bend) { const end = [I[0] + Ld[0] * 900, I[1] + Ld[1] * 900]; acc = sampleLine([curb, best.via, best.bend, end], 14);
+      bridgeD = Math.hypot(best.via[0] - curb[0], best.via[1] - curb[1]) + Math.hypot(best.bend[0] - best.via[0], best.bend[1] - best.via[1]) + D; }
+    else { acc = []; for (let s = 0; s <= D + 900; s += 14) acc.push([curb[0] + Ld[0] * s, curb[1] + Ld[1] * s]); }
+    this.addRoad('acc', acc, ctx, hw ? { bridgeAt: bridgeD, bridgeH: 7.6, cars: 1 } : { cars: 1 });
     // diamond ramps: from the highway shoulders, parallel, up to the access road 150 m either side of the bridge
-    const hwH = halfW(TYPES.hwy), acH = halfW(TYPES.acc);
-    for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+    if (hw) for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
       const P = (along, across) => [I[0] + H[0] * along + Ld[0] * across, I[1] + H[1] * along + Ld[1] * across];
       const pts = catmull([P(sx * 520, sy * (hwH + 5)), P(sx * 300, sy * (hwH + 9)), P(sx * 120, sy * (hwH + 22)), P(sx * (acH + 14), sy * 120), P(sx * (acH + 5), sy * 165)], 10);
+      if (lineHit(pts, rmH) >= 0) continue; // [Airport design] never draw a ramp across protected ground
       const fromHwy = sx * sy > 0; this.addRoad('ramp', fromHwy ? pts : pts.slice().reverse(), ctx, { rampTo: fromHwy ? 'end' : 'start', cars: 0.5 });
     }
     this.carsBuild();
