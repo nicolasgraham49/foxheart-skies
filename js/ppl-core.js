@@ -163,6 +163,7 @@ export class PeopleHD {
   // cabin crew hooks (cabin People set): phase 'boarding'|'taxi'|'takeoff'|'cruise'|'descent'|'landing'|'arrived'; service('start'|'stop')
   cabinPhase(ph) { (this.dir || (this.dir = new CabinDirector(this))).setPhase(ph); return this.crewState(); }
   service(on = 'start') { return (this.dir || (this.dir = new CabinDirector(this))).service(on); }
+  setSvcPlan(pl) { return (this.dir || (this.dir = new CabinDirector(this))).setPlan(pl); } // 'full' | 'drinks' | 'none' — main.js derives it from the scheduled flight time
   crewState() { return (this.dir || (this.dir = new CabinDirector(this))).state(); }
   tickCrew(t) { if (this.dir) this.dir.step(t); } // advance the crew director while the cabin is not being drawn
   static setQuality(q) { QUALITY = q; }
@@ -250,7 +251,7 @@ export class PeopleHD {
       if (p.act === 'board') { A.headPitch = -0.35; A.headYaw = slow * 0.15; }
       else if (p.act === 'phone') { A.arm.R.sp = -0.55; A.arm.R.el = -1.7; A.arm.R.sr = -0.2; A.arm.R.wy = -1.3; A.arm.R.wx = 0.25; A.arm.R.curl = 0.75; A.headPitch = 0.5; gazeP = 0.3; }
       else if (p.act === 'lift') { const k = Math.min(1, (p.actT || 0) / 1.2); A.arm.L.sp = A.arm.R.sp = -2.85 * k; A.arm.L.el = A.arm.R.el = -0.35; A.arm.L.clav = A.arm.R.clav = 0.25 * k; A.arm.L.curl = A.arm.R.curl = 0.9; A.headPitch = -0.4 * k; gazeP = -0.2 * k; A.lean = -0.05 * k; }
-      else if (p.act === 'demo') { const ph = Math.floor(t / 2.5) % 4; if (ph === 0) { A.arm.L.sp = A.arm.R.sp = -1.4; A.arm.L.sr = A.arm.R.sr = 1.1; A.arm.L.curl = A.arm.R.curl = 0.1; } else if (ph === 1) { A.arm.L.sp = A.arm.R.sp = -0.9; A.arm.L.el = A.arm.R.el = -1.2; A.arm.L.sr = A.arm.R.sr = -0.4; } else if (ph === 2) { A.arm.R.sp = -1.6; A.arm.R.sr = 0.2; A.arm.R.curl = 0.1; A.arm.L.sp = 0.1; } else { A.arm.L.sp = -1.6; A.arm.L.sr = 0.2; A.arm.L.curl = 0.1; A.arm.R.sp = 0.1; } }
+      else if (p.act === 'demo') { const ph = p.demoBeat != null ? p.demoBeat : Math.floor(t / 2.5) % 4; if (ph === 0) { A.arm.L.sp = A.arm.R.sp = -1.4; A.arm.L.sr = A.arm.R.sr = 1.1; A.arm.L.curl = A.arm.R.curl = 0.1; } else if (ph === 1) { A.arm.L.sp = A.arm.R.sp = -0.9; A.arm.L.el = A.arm.R.el = -1.2; A.arm.L.sr = A.arm.R.sr = -0.4; } else if (ph === 2) { A.arm.R.sp = -1.6; A.arm.R.sr = 0.2; A.arm.R.curl = 0.1; A.arm.L.sp = 0.1; } else { A.arm.L.sp = -1.6; A.arm.L.sr = 0.2; A.arm.L.curl = 0.1; A.arm.R.sp = 0.1; } }
       else if (p.act === 'board-look') { A.headPitch = -0.4; gazeP = -0.15; }
       else if (p.act === 'push') { A.arm.L.sp = A.arm.R.sp = -0.6; A.arm.L.el = A.arm.R.el = -0.85; A.arm.L.sr = A.arm.R.sr = -0.05; A.arm.L.curl = A.arm.R.curl = 1.1; A.lean = 0.12; A.headPitch = 0.1; }
       else if (p.act === 'serve') { A.arm.R.sp = -1.15; A.arm.R.el = -0.4; A.arm.R.sr = -0.05; A.arm.R.wx = 0.35; A.arm.R.curl = 0.65; A.lean = 0.12; A.headPitch = 0.25; gazeP = 0.2; A.headYaw = slow * 0.1; }

@@ -624,7 +624,7 @@ export function buildCabin(icao, rnd) {
   const sign = { belt: true, smoke: true, k: 1 };
   const paintSigns = () => { signMat.belt.color.setScalar(sign.belt ? 1.9 * sign.k : 0.09); signMat.smoke.color.setScalar(sign.smoke ? 1.9 * sign.k : 0.09); houseMat.color.setHex(0x7d838b).multiplyScalar(sign.k); };
   paintSigns();
-  let boarded = 0, demoT = 0;
+  let boarded = 0;
   const update = (dt, t, cam) => {
     shell?.mood(false, dt); shell?.setFlight(false);
     for (const p of boarders) {
@@ -641,7 +641,8 @@ export function buildCabin(icao, rnd) {
       else if (p.state === 'buckle') { p.actT += dt; if (p.actT > 2.2) { p.state = 'seated'; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > 1.3 ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; boarded++; if (p.hasBaby && baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } } }
     }
     const done = boarded >= boarders.length;
-    if (done) { demoT += dt; crew2.act = demoT < 40 ? 'demo' : 'idle'; crew2.yaw = 0; crew2.z = -4.0; }
+    // (the post-boarding safety demo used to be faked here for 40 s with no narration; the real
+    // briefing — PA beats + beat-synced demo + screen cards — is conducted by main.js's briefStep)
     for (const p of crowd.p) if (p.baby) { p.x = p.baby.x; p.z = p.baby.z - 0.22; }
     crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
     return done;
@@ -655,7 +656,7 @@ export function buildCabin(icao, rnd) {
   };
   // in-flight life: reactions to the PA, signs and the ride; a few passengers get up when the belt sign is off
   const pax = crowd.p.slice(0, N - 2).filter(p => !p.baby);
-  const seatAll = () => { for (const p of boarders) if (p.state !== 'seated') { p.hidden = false; p.state = 'seated'; p.mode = 'sit'; p.suitcase = p.backpack = false; p.x = p.target.x; p.z = p.target.z + 0.1; p.y = fl; p.yaw = Math.PI; p.windowSide = p.x < 0 ? 1 : -1; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > 1.3 ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; } if (baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } boarded = boarders.length; demoT = 99; crew2.act = 'idle'; };
+  const seatAll = () => { for (const p of boarders) if (p.state !== 'seated') { p.hidden = false; p.state = 'seated'; p.mode = 'sit'; p.suitcase = p.backpack = false; p.x = p.target.x; p.z = p.target.z + 0.1; p.y = fl; p.yaw = Math.PI; p.windowSide = p.x < 0 ? 1 : -1; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > 1.3 ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; } if (baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } boarded = boarders.length; crew2.act = 'idle'; };
   // ---- boarding session API (main.js conducts; onfoot.js feeds the lounge side in 'lounge' feeder mode)
   const beginBoarding = () => { session.on = true; };
   const callGroup = g => { session.group = g; for (const p of boarders) if (p.group === g && p.state === 'lounge') { p.state = 'wait'; p.qT = 0; p.delay = p.gOrder * PACE; p.admitted = false; } };
@@ -696,7 +697,7 @@ export function buildCabin(icao, rnd) {
   const setSigns = (belt, smoke) => { if (belt && !sign.belt) { react('buckle', 4); LV.crewT = 60; LV.crewDir = 1; } sign.belt = belt; sign.smoke = smoke; paintSigns(); };
   const light = k => { sign.k = k; paintSigns(); shell?.setK(k); };
   crowd.commit(0);
-  return { group, zones, update, updateOut, deplane, crowd, mat, boarders, baby, seatsTotal: seats.length, seatAll, live, react, setSigns, light, sign, beginBoarding, callGroup, admitNext, setFeeder, boardingInfo, dispose() { group.traverse(o => { if (o.geometry && true) o.geometry.dispose(); }); at?.tex.dispose(); shell?.dispose(); } };
+  return { group, zones, update, updateOut, deplane, crowd, mat, boarders, baby, seatsTotal: seats.length, seatAll, live, react, setSigns, light, sign, setScreen: shell?.setScreen || null, beginBoarding, callGroup, admitNext, setFeeder, boardingInfo, dispose() { group.traverse(o => { if (o.geometry && true) o.geometry.dispose(); }); at?.tex.dispose(); shell?.dispose(); } };
 }
 function signTexture(kind) {
   const c = document.createElement('canvas'); c.width = 128; c.height = 64; const x = c.getContext('2d');

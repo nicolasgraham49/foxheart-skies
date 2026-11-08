@@ -43,6 +43,37 @@ export const PA_LINES = [
     ko: c => `손님 여러분, ${c.dKo}에 오신 것을 환영합니다. 현지 시각은 ${c.timeKo}이며 기온은 섭씨 ${c.temp}도, ${c.wxKo}입니다. 니코폭스하트 항공을 이용해 주셔서 감사합니다.` },
   { id: 'meal', who: 'captain', label: 'Cabin crew, prepare for meal service', boost: 2,
     en: () => 'Cabin crew, please prepare for the meal service.', es: () => 'Tripulación de cabina, preparen el servicio de comidas.', ko: () => '승무원은 기내식 서비스를 준비해 주십시오.' },
+  // ---- cabin life: the safety briefing (four beats, in order, played by the session conductor after
+  // boarding completes and the door closes) and the cruise service announcements. All crew lines, so the
+  // purser speaks them; like every prepared line they lead with the departure airport's own language.
+  { id: 'brief_belt', who: 'crew', label: 'Safety briefing: seat belts', boost: 1,
+    en: () => 'Ladies and gentlemen, welcome aboard. Please watch as we demonstrate the safety features of this aircraft. To fasten your seat belt, insert the metal tip into the buckle until it clicks, then pull the strap to tighten it. To release it, simply lift the buckle flap. Please keep your seat belt fastened whenever the seat belt sign is on, and whenever you are seated.',
+    es: () => 'Señoras y señores, bienvenidos a bordo. Por favor presten atención mientras les mostramos las medidas de seguridad de este avión. Para abrocharse el cinturón, inserten la punta metálica en la hebilla hasta que haga clic y tiren de la correa para ajustarlo. Para soltarlo, levanten la tapa de la hebilla. Mantengan el cinturón abrochado siempre que la señal esté encendida, y siempre que estén sentados.',
+    ko: () => '손님 여러분, 탑승을 환영합니다. 지금부터 이 항공기의 안전 장비를 안내해 드리겠습니다. 좌석벨트는 금속 팁을 버클에 딸깍 소리가 날 때까지 끼운 뒤 끈을 당겨 조여 주십시오. 풀 때는 버클 덮개를 들어 올리면 됩니다. 좌석벨트 표시등이 켜져 있을 때와 자리에 앉아 계실 때는 항상 벨트를 매 주시기 바랍니다.' },
+  { id: 'brief_exit', who: 'crew', label: 'Safety briefing: exits', boost: 1,
+    en: () => 'There are eight emergency exits on this aircraft: two at the front, four over the wings, and two at the rear. Please take a moment now to locate the exit nearest to you — remembering that your nearest exit may be behind you. In an emergency, lighting at floor level will guide you to an exit.',
+    es: () => 'Este avión tiene ocho salidas de emergencia: dos al frente, cuatro sobre las alas y dos en la parte trasera. Tómense un momento para localizar la salida más cercana, recordando que podría estar detrás de ustedes. En caso de emergencia, las luces a nivel del suelo les guiarán hasta una salida.',
+    ko: () => '이 항공기에는 비상구가 모두 여덟 개 있습니다. 앞쪽에 두 개, 날개 위에 네 개, 뒤쪽에 두 개입니다. 지금 가장 가까운 비상구를 확인해 주십시오. 가장 가까운 출구는 뒤쪽에 있을 수도 있습니다. 비상시에는 바닥의 유도등이 출구로 안내합니다.' },
+  { id: 'brief_oxy', who: 'crew', label: 'Safety briefing: oxygen masks', boost: 1,
+    en: () => 'If there is a change in cabin pressure, oxygen masks will drop automatically from the panel above your seat. Pull the mask firmly toward you to start the flow of oxygen, place it over your nose and mouth, and breathe normally. Please secure your own mask first, before helping anyone else — including children.',
+    es: () => 'Si cambia la presión de la cabina, las máscaras de oxígeno caerán automáticamente del panel sobre su asiento. Tiren firmemente de la máscara hacia ustedes para iniciar el flujo de oxígeno, colóquenla sobre la nariz y la boca, y respiren con normalidad. Pónganse primero su propia máscara, antes de ayudar a cualquier otra persona, incluidos los niños.',
+    ko: () => '기내 압력이 변하면 좌석 위 패널에서 산소마스크가 자동으로 떨어집니다. 마스크를 세게 당겨 산소가 나오게 한 뒤 코와 입에 대고 평소대로 호흡하십시오. 다른 분이나 어린이를 돕기 전에 먼저 본인의 마스크를 착용하십시오.' },
+  { id: 'brief_vest', who: 'crew', label: 'Safety briefing: life vests', boost: 1,
+    en: () => 'Your life vest is stowed in a pouch under your seat. To use it, remove it from the pouch, slip it over your head, and fasten and tighten the straps around your waist. Inflate the vest only as you leave the aircraft, by pulling the red tabs. Thank you for your attention — the crew will be at their stations for takeoff, and we wish you a very pleasant flight.',
+    es: () => 'Su chaleco salvavidas está guardado en una bolsa debajo de su asiento. Para usarlo, sáquenlo de la bolsa, pásenlo por la cabeza y abrochen y ajusten las correas alrededor de la cintura. Inflen el chaleco solo al salir del avión, tirando de las lengüetas rojas. Gracias por su atención; la tripulación ocupará sus puestos para el despegue y les deseamos un vuelo muy agradable.',
+    ko: () => '구명조끼는 좌석 아래 주머니에 보관되어 있습니다. 사용하실 때는 주머니에서 꺼내 머리로 착용하고 허리 끈을 매어 조여 주십시오. 조끼는 항공기를 나갈 때 빨간 손잡이를 당겨 부풀리십시오. 경청해 주셔서 감사합니다. 승무원은 이륙을 위해 착석하겠습니다. 즐거운 비행 되십시오.' },
+  { id: 'svc_meal', who: 'crew', label: 'Meal service starting', boost: 1,
+    en: () => 'Ladies and gentlemen, we will now be coming through the cabin with drinks and a meal. Please make sure your tray table is down and your drinks are clear of the aisle. If you need anything at all, just let one of the crew know. Enjoy.',
+    es: () => 'Señoras y señores, ahora pasaremos por la cabina con bebidas y una comida. Por favor bajen su mesa y mantengan el pasillo despejado. Si necesitan cualquier cosa, avisen a un miembro de la tripulación. Buen provecho.',
+    ko: () => '손님 여러분, 지금부터 음료와 기내식을 서비스하겠습니다. 테이블을 내려 주시고 통로를 비워 주시기 바랍니다. 필요하신 것이 있으면 승무원에게 말씀해 주십시오. 맛있게 드십시오.' },
+  { id: 'svc_drinks', who: 'crew', label: 'Drinks service starting', boost: 1,
+    en: () => 'Ladies and gentlemen, on this shorter flight we will be coming through the cabin with drinks. Please make sure your tray table is down. If you need anything else, just let one of the crew know.',
+    es: () => 'Señoras y señores, en este vuelo más corto pasaremos por la cabina con bebidas. Por favor bajen su mesa. Si necesitan cualquier otra cosa, avisen a un miembro de la tripulación.',
+    ko: () => '손님 여러분, 이 짧은 비행에서는 음료 서비스를 하겠습니다. 테이블을 내려 주시기 바랍니다. 다른 필요하신 것이 있으면 승무원에게 말씀해 주십시오.' },
+  { id: 'svc_collect', who: 'crew', label: 'Collecting rubbish', boost: 1,
+    en: () => 'Ladies and gentlemen, we will shortly be coming through the cabin to collect any rubbish. Please pass any trays, cups and wrappers out to the aisle, and let us know if there is anything else we can take for you. Thank you.',
+    es: () => 'Señoras y señores, en breve pasaremos por la cabina para recoger la basura. Por favor entreguen las bandejas, los vasos y los envoltorios hacia el pasillo, y avísennos si hay algo más que podamos llevarnos. Gracias.',
+    ko: () => '손님 여러분, 잠시 후 기내를 돌며 쓰레기를 수거하겠습니다. 쟁반과 컵, 포장지는 통로 쪽으로 건네 주시고, 그 밖에 치울 것이 있으면 말씀해 주십시오. 감사합니다.' },
 ];
 // emergency lines (not in the numbered menu): the captain's briefing, brace, evacuate, oxygen masks
 export const PA_EMERG = [

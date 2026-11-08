@@ -312,7 +312,7 @@ async function startFlight(cfg) {
   if (cfg.start !== 'route') { W.route = null; }
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
-  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false);
+  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false);
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
@@ -431,6 +431,43 @@ function announce() {
   const dest = W.dest ? (SHORT[W.dest.icao] || W.dest.city) : 'our destination';
   const txt = `Ladies and gentlemen, welcome aboard Nicofoxheart Air flight four one two to ${dest}. Boarding is complete. Please make sure your seat belt is fastened and your bags are stowed. We wish you a pleasant flight.`;
   toast('Cabin announcement: welcome aboard flight 412 to ' + dest + '.', 6000); paSpeak(txt, 'PURSER');
+}
+// ---------------------------------------------------------------- cabin life: the safety briefing.
+// Once boarding completes and the door closes (gate / terminal departures only — W.boarding exists
+// only there), the purser's welcome plays, then the briefing runs: four PA beats — seat belts, exits,
+// oxygen masks, life vests — with a crew member demonstrating in the aisle, posed on the current beat
+// (p.demoBeat drives the demo pose), and the matching card on every seatback screen. It never blocks
+// the departure: pushback, taxi, takeoff or taking the aircraft off the stand wraps it instantly,
+// exactly the idiom finishBoardingNow uses for boarding itself.
+const BRIEF_IDS = ['brief_belt', 'brief_exit', 'brief_oxy', 'brief_vest'];
+const BRIEF_SCREENS = ['belt', 'exit', 'oxy', 'vest'];
+const BRIEF_DUR = [20, 18, 19, 19]; // sim seconds per beat, sized to the spoken lines (~20 s each); the PA speech queue serialises behind them
+function briefCrew(c) { const crew = c?.crowd.p.filter(p => p.crew); return crew && crew.length ? crew[crew.length - 1] : null; } // the demonstrator: the second cabin crew member, the one live() walks
+function pinDemo(c, beat) { const p = briefCrew(c); if (!p) return; p.x = 0; p.z = -4.2; p.mode = 'stand'; p.act = 'demo'; p.demoBeat = beat; p.yaw = 0; p.walking = false; p.prop = null; }
+function endBrief(c) { const B = W.brief; if (B) B.st = 'done'; const p = c && briefCrew(c); if (p) { p.demoBeat = null; if (p.act === 'demo') p.act = 'idle'; } if (c && c.setScreen) c.setScreen('map'); }
+function startBeat(c, b) { paSay(BRIEF_IDS[b]); if (c.setScreen) c.setScreen(BRIEF_SCREENS[b]); pinDemo(c, b); }
+function briefStep(dt) {
+  if (W.menuMode || !W.started) return;
+  const c = cabinObj(); if (!c) return;
+  const B = W.brief;
+  if (!B) { // trigger: boarding just completed at a gate/terminal stand and the aircraft is still there
+    if (W.boarding && W.boarding.phase === 'done' && fdm.onGround && !W.push && !W.parkedAt) W.brief = { st: 'wait', t: 0, beat: -1 };
+    return; }
+  if (B.st === 'done') return;
+  if (W.push || !fdm.onGround || W.parkedAt || W.cabPhase === 'taxi' || W.cabPhase === 'takeoff') { endBrief(c); return; } // wrapped instantly — the departure goes ahead
+  B.t += dt;
+  if (B.st === 'wait') { if (B.t > 5) { B.st = 'title'; B.t = 0; if (c.setScreen) c.setScreen('safety'); pinDemo(c, null); } return; } // the purser's welcome plays first
+  if (B.st === 'title') { pinDemo(c, null); if (B.t > 4) { B.st = 'run'; B.t = 0; B.beat = 0; startBeat(c, 0); } return; } // SAFETY card up, demonstrator cycling the poses
+  pinDemo(c, B.beat);
+  if (B.t >= BRIEF_DUR[B.beat]) { B.t = 0; B.beat++; if (B.beat >= BRIEF_IDS.length) { endBrief(c); return; } startBeat(c, B.beat); }
+}
+// cabin life: the trolley passes get a passenger PA as the crew director starts them (auto or manual)
+function svcPaStep() {
+  if (W.menuMode || !W.started) return;
+  const c = cabinObj(); const st = c?.crowd.crewState?.(); if (!st) return;
+  const kind = st.service ? st.service.kind : null;
+  if (kind && kind !== W._svcSeen) { if (kind === 'meal') paSay('svc_meal'); else if (kind === 'drinks') paSay('svc_drinks'); else if (kind === 'collect') paSay('svc_collect'); }
+  W._svcSeen = kind;
 }
 // ---------------------------------------------------------------- real boarding: the gate session.
 // At a gate departure the cabin starts EMPTY and the load waits in the lounge. Boarding is part of the
@@ -598,8 +635,11 @@ function cabinObj() { return foot.parts?.cabin || W.flightCabin || null; }
 function ensureCabin() {
   let c = cabinObj(); if (c) return c; const A = W.cfg?.apt || W.apt; if (!A) return null;
   c = buildCabin(A.icao, rng((Date.now() & 0xffff) + 7)); if (!W.boarding || W.boarding.phase === 'done') c.seatAll(); // during a boarding session the cabin starts empty and fills for real
-  aircraft.add(c.group); W.flightCabin = c; c.setSigns(W.signs.belt, W.signs.smoke); talkSides(c.crowd); return c;
+  aircraft.add(c.group); W.flightCabin = c; c.setSigns(W.signs.belt, W.signs.smoke); talkSides(c.crowd); c.crowd.setSvcPlan?.(svcPlanFor()); return c;
 }
+// cabin service plan from the scheduled flight time (same estimate the PA context quotes):
+// 75+ minutes gets the full meal pass, 40–74 a drinks-only pass, under 40 no service at all.
+function svcPlanFor() { const ft = Math.round((paContext().distNm || 200) / 450 * 60 + 25); return ft >= 75 ? 'full' : ft >= 40 ? 'drinks' : 'none'; }
 // cabin passengers with the 'talk' act need a side to talk to (the seated pose reads p.talkSide; undefined made NaN bones,
 // which hid people and, with bloom on, blacked out the whole frame)
 function talkSides(crowd) { for (const p of crowd.p) if (p.talkSide == null) p.talkSide = p.i % 2 ? 1 : -1; }
@@ -614,12 +654,15 @@ function cabinPhaseStep(dt) {
   else if (ph === 'takeoff' && !W.signs.belt) setCabPhase('cruise');
   else if ((ph === 'takeoff' || ph === 'cruise' || ph === 'descent') && ((W.signs.belt && agl < 10000 && vs < -300 && ph !== 'takeoff') || (fdm.gearDown && agl < 5000 && vs < -300))) setCabPhase('landing');
   else if (ph === 'cruise') { W.cabDesT = vs < -900 && agl > 3000 ? (W.cabDesT || 0) + dt : 0; if (W.descending || W.cabDesT > 25) setCabPhase('descent'); }
-  const c = cabinObj(); if (c && c.crowd && c.crowd.cabinPhase && c._cabPh !== W.cabPhase) { c._cabPh = W.cabPhase; c.crowd.cabinPhase(W.cabPhase || 'boarding'); } // also brings a newly built cabin up to date
+  const c = cabinObj(); if (c && c.crowd && c.crowd.cabinPhase && c._cabPh !== W.cabPhase) { c._cabPh = W.cabPhase; c.crowd.setSvcPlan?.(svcPlanFor()); c.crowd.cabinPhase(W.cabPhase || 'boarding'); } // also brings a newly built cabin up to date
 }
 function mealService() {
   if (W.signs.belt) { toast('Cabin crew: “We will start the service once the seat belt sign is off, captain.”', 4500); return false; }
-  const c = ensureCabin(); if (!c || !c.crowd.service) return false; cabinPhaseStep(0); const ok = c.crowd.service('start');
-  toast(ok ? 'Cabin crew: “Starting the meal service, captain.”' : W.cabPhase === 'cruise' || W.cabPhase === 'descent' ? 'Cabin crew: “The service is already under way.”' : 'Cabin crew: “We can serve once we are in cruise.”', 4000); return ok;
+  const c = ensureCabin(); if (!c || !c.crowd.service) return false; cabinPhaseStep(0);
+  const plan = c.crowd.crewState?.().plan || 'full';
+  if (plan === 'none') { toast('Cabin crew: “This hop is too short for a cabin service, captain.”', 4500); return false; }
+  const ok = c.crowd.service('start');
+  toast(ok ? (plan === 'drinks' ? 'Cabin crew: “Starting the drinks service, captain.”' : 'Cabin crew: “Starting the meal service, captain.”') : W.cabPhase === 'cruise' || W.cabPhase === 'descent' ? 'Cabin crew: “The service is already under way.”' : 'Cabin crew: “We can serve once we are in cruise.”', 4000); return ok;
 }
 function paContext() {
   const cfg = W.cfg || {}; const fin = cfg.start === 'final'; const A = cfg.apt || W.apt;
@@ -1302,8 +1345,11 @@ function cabinStep(dt) { // flight cabin (people, crew director) + cabin crew ph
     cb.live(W.paused ? 0 : dt * W.timeAccel, W.simTime, null, { belt: W.signs.belt, airborne: !fdm.onGround, comfort: CC.v, visible: false, lights: cabinLights(dt) });
     if (held) Object.assign(c2, _c2s);
     if (W.boarding && W.boarding.phase === 'boarding' && cb.update) cb.update(W.paused ? 0 : dt * W.timeAccel, W.simTime, camera.position); // walk the boarding chain while the captain watches from the deck or the cabin (on foot, foot.update drives it instead)
+    if (W.brief && (W.brief.st === 'title' || W.brief.st === 'run')) pinDemo(cb, W.brief.st === 'run' ? W.brief.beat : null); // the safety demonstrator holds the aisle spot live() would otherwise walk away from; briefStep owns the timeline
     if (vis) cb.crowd.commit(W.simTime, cb.group.worldToLocal(_cabCam.copy(camera.position))); else cb.crowd.tickCrew?.(W.simTime); } }
   boardingStep(W.paused ? 0 : dt * W.timeAccel);
+  briefStep(W.paused ? 0 : dt * W.timeAccel);
+  svcPaStep();
   if (W.started && !W.menuMode) cabinPhaseStep(dt);
 }
 const _c2s = {}, _cabCam = new THREE.Vector3();
@@ -1773,6 +1819,7 @@ window.__sim = {
   interact() { footInteract(); return this.footState(); },
   cabinRun(sec) { for (let i = 0; i < Math.round(sec * 30); i++) { simulate(1 / 30); aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(); cabinStep(1 / 30); } return this.cabCrew(); },
   cabCrew() { const c = cabinObj(); return { phase: W.cabPhase, crew: c?.crowd.crewState?.() || null }; }, mealService: () => mealService(),
+  briefState() { return W.brief ? { st: W.brief.st, beat: W.brief.beat } : null; }, svcPlan: () => svcPlanFor(), cabScreen(m) { const c = cabinObj(); if (c && m) c.setScreen?.(m); return !!c?.setScreen; },
   foGesture(n) { _foT.last = -9; foGesture(n); return !!fo; }, foInfo() { return fo ? { visible: fo.object3d.visible, g: fo.person._g ? fo.person._g.name : null, mode: fo.person.mode } : null; },
   streamInfo() { const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z), g = ground(fdm.pos.x, fdm.pos.z); return { lat: +ll.lat.toFixed(3), lon: +ll.lon.toFixed(3), altFt: Math.round(fdm.pos.y / FT), gnd: Math.round(g.h), water: !!g.water, origin: W.originLL, shifts: STREAM.shifts, loads: STREAM.loads, drops: STREAM.drops, buildMaxMs: Math.round(STREAM.ms), shiftMaxMs: Math.round(STREAM.shiftMs || 0),
     built: W.built.map(b => b.icao + (b.full ? '*' : '')), primary: W.primary?.icao || null, dest: W.dest?.icao, dct: !!W.dct, ap: fdm.ap.on ? fdm.ap.lat + '/' + fdm.ap.vert : 'off', ias: Math.round(fdm.ias), accel: W.timeAccel, city: city.count || 0, cityJob: !!city.job, ils: W.ils ? W.ils.apt.icao + ' ' + W.ils.end.ident : null, phase: atc.phase, clim: terrain.climate, desc: W.descending }; },

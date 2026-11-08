@@ -204,7 +204,7 @@ class LegacyPeople {
       if (p.act === 'board') { A.headPitch = -0.35; A.headYaw = slow * 0.15; }
       else if (p.act === 'phone') { A.arm.R.sp = -1.1; A.arm.R.el = -1.5; A.headPitch = 0.5; p.prop = 'phone'; }
       else if (p.act === 'lift') { const k = Math.min(1, (p.actT || 0) / 1.2); A.arm.L.sp = A.arm.R.sp = -2.9 * k; A.arm.L.el = A.arm.R.el = -0.3; A.headPitch = -0.4 * k; }
-      else if (p.act === 'demo') { const ph = Math.floor(t / 2.5) % 4; if (ph === 0) { A.arm.L.sp = A.arm.R.sp = -1.4; A.arm.L.sr = A.arm.R.sr = 1.1; } else if (ph === 1) { A.arm.L.sp = A.arm.R.sp = -0.9; A.arm.L.el = A.arm.R.el = -1.2; A.arm.L.sr = A.arm.R.sr = -0.4; } else if (ph === 2) { A.arm.R.sp = -1.6; A.arm.R.sr = 0.2; A.arm.L.sp = 0.1; } else { A.arm.L.sp = -1.6; A.arm.L.sr = 0.2; A.arm.R.sp = 0.1; } }
+      else if (p.act === 'demo') { const ph = p.demoBeat != null ? p.demoBeat : Math.floor(t / 2.5) % 4; if (ph === 0) { A.arm.L.sp = A.arm.R.sp = -1.4; A.arm.L.sr = A.arm.R.sr = 1.1; } else if (ph === 1) { A.arm.L.sp = A.arm.R.sp = -0.9; A.arm.L.el = A.arm.R.el = -1.2; A.arm.L.sr = A.arm.R.sr = -0.4; } else if (ph === 2) { A.arm.R.sp = -1.6; A.arm.R.sr = 0.2; A.arm.L.sp = 0.1; } else { A.arm.L.sp = -1.6; A.arm.L.sr = 0.2; A.arm.R.sp = 0.1; } }
       else if (p.act === 'board-look') { A.headPitch = -0.4; }
       p.prop = p.act === 'phone' ? 'phone' : null;
     }

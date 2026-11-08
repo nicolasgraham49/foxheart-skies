@@ -50,11 +50,33 @@ function paintAtlas(T = 512) {
   at('shell', T => { fill(C, '#c7cacd'); fill(G, grey(130)); hnoise(8000, 14, 2);
     const g = (x, y, w, h, r) => { for (const [c, st] of [[H, grey(50)], [C, 'rgba(40,44,50,0.4)']]) { c.strokeStyle = st; c.lineWidth = 3; roundRect(c, x, y, w, h, r); c.stroke(); } };
     g(T * 0.1, T * 0.42, T * 0.8, T * 0.3, 14); fill(C, '#5a5f66', T * 0.45, T * 0.44, T * 0.1, T * 0.03); fill(C, '#2a2e35', T * 0.08, T * 0.76, T * 0.84, T * 0.2); for (let y = T * 0.77; y < T * 0.95; y += 4) for (let x = T * 0.09; x < T * 0.91; x += 4) { H.fillStyle = grey(R() < 0.5 ? 100 : 150); H.fillRect(x, y, 2, 2); } });
-  // IFE screen: moving map
-  at('screen', T => { const gr = C.createLinearGradient(0, 0, 0, T); gr.addColorStop(0, '#0b2a4a'); gr.addColorStop(1, '#0d4d6e'); C.fillStyle = gr; C.fillRect(0, 0, T, T); fill(G, grey(230));
-    C.fillStyle = 'rgba(80,140,90,0.55)'; C.beginPath(); C.moveTo(0, T * 0.7); C.bezierCurveTo(T * 0.3, T * 0.55, T * 0.45, T * 0.85, T, T * 0.6); C.lineTo(T, T); C.lineTo(0, T); C.fill();
-    C.strokeStyle = '#ffffff'; C.lineWidth = T * 0.012; C.setLineDash([T * 0.03, T * 0.02]); C.beginPath(); C.moveTo(T * 0.15, T * 0.75); C.quadraticCurveTo(T * 0.5, T * 0.2, T * 0.85, T * 0.55); C.stroke(); C.setLineDash([]);
-    C.fillStyle = '#f29a4c'; C.beginPath(); C.arc(T * 0.47, T * 0.38, T * 0.03, 0, 7); C.fill(); C.fillStyle = 'rgba(0,0,0,0.45)'; C.fillRect(0, 0, T, T * 0.14); C.fillStyle = '#e8edf5'; C.font = `600 ${T * 0.06}px sans-serif`; C.fillText('FOXHEART SKIES  ·  4h 12m to go', T * 0.05, T * 0.09); });
+  // IFE screen: moving map by default; during the safety briefing the shell repaints this tile with a
+  // briefing card per beat (setScreen below) — every seatback shows the same card, like a real briefing
+  // video. Only the colour canvas is repainted; the gloss (already painted once) is untouched.
+  const paintScreen = mode => at('screen', T => {
+    if (!mode || mode === 'map') { const gr = C.createLinearGradient(0, 0, 0, T); gr.addColorStop(0, '#0b2a4a'); gr.addColorStop(1, '#0d4d6e'); C.fillStyle = gr; C.fillRect(0, 0, T, T); fill(G, grey(230));
+      C.fillStyle = 'rgba(80,140,90,0.55)'; C.beginPath(); C.moveTo(0, T * 0.7); C.bezierCurveTo(T * 0.3, T * 0.55, T * 0.45, T * 0.85, T, T * 0.6); C.lineTo(T, T); C.lineTo(0, T); C.fill();
+      C.strokeStyle = '#ffffff'; C.lineWidth = T * 0.012; C.setLineDash([T * 0.03, T * 0.02]); C.beginPath(); C.moveTo(T * 0.15, T * 0.75); C.quadraticCurveTo(T * 0.5, T * 0.2, T * 0.85, T * 0.55); C.stroke(); C.setLineDash([]);
+      C.fillStyle = '#f29a4c'; C.beginPath(); C.arc(T * 0.47, T * 0.38, T * 0.03, 0, 7); C.fill(); C.fillStyle = 'rgba(0,0,0,0.45)'; C.fillRect(0, 0, T, T * 0.14); C.fillStyle = '#e8edf5'; C.font = `600 ${T * 0.06}px sans-serif`; C.textAlign = 'left'; C.fillText('FOXHEART SKIES  ·  4h 12m to go', T * 0.05, T * 0.09); return; }
+    const gr = C.createLinearGradient(0, 0, 0, T); gr.addColorStop(0, '#0d1b30'); gr.addColorStop(1, '#16345c'); C.fillStyle = gr; C.fillRect(0, 0, T, T);
+    C.fillStyle = '#e8732f'; C.fillRect(0, T * 0.16, T, T * 0.035);
+    C.textAlign = 'center'; C.fillStyle = '#f2efe8';
+    const title = (s, y, k = 0.115) => { C.font = `800 ${T * k}px "Saira Condensed","Arial Narrow",sans-serif`; C.fillText(s, T * 0.5, T * y); };
+    const sub = (s, y) => { C.font = `600 ${T * 0.052}px sans-serif`; C.fillStyle = '#ffd9a8'; C.fillText(s, T * 0.5, T * y); C.fillStyle = '#f2efe8'; };
+    C.font = `600 ${T * 0.045}px sans-serif`; C.fillStyle = 'rgba(232,237,245,0.75)'; C.fillText('NICOFOXHEART AIR', T * 0.5, T * 0.115); C.fillStyle = '#f2efe8';
+    const cx = T * 0.5, cy = T * 0.47;
+    if (mode === 'safety') { title('SAFETY', 0.30); C.strokeStyle = '#f29a4c'; C.lineWidth = T * 0.03; C.beginPath(); C.arc(cx, cy + T * 0.06, T * 0.13, 0, 7); C.stroke();
+      C.strokeStyle = '#38e07a'; C.lineWidth = T * 0.045; C.beginPath(); C.moveTo(cx - T * 0.07, cy + T * 0.06); C.lineTo(cx - T * 0.015, cy + T * 0.125); C.lineTo(cx + T * 0.085, cy - T * 0.03); C.stroke(); sub('PLEASE WATCH THE DEMONSTRATION', 0.80); }
+    else if (mode === 'belt') { title('SEAT BELTS', 0.30); C.fillStyle = '#8e9bb1'; C.fillRect(cx - T * 0.30, cy - T * 0.028, T * 0.20, T * 0.056); C.fillRect(cx + T * 0.10, cy - T * 0.028, T * 0.20, T * 0.056);
+      C.fillStyle = '#c7cacd'; C.fillRect(cx - T * 0.10, cy - T * 0.075, T * 0.20, T * 0.15); C.fillStyle = '#e8732f'; C.fillRect(cx - T * 0.045, cy - T * 0.045, T * 0.09, T * 0.09); C.fillStyle = '#f2efe8'; sub('INSERT · CLICK · PULL TIGHT', 0.80); }
+    else if (mode === 'exit') { title('EXITS', 0.30); C.fillStyle = '#38e07a'; for (const s of [-1, 1]) { C.fillRect(cx + s * T * 0.16 - T * 0.05, cy - T * 0.10, T * 0.10, T * 0.20); C.beginPath(); C.moveTo(cx + s * T * 0.27, cy - T * 0.055); C.lineTo(cx + s * T * 0.36, cy); C.lineTo(cx + s * T * 0.27, cy + T * 0.055); C.fill(); }
+      C.fillStyle = '#f2efe8'; sub('YOUR NEAREST EXIT MAY BE BEHIND YOU', 0.80); }
+    else if (mode === 'oxy') { title('OXYGEN', 0.30); C.fillStyle = '#f5c542'; C.beginPath(); C.moveTo(cx, cy - T * 0.13); C.quadraticCurveTo(cx + T * 0.15, cy - T * 0.02, cx + T * 0.10, cy + T * 0.09); C.quadraticCurveTo(cx + T * 0.05, cy + T * 0.16, cx, cy + T * 0.16); C.quadraticCurveTo(cx - T * 0.05, cy + T * 0.16, cx - T * 0.10, cy + T * 0.09); C.quadraticCurveTo(cx - T * 0.15, cy - T * 0.02, cx, cy - T * 0.13); C.fill();
+      C.strokeStyle = '#e8edf5'; C.lineWidth = T * 0.02; C.beginPath(); C.moveTo(cx - T * 0.10, cy + T * 0.02); C.lineTo(cx - T * 0.22, cy - T * 0.14); C.moveTo(cx + T * 0.10, cy + T * 0.02); C.lineTo(cx + T * 0.22, cy - T * 0.14); C.stroke(); sub('PULL · YOUR MASK FIRST', 0.80); }
+    else if (mode === 'vest') { title('LIFE VESTS', 0.30); C.fillStyle = '#f5c542'; C.beginPath(); C.moveTo(cx - T * 0.13, cy - T * 0.13); C.lineTo(cx - T * 0.045, cy - T * 0.13); C.quadraticCurveTo(cx, cy - T * 0.05, cx + T * 0.045, cy - T * 0.13); C.lineTo(cx + T * 0.13, cy - T * 0.13); C.lineTo(cx + T * 0.15, cy + T * 0.15); C.lineTo(cx - T * 0.15, cy + T * 0.15); C.closePath(); C.fill();
+      C.fillStyle = '#e8732f'; C.fillRect(cx - T * 0.15, cy + T * 0.07, T * 0.30, T * 0.035); C.fillStyle = '#d23a2a'; C.fillRect(cx + T * 0.055, cy + T * 0.10, T * 0.035, T * 0.075); sub('UNDER YOUR SEAT · INFLATE OUTSIDE', 0.80); }
+  });
+  paintScreen('map');
   // bin door: white, subtle vertical texture, a navy pinstripe and a chrome latch strip along the lower edge
   at('bin', T => { fill(C, '#ecebe6'); fill(G, grey(140)); hnoise(14000, 14, 2); fill(C, 'rgba(27,39,71,0.5)', 0, T * 0.82, T, 2.5); fill(C, '#a8adb4', 0, T * 0.88, T, T * 0.045); fill(C, 'rgba(255,255,255,0.5)', 0, T * 0.88, T, 1.5); fill(H, grey(170), 0, T * 0.88, T, T * 0.045); fill(C, 'rgba(120,120,120,0.25)', 0, T * 0.9, T, 3); });
   // PSU: grey panel with vent grille, call button icons (blue lamp, cream lamp, orange call dot)
@@ -76,7 +98,9 @@ function paintAtlas(T = 512) {
   at('misc', T => { const h = T / 2; fill(C, '#ffffff', 0, 0, h, h); fill(C, '#1c1e22', h, 0, h, h); fill(G, grey(60), h, 0, h, h); fill(C, '#13151a', 0, h, h, h); fill(C, '#c8281e', h, h, h, h);
     C.fillStyle = '#38e07a'; C.font = `800 ${h * 0.34}px "Saira Condensed",sans-serif`; C.textAlign = 'center'; C.textBaseline = 'middle'; C.fillText('EXIT', h * 0.5, h * 1.5); fill(G, grey(200), 0, h, h, h); });
   const map = tex(C.canvas); const nrm = tex(heightToNormal(H.canvas, 2.2, false, G.canvas), { srgb: false });
-  for (const t of [map, nrm]) { t.anisotropy = 8; } return { map, nrm };
+  for (const t of [map, nrm]) { t.anisotropy = 8; }
+  const setScreen = mode => { paintScreen(mode); map.needsUpdate = true; };
+  return { map, nrm, setScreen };
 }
 
 // ================================================================ shader: baked AO + mood / cove / window light
@@ -329,5 +353,5 @@ uniform float uGlow; varying vec2 vUv; void main(){
     w.amb.multiplyScalar(L[0]); w.cove.multiplyScalar(L[1]); for (const k in cur) cur[k].lerp(w[k], a);
     const n = clamp(ATM.uNight.value, 0, 1); coneTarget = (airborne ? n : 0.55 * n) * (lights === 'off' ? 0 : lights === 'night' ? 1 : lights === 'dim' ? 0.65 : lights === 'bright' ? 0.15 : 0.35); coneCur += (coneTarget - coneCur) * a; apply(); };
   const setK = k => { U.uK.value = k; };
-  return { group, mat, mood, setK, seatsMesh: im || imPrem, setFlight(on) { doors.visible = on; }, dispose() { group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); A.map.dispose(); A.nrm.dispose(); mat.dispose(); coneMat.dispose(); } };
+  return { group, mat, mood, setK, setScreen: A.setScreen, seatsMesh: im || imPrem, setFlight(on) { doors.visible = on; }, dispose() { group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); A.map.dispose(); A.nrm.dispose(); mat.dispose(); coneMat.dispose(); } };
 }
