@@ -5,7 +5,7 @@
 // longer flights; 'drinks' = a drinks-only trolley pass (cups in hand, no meal trays) + a collect pass
 // on short hops; 'none' = no service at all on the shortest sectors.
 const ROW0 = -10.6, PITCH = 0.79, ROWS = 29, FL = -0.55;
-export const SVC = { autoAfter: 180, eatTime: 150, drinkTime: 60, serveT: 1.25, walk: 0.45 };
+export const SVC = { autoAfter: 120, eatTime: 150, drinkTime: 60, serveT: 1.25, walk: 0.45 }; // autoAfter 180 -> 120 (cabin fix): on short sectors the old 3-minute wait plus the pass durations left no room for drinks + collect before descent in owner-style play
 const JUMP = [[-1.43, -13.82], [-0.97, -13.82]]; // forward jump seats on the lav wall, facing aft
 const GALLEY = [0.55, -13.25];
 const rowOf = z => Math.round((z - 0.1 - ROW0) / PITCH), rowZ = r => ROW0 + r * PITCH + 0.1;
