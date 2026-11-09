@@ -11,6 +11,7 @@ import { REGIONS, FEATURED_INFO, climateFor } from './surroundings.js';
 import { identityFor } from './env-identity.js';
 import { buildAirport, ilsFor, ilsDeviation, LIGHT_U } from './airport.js';
 import { buildAircraft, animateAircraft, foxHeart, DIM } from './aircraft.js';
+import { LIVERIES, savedLivery, saveLivery } from './ac-livery.js';
 import { FDM, FLAPS } from './fdm.js';
 import { Displays, drawHUD } from './cockpit.js';
 import { buildCockpit, COCKPIT_EYE } from './flightdeck.js';
@@ -1679,6 +1680,15 @@ function drawDiagram(cv, apt, selIdent, opts = {}) {
   if (!opts.small) { c.fillStyle = 'rgba(200,210,230,.7)'; c.font = '12px "B612 Mono", monospace'; c.textAlign = 'left'; const km = 1000 * s; c.fillRect(16, h - 22, km, 2); c.fillText('1 km', 20 + km, h - 21); c.textAlign = 'center'; c.fillText('N', w - 24, 22); c.beginPath(); c.moveTo(w - 24, 30); c.lineTo(w - 29, 44); c.lineTo(w - 19, 44); c.closePath(); c.fill(); }
 }
 let sel = { apt: null, end: null, start: 'runway' };
+// player livery: repaint the jet in place and persist the choice (fox.livery)
+function setPlayerLivery(id) {
+  if (!LIVERIES.some(l => l.id === id)) return savedLivery();
+  const P = aircraft.userData.parts; if (P && P.repaint) P.repaint(id);
+  saveLivery(id);
+  $$('#livSeg button').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.v === id)));
+  const L = LIVERIES.find(l => l.id === id); const d = $('#livDesc'); if (d && L) d.textContent = L.name + ' — ' + L.desc + ' Saved on this device.';
+  return id;
+}
 function buildMenu() {
   $('#stA').textContent = World.stats.airports.toLocaleString(); $('#stR').textContent = World.stats.runways.toLocaleString(); $('#stN').textContent = World.stats.navaids.toLocaleString();
   const cards = $('#cards'); cards.innerHTML = '';
@@ -1725,6 +1735,11 @@ function buildMenu() {
   const setSeg = (id, key) => { $$(`#${id} button`).forEach(b => { b.setAttribute('aria-pressed', String(settings[key]) === b.dataset.v); b.onclick = () => { $$(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', x === b)); settings[key] = b.dataset.v; store.set('settings', settings); applySettings(key); }; }); };
   setSeg('failRandSeg', 'failRand'); { const fp = $('#failPick'); fp.innerHTML = FAILS.map(f => `<option value="${f.id}">${f.label}</option>`).join(''); $('#failNow').onclick = () => { if (!W.started || W.menuMode) return toast('Start a flight first.'); const ok = fails.trigger(fp.value); toast(ok ? 'Failure triggered: ' + FAILS.find(f => f.id === fp.value).label : 'That failure is already active.'); if (W.paused && $('#pause') && !$('#pause').hidden) togglePause(); }; }
   setSeg('qSeg', 'quality'); setSeg('resSeg', 'res'); setSeg('unitSeg', 'units'); setSeg('lawSeg', 'law'); setSeg('invSeg', 'invert'); setSeg('padAssistSeg', 'padAssist'); setSeg('padInvSeg', 'padInvert');
+  { const seg = $('#livSeg'); if (seg) { seg.innerHTML = ''; const cur = savedLivery();
+      for (const L of LIVERIES) { const b = document.createElement('button'); b.dataset.v = L.id; b.setAttribute('aria-pressed', String(L.id === cur));
+        b.innerHTML = `<span style="display:inline-block;width:22px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px;background:linear-gradient(90deg,${L.sw[0]},${L.sw[1]},${L.sw[2]})"></span>${L.name}`;
+        b.onclick = () => { setPlayerLivery(L.id); toast('Livery: ' + L.name); }; seg.appendChild(b); }
+      const d = $('#livDesc'), CL = LIVERIES.find(l => l.id === cur); if (d && CL) d.textContent = CL.name + ' — ' + CL.desc + ' Saved on this device.'; } }
   renderPadMap(); { const pr = $('#padRumble'); if (pr) { pr.checked = settings.padRumble !== false; pr.onchange = () => { settings.padRumble = pr.checked; pad.cfg.rumble = settings.padRumble; store.set('settings', settings); if (pad.cfg.rumble) pad.rumble(0.4, 0.4, 200); }; } }
   for (const [id, key] of [['mouseSens', 'mouseSens'], ['vol', 'vol'], ['musicVol', 'musicVol'], ['padSens', 'padSens'], ['padDz', 'padDz']]) { const el = $('#' + id); if (!el) continue; el.value = settings[key]; el.oninput = () => { settings[key] = +el.value; store.set('settings', settings); applySettings(key); }; }
   for (const [id, key] of [['voice', 'voice'], ['hudOn', 'hud'], ['music', 'music'], ['termMusic', 'termMusic']]) { const el = $('#' + id); if (!el) continue; el.checked = settings[key]; el.onchange = () => { settings[key] = el.checked; store.set('settings', settings); applySettings(key); }; }
@@ -1854,6 +1869,7 @@ window.__sim = {
   runwayCheck(icao, ident) { const A = World.byIcao.get(icao); const g = airportGeometry(A); const E = g.ends.find(e => e.ident === ident); return { csv: E.hdgCsv, geo: E.hdg, derived: E.derived, len: E.length / FT }; },
   menu() { toMenu(); }, pause(p) { W.paused = p; }, setRes(v) { settings.res = String(v); applyRes(); }, orbitSet(y, p, d) { orbit.yaw = y; orbit.pitch = p; orbit.dist = d; }, chaseSet(y, p, d) { chase.yaw = y; chase.pitch = p; chase.dist = d; chasePos = null; }, lookSet(y, p, f) { look.yaw = y; look.pitch = p; look.fov = f; },
   score: () => lastScore, music, audio, musicWant: () => musicWant(), displays, terrain, city, sky, atc, foot,
+  livery: () => (aircraft.userData.parts && aircraft.userData.parts.livery) || savedLivery(), setLivery: (id) => setPlayerLivery(id),
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
   footStep(sec) { for (let i = 0; i < sec * 30; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); },

@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { atmos } from './sky.js';
 import { V3, clamp, smooth, lerp, rng, canvas, tex, latheZ, mergeAll, attr, boxUV, heightToNormal } from './ac-util.js';
 import { NOSE_Z, TAIL_Z, HULL_L, SEC, hullPoint, hullNormal, thetaAt, WINDOWS, DOORS, DOOR, WIN_Y, GEAR } from './ac-shape.js';
-import { fuselageMaps, finMaps, wingMaps, wingletMaps, nacelleMaps, spinnerTex, panelTile } from './ac-livery.js';
+import { fuselageMaps, finMaps, wingMaps, wingletMaps, nacelleMaps, spinnerTex, panelTile, paintFor, savedLivery } from './ac-livery.js';
 import { airlinerGeometry } from './ac-traffic.js';
 
 const PI = Math.PI, D = PI / 180;
@@ -331,10 +331,12 @@ export function buildPlayerAircraft(quality = 'high') {
   const model = new THREE.Group(); model.name = 'exterior'; root.add(model);
   const detail = new THREE.Group(); detail.name = 'detail'; model.add(detail);
   // ---------------- materials (one per surface family)
-  const F = fuselageMaps(big ? 4096 : 2048), Wm = wingMaps(big ? 2048 : 1024), Fm = finMaps(big ? 1024 : 512), Lm = wingletMaps(big ? 512 : 256), PT = panelTile(512, 2);
-  const Nm = nacelleMaps(nacBandsOf(), big ? 1024 : 512);
+  let livId = savedLivery(); const livP = paintFor(livId);
+  const F = fuselageMaps(big ? 4096 : 2048, livP), Wm = wingMaps(big ? 2048 : 1024), Fm = finMaps(big ? 1024 : 512, livP), Lm = wingletMaps(big ? 512 : 256, livP), PT = panelTile(512, 2);
+  const Nm = nacelleMaps(nacBandsOf(), big ? 1024 : 512, livP);
   const orm = (o, m) => Object.assign(o, { map: m.map, normalMap: m.normalMap, aoMap: m.orm, roughnessMap: m.orm, metalnessMap: m.orm, roughness: 1, metalness: 1 });
   const hullMat = atmos(new THREE.MeshPhysicalMaterial(orm({ clearcoat: 0.85, clearcoatRoughness: 0.07, clearcoatNormalMap: F.normalMap, clearcoatNormalScale: new THREE.Vector2(0.35, 0.35), aoMapIntensity: 0.8, envMapIntensity: 0.8 }, F)));
+  if (F.emis) { hullMat.emissiveMap = F.emis; hullMat.emissive = new THREE.Color(0xffffff); hullMat.emissiveIntensity = 1.15; } // Midnight Fox glow markings
   const finMat = atmos(new THREE.MeshPhysicalMaterial(orm({ clearcoat: 1, clearcoatRoughness: 0.08, emissiveMap: Fm.emis, emissive: 0xffffff, emissiveIntensity: 0 }, Fm)));
   const wingMat = atmos(new THREE.MeshPhysicalMaterial(orm({ clearcoat: 0.45, clearcoatRoughness: 0.2, normalScale: new THREE.Vector2(0.8, 0.8) }, Wm)));
   const wletMat = atmos(new THREE.MeshPhysicalMaterial(orm({ clearcoat: 1, clearcoatRoughness: 0.08 }, Lm)));
@@ -485,7 +487,25 @@ export function buildPlayerAircraft(quality = 'high') {
   parts.mats = { bodyMat: glassMat, finMat };
   // ---------------- far LOD (> ~900 m): the merged traffic model, 2 draw calls
   const far = new THREE.Group(); far.name = 'far'; far.visible = false; model.add(far);
-  try { const A = airlinerGeometry('low'); far.add(new THREE.Mesh(A.body, atmos(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.4, metalness: 0.1 }))), new THREE.Mesh(A.fin, atmos(new THREE.MeshStandardMaterial({ color: 0x1b2747, roughness: 0.35, metalness: 0.1 })))); } catch (e) { console.warn('far LOD', e); }
+  let farFinMat = null;
+  try { const A = airlinerGeometry('low'); farFinMat = atmos(new THREE.MeshStandardMaterial({ color: 0x1b2747, roughness: 0.35, metalness: 0.1 })); far.add(new THREE.Mesh(A.body, atmos(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.4, metalness: 0.1 }))), new THREE.Mesh(A.fin, farFinMat)); } catch (e) { console.warn('far LOD', e); }
+  if (farFinMat && livP && livP.farFin) farFinMat.color.set(livP.farFin);
+  // ---------------- livery repaint: regenerate the scheme's maps at build resolution and
+  // swap them into the live materials (picker in Settings + __sim.setLivery drive this)
+  parts.livery = livId;
+  parts.repaint = (id) => {
+    const P = paintFor(id); livId = id; parts.livery = id;
+    const applyMaps = (mat, m, clearcoatN) => { const old = new Set([mat.map, mat.normalMap, mat.aoMap, mat.roughnessMap, mat.metalnessMap, mat.emissiveMap, mat.clearcoatNormalMap].filter(Boolean));
+      mat.map = m.map; mat.normalMap = m.normalMap; mat.aoMap = m.orm; mat.roughnessMap = m.orm; mat.metalnessMap = m.orm; mat.emissiveMap = m.emis || null; if (clearcoatN) mat.clearcoatNormalMap = m.normalMap;
+      mat.needsUpdate = true; const keep = new Set([m.map, m.normalMap, m.orm, m.emis].filter(Boolean)); for (const t of old) if (!keep.has(t)) t.dispose(); };
+    const F2 = fuselageMaps(big ? 4096 : 2048, P); applyMaps(hullMat, F2, true);
+    if (F2.emis) { hullMat.emissive = new THREE.Color(0xffffff); hullMat.emissiveIntensity = 1.15; } else hullMat.emissiveIntensity = 0;
+    applyMaps(finMat, finMaps(big ? 1024 : 512, P));
+    applyMaps(wletMat, wingletMaps(big ? 512 : 256, P));
+    applyMaps(nacMat, nacelleMaps(nacBandsOf(), big ? 1024 : 512, P));
+    if (farFinMat) farFinMat.color.set((P && P.farFin) || '#1b2747');
+    return id;
+  };
   const _wp = V3();
   parts.lightPts.pts.onBeforeRender = (r, s, cam) => { if (!cam.isPerspectiveCamera) return; root.getWorldPosition(_wp); const d = cam.position.distanceTo(_wp), want = detail.visible ? d < 1000 : d < 850; if (want !== detail.visible && far.children.length) { detail.visible = want; far.visible = !want; } };
   // ---------------- contrails (world space, added to the scene on first use)

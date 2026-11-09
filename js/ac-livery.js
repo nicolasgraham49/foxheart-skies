@@ -16,6 +16,28 @@ export function foxHeart(c, x, y, s, light = false) {
   c.restore();
 }
 const NAVY = '#1b2747';
+// ------------------------------------------------------------------ player livery rack
+// Five paints for the player's own jet. 'classic' is the original scheme: paintFor returns
+// null and every painter below runs its original code path untouched (same colours, same
+// rng draw order), so Classic is numerically identical to the pre-rack build. The other
+// four only substitute colours/gradients at the points the classic pass chooses them.
+export const LIVERY_KEY = 'fox.livery';
+export const LIVERIES = [
+  { id: 'classic', name: 'Classic Foxheart', desc: 'The original — white fuselage, navy-and-orange swoosh, fox tail.', sw: ['#eef0f1', '#1b2747', '#e8732f'] },
+  { id: 'golden', name: 'Golden Hour', desc: 'Sunset gradient — peach nose, amber middle, soft-rose tail.', sw: ['#f6a55c', '#e58aa5', '#571f33'] },
+  { id: 'midnight', name: 'Midnight Fox', desc: 'Deep navy with a glowing orange fox — made for night ops.', sw: ['#141d33', '#ff8a2a', '#ffa04a'] },
+  { id: 'snowfall', name: 'Snowfall', desc: 'Soft white and pale teal. Calm, Øneheart-style.', sw: ['#eef3f2', '#4aa39e', '#1f5f66'] },
+  { id: 'retro', name: 'Retro Fox', desc: 'Cream fuselage, burgundy cheatline, polished old-school feel.', sw: ['#f3ead8', '#7a1f2b', '#c9a227'] },
+];
+const PAINTS = {
+  golden: { baseGrad: ['#ffdca6', '#f6a55c', '#e58aa5'], swoosh: ['#ef8a3d', '#d95d43', '#9c3a58'], core: '#571f33', title: '#571f33', air: '#e2602a', finBase: ['#2a1830', '#571f33'], finSwoosh: ['#f7b46a', '#e2602a'], winglet: ['#571f33', '#7a3049', '#e2702e', '#f7b46a'], nacBase: '#2a1a2e', nacRing: '#e8732f', farFin: '#571f33' },
+  midnight: { baseGrad: ['#232f52', '#141d33', '#0a101f'], swoosh: ['#ffb347', '#ff8a2a', '#ff6a00'], core: '#04070d', pin: '#ffd9a8', title: '#ffa04a', air: '#ffd9a8', glow: true, finBase: ['#0a1122', '#16264a'], finSwoosh: ['#ffb347', '#ff7a1a'], winglet: ['#0d1526', '#1a2a4d', '#ff8a2a', '#ffb347'], nacBase: '#0b1220', nacRing: '#ff8a2a', farFin: '#101c38' },
+  snowfall: { baseFlat: '#eef3f2', swoosh: ['#cdeae6', '#8ec9c2', '#4aa39e'], core: '#1f5f66', title: '#1f5f66', air: '#e8732f', finBase: ['#dcebe9', '#bcd8d4'], finSwoosh: ['#8ec9c2', '#4aa39e'], winglet: ['#e8f1f0', '#bcdcd8', '#4aa39e', '#8ec9c2'], nacBase: '#dfe9e8', nacRing: '#4aa39e', farFin: '#bcd8d4' },
+  retro: { baseFlat: '#f3ead8', swoosh: null, cheat: { main: '#7a1f2b', pin: '#c9a227' }, title: '#7a1f2b', air: '#7a1f2b', finBase: ['#e9dcbf', '#dcc9a2'], finSwoosh: ['#8e2434', '#7a1f2b'], winglet: ['#efe4cd', '#e2d3b4', '#7a1f2b', '#8e2434'], nacBase: '#e9dfc9', nacRing: '#7a1f2b', farFin: '#e2d3b4' },
+};
+export function paintFor(id) { return PAINTS[id] || null; }
+export function savedLivery() { try { const v = localStorage.getItem(LIVERY_KEY); return LIVERIES.some(l => l.id === v) ? v : 'classic'; } catch (e) { return 'classic'; } }
+export function saveLivery(id) { try { localStorage.setItem(LIVERY_KEY, id); } catch (e) { } }
 // three layers painted together
 class Layers {
   constructor(w, h, base = '#eef0f1', rough = 0.32) {
@@ -31,23 +53,33 @@ class Layers {
 }
 
 // ------------------------------------------------------------------ fuselage
-export function fuselageMaps(W = 4096) {
-  const H = W / 2, L = new Layers(W, H, '#eef0f1', 0.3); const { C, H: Hc, O } = L; const R = rng(7);
+export function fuselageMaps(W = 4096, P = null) {
+  const H = W / 2, L = new Layers(W, H, (P && P.baseFlat) || '#eef0f1', 0.3); const { C, H: Hc, O } = L; const R = rng(7);
   const X = z => (z - NOSE_Z) / HULL_L * W, Yt = th => th / (Math.PI * 2) * H, Yd = d => d / 360 * H;
   const pxZ = W / HULL_L, pxT = H / (Math.PI * 2 * 2.02), K = H / 1024; // px per metre along / around (mid section)
+  // livery base treatment (gradient schemes): full-canvas wash under the tone variation
+  if (P && P.baseGrad) { const bg = C.createLinearGradient(0, 0, W, 0); P.baseGrad.forEach((c, i) => bg.addColorStop(i / (P.baseGrad.length - 1), c)); C.fillStyle = bg; C.fillRect(0, 0, W, H); }
   // subtle large-scale tone variation of the white paint
   for (let i = 0; i < 26; i++) { const x = R() * W, y = R() * H, r = (0.15 + R() * 0.3) * H; const g = C.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, `rgba(${R() < 0.5 ? '210,214,220' : '255,252,246'},0.10)`); g.addColorStop(1, 'rgba(255,255,255,0)'); C.fillStyle = g; C.fillRect(0, 0, W, H); }
   // fox swoosh: widens toward the tail and wraps under the belly; navy core; white pinstripes
   const sw = x => { const t = x / W; return (70 + 360 * Math.pow(Math.max(0, t - 0.12) / 0.88, 1.6)) * K; };
   const band = (f, fill, ctx = C) => { ctx.fillStyle = fill; ctx.beginPath(); ctx.moveTo(0, H / 2 - f(0)); for (let x = 0; x <= W; x += 8) ctx.lineTo(x, H / 2 - f(x)); for (let x = W; x >= 0; x -= 8) ctx.lineTo(x, H / 2 + f(x)); ctx.closePath(); ctx.fill(); };
-  const grad = C.createLinearGradient(0, 0, W, 0); grad.addColorStop(0, '#f7b46a'); grad.addColorStop(0.55, '#f08a3e'); grad.addColorStop(1, '#e2602a');
-  band(sw, grad); band(sw, 'rgb(255,76,0)', O);
-  C.strokeStyle = '#ffffff'; C.lineWidth = 6 * K; for (const s of [-1, 1]) { C.beginPath(); for (let x = 0; x <= W; x += 8) { const y = H / 2 + s * (sw(x) + 9 * K); x ? C.lineTo(x, y) : C.moveTo(x, y); } C.stroke(); }
-  const w2 = x => sw(x) * 0.52 + 18 * K; band(w2, NAVY);
+  if (!P || P.swoosh !== null) {
+    const grad = C.createLinearGradient(0, 0, W, 0);
+    if (P && P.swoosh) P.swoosh.forEach((c, i) => grad.addColorStop(i / (P.swoosh.length - 1), c));
+    else { grad.addColorStop(0, '#f7b46a'); grad.addColorStop(0.55, '#f08a3e'); grad.addColorStop(1, '#e2602a'); }
+    band(sw, grad); band(sw, 'rgb(255,76,0)', O);
+    C.strokeStyle = (P && P.pin) || '#ffffff'; C.lineWidth = 6 * K; for (const s of [-1, 1]) { C.beginPath(); for (let x = 0; x <= W; x += 8) { const y = H / 2 + s * (sw(x) + 9 * K); x ? C.lineTo(x, y) : C.moveTo(x, y); } C.stroke(); }
+    const w2 = x => sw(x) * 0.52 + 18 * K; band(w2, (P && P.core) || NAVY);
+  }
+  // Retro Fox: a cheatline along the window line instead of the swoosh (the 3D window
+  // glass sits proud of the skin, so the stripe reads as passing behind the windows)
+  if (P && P.cheat) { const thW = thetaAt(0, WIN_Y, 1), x0 = X(-15.8), x1 = X(17.8);
+    for (const yc of [Yt(thW), Yt(Math.PI * 2 - thW)]) { C.fillStyle = P.cheat.main; C.fillRect(x0, yc - 0.19 * pxT, x1 - x0, 0.38 * pxT); C.fillStyle = P.cheat.pin; C.fillRect(x0, yc - 0.235 * pxT, x1 - x0, 0.03 * pxT); C.fillRect(x0, yc + 0.205 * pxT, x1 - x0, 0.03 * pxT); } }
   // titles (true proportions: squash x by the along/around pixel ratio), badge, registration
   const asp = pxZ / pxT;
   const side = (fn, th, z, flipX, flipY) => { C.save(); C.translate(X(z), Yt(th)); C.scale((flipX ? -1 : 1) * asp, flipY ? -1 : 1); fn(C); C.restore(); };
-  const title = c => { const f = Math.round(0.78 * pxT); c.textBaseline = 'middle'; c.textAlign = 'center'; c.fillStyle = NAVY; c.font = `700 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.fillText('NICOFOXHEART', -0.9 * pxT, 0); const w = c.measureText('NICOFOXHEART').width; c.fillStyle = '#e8732f'; c.font = `300 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.textAlign = 'left'; c.fillText('AIR', -0.9 * pxT + w / 2 + 0.18 * pxT, 0); };
+  const title = c => { const f = Math.round(0.78 * pxT); c.textBaseline = 'middle'; c.textAlign = 'center'; c.fillStyle = (P && P.title) || NAVY; c.font = `700 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.fillText('NICOFOXHEART', -0.9 * pxT, 0); const w = c.measureText('NICOFOXHEART').width; c.fillStyle = (P && P.air) || '#e8732f'; c.font = `300 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.textAlign = 'left'; c.fillText('AIR', -0.9 * pxT + w / 2 + 0.18 * pxT, 0); };
   const thT = Math.acos(1.12 / 2.06);
   side(title, thT, -6.6, true, false); side(title, Math.PI * 2 - thT, -6.6, false, true);
   for (const [th, fx, fy] of [[thT, true, false], [Math.PI * 2 - thT, false, true]]) side(c => foxHeart(c, 0, 0, 0.42 * pxT), th, -14.75, fx, fy);
@@ -112,11 +144,21 @@ export function fuselageMaps(W = 4096) {
   // fine orange-peel / dirt noise in height + colour
   Hc.save(); for (let i = 0; i < W * H / 60; i++) { const v = 128 + ((R() - 0.5) * 10) | 0; Hc.fillStyle = `rgb(${v},${v},${v})`; Hc.fillRect(R() * W, R() * H, 2, 2); } Hc.restore();
   C.save(); C.globalAlpha = 0.035; for (let i = 0; i < 9000; i++) { C.fillStyle = R() < 0.5 ? '#6f6a60' : '#ffffff'; C.fillRect(R() * W, R() * H, 2 + R() * 6, 1 + R() * 3); } C.restore();
-  return L.done(2.2, true);
+  const outF = L.done(2.2, true);
+  // Midnight Fox glow: an emissive twin of the colour pass — swoosh band, titles and the
+  // aft fox hearts on black — so the markings light up at night (hull material emissive)
+  if (P && P.glow) { const E = canvas(W, H), EC = E.c; EC.fillStyle = '#000'; EC.fillRect(0, 0, W, H);
+    EC.fillStyle = 'rgb(255,122,26)'; EC.beginPath(); EC.moveTo(0, H / 2 - sw(0)); for (let x = 0; x <= W; x += 8) EC.lineTo(x, H / 2 - sw(x)); for (let x = W; x >= 0; x -= 8) EC.lineTo(x, H / 2 + sw(x)); EC.closePath(); EC.fill();
+    const sideE = (fn, th, z, flipX, flipY) => { EC.save(); EC.translate(X(z), Yt(th)); EC.scale((flipX ? -1 : 1) * asp, flipY ? -1 : 1); fn(EC); EC.restore(); };
+    const titleE = c => { const f = Math.round(0.78 * pxT); c.textBaseline = 'middle'; c.textAlign = 'center'; c.fillStyle = '#ffa04a'; c.font = `700 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.fillText('NICOFOXHEART', -0.9 * pxT, 0); const w = c.measureText('NICOFOXHEART').width; c.fillStyle = '#ffd9a8'; c.font = `300 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.textAlign = 'left'; c.fillText('AIR', -0.9 * pxT + w / 2 + 0.18 * pxT, 0); };
+    sideE(titleE, thT, -6.6, true, false); sideE(titleE, Math.PI * 2 - thT, -6.6, false, true);
+    for (const [th, fx, fy] of [[thT, true, false], [Math.PI * 2 - thT, false, true]]) sideE(c => foxHeart(c, 0, 0, 0.42 * pxT), th, -14.75, fx, fy);
+    outF.emis = tex(E.cv); }
+  return outF;
 }
 
 // ------------------------------------------------------------------ fin (+ rudder): u = chord, v split (top half = right side)
-export function finMaps(S = 1024) {
+export function finMaps(S = 1024, P = null) {
   const W = S, H = S * 2, L = new Layers(W, H, NAVY, 0.3); const { C, O } = L;
   // logo-light emissive map: black except the swoosh and the fox heart under a soft light pool,
   // so at night only the logo lights up (aircraft.js drives finMat.emissiveIntensity from the
@@ -124,8 +166,8 @@ export function finMaps(S = 1024) {
   const E = canvas(W, H); E.c.fillStyle = '#000'; E.c.fillRect(0, 0, W, H); const EC = E.c;
   for (const half of [0, 1]) {
     C.save(); C.translate(0, half * S); C.beginPath(); C.rect(0, 0, W, S); C.clip(); O.save(); O.translate(0, half * S);
-    const g = C.createLinearGradient(0, S, W * 0.6, 0); g.addColorStop(0, '#18223e'); g.addColorStop(1, '#25365e'); C.fillStyle = g; C.fillRect(0, 0, W, S);
-    const k = S / 512; const g2 = C.createLinearGradient(0, S, W, 0); g2.addColorStop(0, '#f7b46a'); g2.addColorStop(1, '#e2602a');
+    const fb = (P && P.finBase) || ['#18223e', '#25365e']; const g = C.createLinearGradient(0, S, W * 0.6, 0); g.addColorStop(0, fb[0]); g.addColorStop(1, fb[1]); C.fillStyle = g; C.fillRect(0, 0, W, S);
+    const fs = (P && P.finSwoosh) || ['#f7b46a', '#e2602a']; const k = S / 512; const g2 = C.createLinearGradient(0, S, W, 0); g2.addColorStop(0, fs[0]); g2.addColorStop(1, fs[1]);
     C.fillStyle = g2; C.beginPath(); C.moveTo(0, S); C.lineTo(W, S); C.lineTo(W, 120 * k); C.bezierCurveTo(380 * k, 260 * k, 200 * k, 420 * k, 0, 470 * k); C.closePath(); C.fill();
     C.strokeStyle = '#fff'; C.lineWidth = 7 * k; C.beginPath(); C.moveTo(W, 104 * k); C.bezierCurveTo(380 * k, 244 * k, 200 * k, 404 * k, 0, 454 * k); C.stroke();
     foxHeart(C, 240 * k, 250 * k, 100 * k);
@@ -146,9 +188,10 @@ export function finMaps(S = 1024) {
 }
 // sharklet: navy with an orange tip; both faces carry a small fox heart (the foil's two sheets
 // map to the two canvas halves, and which sheet faces outboard flips with the wing side)
-export function wingletMaps(S = 512) {
+export function wingletMaps(S = 512, P = null) {
   const L = new Layers(S, S * 2, NAVY, 0.3); const { C } = L;
-  for (const half of [0, 1]) { const y0 = half * S; const g = C.createLinearGradient(0, y0 + S, 0, y0); g.addColorStop(0, '#1b2747'); g.addColorStop(0.55, '#24365e'); g.addColorStop(0.8, '#e2702e'); g.addColorStop(1, '#f7b46a'); C.fillStyle = g; C.fillRect(0, y0, S, S); foxHeart(C, S * 0.42, y0 + S * 0.55, S * 0.16); }
+  const wst = (P && P.winglet) || ['#1b2747', '#24365e', '#e2702e', '#f7b46a'], wsp = [0, 0.55, 0.8, 1];
+  for (const half of [0, 1]) { const y0 = half * S; const g = C.createLinearGradient(0, y0 + S, 0, y0); wst.forEach((c, i) => g.addColorStop(wsp[i], c)); C.fillStyle = g; C.fillRect(0, y0, S, S); foxHeart(C, S * 0.42, y0 + S * 0.55, S * 0.16); }
   return L.done(1.5, false);
 }
 
@@ -185,15 +228,15 @@ export function wingMaps(S = 2048) {
 
 // ------------------------------------------------------------------ nacelle (latheZ uv: u around from the bottom, v = arc length)
 // bands: v positions { lipIn, lipOut, cowl } of the inner duct end, the metal lip end and the fan-cowl end
-export function nacelleMaps(bands, S = 1024) {
-  const W = S, H = S / 2, L = new Layers(W, H, NAVY, 0.3); const { C, O } = L; const Y = v => (1 - v) * H;
+export function nacelleMaps(bands, S = 1024, P = null) {
+  const W = S, H = S / 2, L = new Layers(W, H, (P && P.nacBase) || NAVY, 0.3); const { C, O } = L; const Y = v => (1 - v) * H;
   // inner duct: acoustic liner (dark grey, perforated)
   C.fillStyle = '#3b4048'; C.fillRect(0, Y(bands.lipIn), W, H - Y(bands.lipIn)); O.fillStyle = 'rgb(255,170,90)'; O.fillRect(0, Y(bands.lipIn), W, H - Y(bands.lipIn));
   C.fillStyle = 'rgba(20,22,26,0.5)'; for (let y = Y(bands.lipIn) + 2; y < H; y += 3) for (let x = (y | 0) % 6; x < W; x += 6) C.fillRect(x, y, 1, 1);
   // polished lip
   const g = C.createLinearGradient(0, Y(bands.lipOut), 0, Y(bands.lipIn)); g.addColorStop(0, '#c9cfd6'); g.addColorStop(0.5, '#f2f5f8'); g.addColorStop(1, '#b9c0c8'); C.fillStyle = g; C.fillRect(0, Y(bands.lipOut), W, Y(bands.lipIn) - Y(bands.lipOut)); O.fillStyle = 'rgb(255,45,255)'; O.fillRect(0, Y(bands.lipOut), W, Y(bands.lipIn) - Y(bands.lipOut));
   // orange accent ring behind the lip, fox hearts on both sides, panel lines + latches
-  const yA = Y(bands.lipOut) - 0.035 * H; C.fillStyle = '#e8732f'; C.fillRect(0, yA - 0.02 * H, W, 0.02 * H);
+  const yA = Y(bands.lipOut) - 0.035 * H; C.fillStyle = (P && P.nacRing) || '#e8732f'; C.fillRect(0, yA - 0.02 * H, W, 0.02 * H);
   for (const u of [0.25, 0.75]) { C.save(); C.translate(u * W, Y((bands.lipOut + bands.cowl) / 2)); C.scale(1, 1.8); foxHeart(C, 0, 0, H * 0.06); C.restore(); }
   for (const u of [0.0, 0.5, 1.0]) L.groove(x => { x.beginPath(); x.moveTo(u * W, Y(bands.lipOut) - 2); x.lineTo(u * W, 0); }, 1.6, 70, 0.3);
   L.groove(x => { x.beginPath(); x.moveTo(0, Y(bands.cowl)); x.lineTo(W, Y(bands.cowl)); }, 2, 80, 0.35);
