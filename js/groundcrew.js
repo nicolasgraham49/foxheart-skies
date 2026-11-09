@@ -11,6 +11,7 @@ import { RampCrew, pushTug, gpuUnit, coneGeometry, chockGeometry, gseMats, hoseM
 import { Turnaround } from './env-turnaround.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const _zeroM = new THREE.Matrix4().makeScale(0, 0, 0); // [Perf] shared hide-instance matrix for commit()
 const M = (c, o = {}) => atmos(new THREE.MeshStandardMaterial({ color: c, roughness: 0.6, metalness: 0.05, ...o }));
 
 // people are proxies (position, rotation.y, visible, mode) committed into the instanced RampCrew each frame
@@ -62,7 +63,7 @@ export class GroundCrew {
   dismissAll() { const why = this.state === 'off' || !this.turn.mode; if (why) return { ok: false, msg: 'No ground services here' }; SERVICES.filter(s => !s.gpu).forEach(s => this.dismissService(s.id)); return { ok: true, msg: 'All ground services are leaving the stand' }; }
   callAll() { const why = this.canService(); if (why) return { ok: false, msg: why }; SERVICES.forEach((s, i) => s.gpu ? this.callService(s.id) : s.v.forEach((v, j) => this.turn.call(this.turn.V[v], i * 3 + j * 2.5))); return { ok: true, msg: 'All ground services called' }; }
   commit() { // proxies -> instances
-    const C = this.crew, Z = new THREE.Matrix4().makeScale(0, 0, 0), m = new THREE.Matrix4();
+    const C = this.crew, Z = _zeroM;
     [this.headset, this.wing, this.marsh].forEach((o, i) => { const p = C.p[i]; p.vis = o.visible && this.g.visible; p.pos.copy(o.position); p.yaw = o.rotation.y; p.mode = o.userData.mode; });
     C.commit(this.t + (this.turn.t || 0));
     for (const [arr, im] of [[this.chocks, this.chockIM], [this.cones, this.coneIM]]) { arr.forEach((o, i) => { if (!o.visible) im.setMatrixAt(i, Z); else { o.updateMatrix(); im.setMatrixAt(i, o.matrix); } }); im.instanceMatrix.needsUpdate = true; }

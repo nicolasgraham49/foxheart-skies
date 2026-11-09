@@ -1364,6 +1364,11 @@ function cabinStep(dt) { // flight cabin (people, crew director) + cabin crew ph
   if (W.started && !W.menuMode) cabinPhaseStep(dt);
 }
 const _c2s = {}, _cabCam = new THREE.Vector3();
+// [Perf] per-frame scratch (was: fresh Vector3/Matrix4/array allocations every frame
+// in updateShadows / updateInteriorVolumes — same values, reused objects)
+const _shDir = new THREE.Vector3(), _deckCtr = new THREE.Vector3();
+const _cabinVol = { name: 'cabin', m: new THREE.Matrix4(), min: new THREE.Vector3(-2.05, -0.8, -19.9), max: new THREE.Vector3(2.05, 2.15, 13.1) };
+const _ivArr = [];
 // [Weather] interior volumes for rain occlusion (see Sky.setInteriorVolumes): the terminal
 // (the exact on-foot hall when it exists, else the airport-frame terminal block), the jet
 // bridge, and the aircraft cabin + flight deck. Slow volumes refresh at 4 Hz (the hall and
@@ -1390,10 +1395,10 @@ function interiorVolumesSlow() {
   _ivSlow.vols = vols; return vols;
 }
 function updateInteriorVolumes() {
-  const vols = interiorVolumesSlow().slice();
+  const slow = interiorVolumesSlow(); _ivArr.length = 0; for (const v of slow) _ivArr.push(v);
   aircraft.updateMatrixWorld();
-  vols.push({ name: 'cabin', m: new THREE.Matrix4().copy(aircraft.matrixWorld).invert(), min: new THREE.Vector3(-2.05, -0.8, -19.9), max: new THREE.Vector3(2.05, 2.15, 13.1) });
-  sky.setInteriorVolumes(vols);
+  _cabinVol.m.copy(aircraft.matrixWorld).invert(); _ivArr.push(_cabinVol); // setInteriorVolumes copies the values out — scratch is safe
+  sky.setInteriorVolumes(_ivArr);
 }
 function renderRest(dt, night) {
   renderer.toneMappingExposure = sky.exposure; bloom.threshold = Math.max(1.0, 1.15 / sky.exposure); bloom.strength = 0.22 + 0.06 * night; bloom.radius = 0.38; // [Playtest2] the old 1.15/exposure threshold fell to ~0.44 at night, so every lamp and lit window bloomed into one white wash; floor it at 1.0 (only true light sources bloom), keep the night strength gain small, and tighten the radius (was 0.55) so a stand floodlight blooms as a lamp halo, not a screen-wide glare core
@@ -1456,12 +1461,12 @@ function updateDeck(dt) {
 // sun shadows: a tight shadow box around the flight deck when you sit in it, the wide ultra box otherwise
 function updateShadows() {
   if (!renderer.shadowMap.enabled) return;
-  const s = sky.sun; s.castShadow = true; const c = s.shadow.camera; const dir = s.position.clone().sub(s.target.position).normalize();
+  const s = sky.sun; s.castShadow = true; const c = s.shadow.camera; const dir = _shDir.copy(s.position).sub(s.target.position).normalize();
   const inDeck = deckVisible() && (W.view === 'cockpit' || W.onFoot); // sun or moon: light only enters through the windows
   const setSize = n => { if (s.shadow.mapSize.x !== n) { s.shadow.mapSize.set(n, n); if (s.shadow.map) { s.shadow.map.dispose(); s.shadow.map = null; } } };
   if (!exteriorCasters) { exteriorCasters = []; aircraft.traverse(o => { if (o.isMesh && o.castShadow && !isInDeck(o)) exteriorCasters.push(o); }); }
   if (inDeck) {
-    setSize(settings.quality === 'medium' ? 1024 : 2048); const ctr = aircraft.localToWorld(new THREE.Vector3(0, 1.1, -15.5));
+    setSize(settings.quality === 'medium' ? 1024 : 2048); const ctr = aircraft.localToWorld(_deckCtr.set(0, 1.1, -15.5));
     c.left = c.bottom = -1.8; c.right = c.top = 1.8; c.near = 0.5; c.far = 40; c.updateProjectionMatrix(); s.shadow.bias = -0.0002; s.shadow.normalBias = 0.012;
     s.target.position.copy(ctr); s.position.copy(ctr).addScaledVector(dir, 18); exteriorCasters.forEach(o => o.castShadow = false);
   } else if (settings.quality === 'ultra') {

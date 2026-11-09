@@ -644,7 +644,11 @@ export function buildCabin(icao, rnd) {
     // (the post-boarding safety demo used to be faked here for 40 s with no narration; the real
     // briefing — PA beats + beat-synced demo + screen cards — is conducted by main.js's briefStep)
     for (const p of crowd.p) if (p.baby) { p.x = p.baby.x; p.z = p.baby.z - 0.22; }
-    crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
+    // [Perf] hidden cabin (captain on the flight deck / outside views during boarding):
+    // the state machine above still advances everyone, and poses are a function of
+    // state + time, so the first visible frame re-poses the cabin exactly — skipping
+    // the pose/FK pass and the bone-texture upload while nobody can see it loses nothing.
+    if (group.visible) crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
     return done;
   };
   const deplane = () => { let i = 0; for (const p of crowd.p.slice(0, N - 2)) { if (p.baby) { p.hidden = true; continue; } p.state = 'out'; p.mode = 'stand'; p.act = 'idle'; p.y = fl; p.delay = 1 + (i++) * 0.85; } };
@@ -652,7 +656,7 @@ export function buildCabin(icao, rnd) {
     for (const p of crowd.p.slice(0, N - 2)) { if (p.state !== 'out') continue; p.delay -= dt; if (p.delay > 0) continue; p.mode = 'walk';
       if (Math.abs(p.x) > 0.05 && p.z > -12.3) { p.x -= Math.sign(p.x) * Math.min(Math.abs(p.x), 0.8 * dt); p.yaw = -Math.sign(p.x) * Math.PI / 2; }
       else if (p.z > -12.8) { p.z -= 1.05 * dt; p.yaw = Math.PI; } else { p.x -= 1.0 * dt; p.yaw = -Math.PI / 2; if (p.x < -2.4) { p.state = 'gone'; p.hidden = true; } } }
-    crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
+    if (group.visible) crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null); // [Perf] same hidden-cabin gate as update()
   };
   // in-flight life: reactions to the PA, signs and the ride; a few passengers get up when the belt sign is off
   const pax = crowd.p.slice(0, N - 2).filter(p => !p.baby);

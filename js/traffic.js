@@ -70,14 +70,17 @@ export class Traffic {
           if (a.h > 1200 || a.s > 18000) a.done = true;
         }
       }
-      const p = a.thr.clone().addScaledVector(a.dir, a.s); p.y = a.thr.y + a.h + 3.6;
+      const p = (a._p || (a._p = new THREE.Vector3())).copy(a.thr).addScaledVector(a.dir, a.s); p.y = a.thr.y + a.h + 3.6; // [Perf] per-plane scratch, was a clone + a 6x3 array literal per plane per frame
       a.obj.position.copy(p);
       const hdg = Math.atan2(a.dir.x, -a.dir.z);
       a.obj.rotation.set(0, 0, 0); a.obj.rotateY(-hdg); a.obj.rotateX(a.pitch * D2R);
       a.x = p.x; a.y = p.y; a.z = p.z;
       const L = a.obj.userData.lights; const bc = (t % 1) < 0.12, st = (t % 1.2) < 0.05;
       const ll = (a.h < 3000 ? 1 : 0) * (night ? 1.4 : 0.8);
-      [[0.1, 1, 0.35], [1, 0.08, 0.05], bc ? [1, 0.05, 0.02] : [0, 0, 0], st ? [3, 3, 3] : [0.8, 0.8, 0.8], [ll, ll, ll * 0.9], [ll, ll, ll * 0.9]].forEach((c, i) => L.setXYZ(i, c[0], c[1], c[2]));
+      L.setXYZ(0, 0.1, 1, 0.35); L.setXYZ(1, 1, 0.08, 0.05);
+      if (bc) L.setXYZ(2, 1, 0.05, 0.02); else L.setXYZ(2, 0, 0, 0);
+      if (st) L.setXYZ(3, 3, 3, 3); else L.setXYZ(3, 0.8, 0.8, 0.8);
+      L.setXYZ(4, ll, ll, ll * 0.9); L.setXYZ(5, ll, ll, ll * 0.9);
       L.needsUpdate = true;
     }
     for (const a of this.list.filter(a => a.done)) this.scene.remove(a.obj);

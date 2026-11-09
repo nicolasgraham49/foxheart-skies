@@ -182,7 +182,16 @@ export class Roads {
     this.update(0, null);
   }
   update(dt, cam) {
-    if (!this.cars) return; const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), P = new THREE.Vector3(), S = new THREE.Vector3(1, 1, 1), Y = new THREE.Vector3(0, 1, 0);
+    if (!this.cars) return;
+    // [Perf] traffic stride: above ~300 m the road traffic is distant texture — car
+    // motion reads identically when the whole field steps every 3rd call with the
+    // banked dt (positions integrate the accumulated dt, so nothing pops or jumps).
+    // Every featured airport sits below 40 m MSL, so cam.y is a safe height proxy;
+    // near the ground (gate, taxi, approach) traffic always steps every frame.
+    this._acc = (this._acc || 0) + dt;
+    if (cam && cam.y > 300) { this._skip = (this._skip || 0) + 1; if (this._skip % 3) return; }
+    dt = this._acc; this._acc = 0;
+    const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), P = new THREE.Vector3(), S = new THREE.Vector3(1, 1, 1), Y = new THREE.Vector3(0, 1, 0);
     const lp = this.lights.geometry.attributes.position.array;
     this.cars.forEach((car, ci) => {
       const pa = car.l.path, Ln = pa.len[pa.len.length - 1]; car.s = (car.s + car.v * dt) % Ln; const s = car.l.dir > 0 ? car.s : Ln - car.s;

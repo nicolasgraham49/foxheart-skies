@@ -342,15 +342,22 @@ export function genTall(bi, bj, info, ctx, out) {
 export class Hood {
   constructor(scene, quality) { this.group = new THREE.Group(); this.group.name = 'hood'; scene.add(this.group); this.R = { ultra: 1900, high: 1350, medium: 900 }[quality] || 0; this.cap = { ultra: 16000, high: 10000, medium: 5000 }[quality] || 0; this.tiles = new Map(); this.kits = null; this.ctx = null; this.dirty = false; this.count = 0; }
   setup(ctx) { this.clear(); this.ctx = ctx; if (!this.R || !HOOD.on) return; if (!this.kits) this.kits = makeKits(this.group, this.cap, HOOD.S.roofKind); else { this.group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); this.group.clear(); this.kits = makeKits(this.group, this.cap, HOOD.S.roofKind); } } // roof kind changes per world
-  clear() { this.tiles.clear(); if (this.kits) for (const k of Object.values(this.kits)) k.mesh.count = 0; this.count = 0; }
+  clear() { this.tiles.clear(); this._steady = false; if (this.kits) for (const k of Object.values(this.kits)) k.mesh.count = 0; this.count = 0; }
   // stream tiles of 6 x 6 blocks around the camera: build at most `budget` tiles per call, drop far ones, then refill the kits
   update(cam, budget = 1) {
-    if (!this.kits || !this.ctx) return; const T = 6 * B, [gu, gv] = toGrid(cam.x, cam.z), ti0 = Math.floor(gu / T), tj0 = Math.floor(gv / T), rr = Math.ceil(this.R / T) + 1, want = new Set();
+    if (!this.kits || !this.ctx) return;
+    // [Perf] steady-state early-out: once the tile ring around the camera is fully
+    // built, the want/miss set algebra below is pure churn — skip it until the camera
+    // has moved 40 m from the point the ring was settled around (far inside one
+    // 6-block tile, and the ring radius is 900-1900 m, so nothing can pop).
+    if (this._steady && !this.dirty) { const dx = cam.x - this._scx, dz = cam.z - this._scz; if (dx * dx + dz * dz < 1600) return 0; }
+    const T = 6 * B, [gu, gv] = toGrid(cam.x, cam.z), ti0 = Math.floor(gu / T), tj0 = Math.floor(gv / T), rr = Math.ceil(this.R / T) + 1, want = new Set();
     for (let tj = tj0 - rr; tj <= tj0 + rr; tj++) for (let ti = ti0 - rr; ti <= ti0 + rr; ti++) { const du = Math.max(0, Math.abs((ti + 0.5) * T - gu) - T / 2), dv = Math.max(0, Math.abs((tj + 0.5) * T - gv) - T / 2); if (Math.hypot(du, dv) < this.R) want.add(ti + ',' + tj); }
     for (const k of this.tiles.keys()) if (!want.has(k)) { this.tiles.delete(k); this.dirty = true; }
     const miss = [...want].filter(k => !this.tiles.has(k)).map(k => { const [ti, tj] = k.split(',').map(Number); return [Math.hypot((ti + 0.5) * T - gu, (tj + 0.5) * T - gv), k, ti, tj]; }).sort((a, b) => a[0] - b[0]);
     for (let i = 0; i < Math.min(budget, miss.length); i++) { const [, k, ti, tj] = miss[i]; const out = lists(); for (let bj = tj * 6; bj < tj * 6 + 6; bj++) for (let bi = ti * 6; bi < ti * 6 + 6; bi++) { const info = blockInfo(bi, bj); if (info.cls >= 1 && info.cls <= 3) genLowRise(bi, bj, info, this.ctx, out); } this.tiles.set(k, out); this.dirty = true; }
     if (this.dirty) { this.dirty = false; const all = [...this.tiles.values()]; let n = 0; for (const name of KIT_NAMES) { const c = this.kits[name].fill(all.map(t => t[name])); if (name === 'body') n = c; } this.count = n; }
+    this._scx = cam.x; this._scz = cam.z; this._steady = miss.length <= budget; // [Perf] settled once every wanted tile is built
     return miss.length;
   }
   stats() { let calls = 0, tris = 0; for (const k of Object.values(this.kits || {})) { if (!k.mesh.count) continue; calls++; const g = k.mesh.geometry; tris += (g.index ? g.index.count : g.attributes.position.count) / 3 * k.mesh.count; } return { tiles: this.tiles.size, houses: this.count, calls, tris: Math.round(tris) }; }
