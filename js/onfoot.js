@@ -106,9 +106,10 @@ export class OnFoot {
     this.seat = toWorldBody(-0.52, CABIN.ckFloor, -15.05);
     this.exitPos = term.exitPos;
     this.boardingDone = false; this.announced = false; this.greeted = false;
-    // terminal flow state (Terminal rebuild): boarding pass -> tray -> arch -> collect.
+    // terminal flow state (Terminal rebuild): crew sign-in -> tray -> arch -> collect.
+    // The player is the CAPTAIN: he signs in as crew, he never gets a passenger pass.
     // Auto-walk / J-skip is the crew path and is exempt; the flow gates free walking only.
-    this.flow = { pass: null, tray: false, trayLane: -1, arch: false, done: false };
+    this.flow = { crew: null, tray: false, trayLane: -1, arch: false, done: false };
     this._ckAt = 0; this._alarmAt = -9; this._plz = null; this._destName = destName;
     return this;
   }
@@ -207,12 +208,12 @@ export class OnFoot {
       if (this.pos.distanceTo(this.exitPos) < 6) this.prompt = 'E  Leave the airport and finish your trip';
       else if (tag === 'cockpit') this.prompt = 'Follow the passengers out through the door on the left · J skips to the arrival hall';
     }
-    // ---- terminal flow gates + prompts (Terminal rebuild): boarding pass, then tray -> arch
+    // ---- terminal flow gates + prompts (Terminal rebuild): crew sign-in, then tray -> arch
     // -> collect; airside past the security exit only opens once the tray is collected.
     // Manual walking only — auto-walk / J is the crew path and is never gated.
     const tf = this.o.mode === 'dep' && this.parts.term ? this.parts.term.flow : null;
     if (tf) {
-      if (this._ckAt && this.time >= this._ckAt) { this._ckAt = 0; this.flow.pass = { flight: 'NF 412', seat: '14A', group: 3 }; this._showPass(); this.onEvent && this.onEvent('checkedin'); }
+      if (this._ckAt && this.time >= this._ckAt) { this._ckAt = 0; this.flow.crew = { flight: 'NF 412', role: 'CAPTAIN' }; this._showCrew(); this.onEvent && this.onEvent('checkedin'); }
       if (!this.auto) {
         const lp = this.parts.term.group.worldToLocal(this.pos.clone()), pl = this._plz, sec = tf.sec, F = this.flow;
         if (pl && Math.abs(lp.z - pl.z) < 0.6) { // a real step across the line (teleports never clamp)
@@ -220,12 +221,12 @@ export class OnFoot {
           if (!F.done && pl.z > sec.wallOut && lp.z <= sec.wallOut) for (let li = 0; li < sec.lanes.length; li++) { if (Math.abs(lp.x - sec.lanes[li].x) < 1.05) { const w = this.parts.term.group.localToWorld(new THREE.Vector3(lp.x, lp.y, sec.wallOut + 0.42)); this.pos.x = w.x; this.pos.z = w.z; lp.z = sec.wallOut + 0.42; break; } }
         }
         this._plz = { x: lp.x, z: lp.z };
-        if (F.pass && F.tray && !F.arch) for (const L of sec.lanes) if (Math.abs(lp.x - L.x) < 0.62 && lp.z < sec.archZ - 0.3) { F.arch = true; break; }
+        if (F.crew && F.tray && !F.arch) for (const L of sec.lanes) if (Math.abs(lp.x - L.x) < 0.62 && lp.z < sec.archZ - 0.3) { F.arch = true; break; }
         if (tag === 'hall' && !F.done) {
           const near = (pts, d) => pts.some(q => Math.hypot(lp.x - q.x, lp.z - q.z) < d);
-          if (this._ckAt) this.prompt = 'Printing your boarding pass…';
-          else if (!F.pass) this.prompt = near(tf.ck, 2.6) ? 'E  Check in · get your boarding pass' : 'Check in at the counters or kiosks to get your boarding pass';
-          else if (!F.tray) this.prompt = near(sec.lanes.map(L => L.divest), 2.2) ? 'E  Put your bag in a tray on the belt' : (lp.z < sec.wallIn + 6 ? 'Tray on the belt first, then walk through the arch' : 'Head to security · have your boarding pass ready');
+          if (this._ckAt) this.prompt = 'Crew sign-in… one moment, captain';
+          else if (!F.crew) this.prompt = near(tf.ck, 2.6) ? 'E  Crew check-in · sign in for your flight' : 'Crew check-in at the counters or kiosks — sign in, captain';
+          else if (!F.tray) this.prompt = near(sec.lanes.map(L => L.divest), 2.2) ? 'E  Put your bag in a tray on the belt' : (lp.z < sec.wallIn + 6 ? 'Tray on the belt first, then walk through the arch' : 'Head to security · crew sign-in done');
           else if (!F.arch) this.prompt = 'Walk through the arch';
           else this.prompt = near(sec.lanes.map(L => L.collect), 2.2) ? 'E  Collect your tray' : 'Collect your tray at the end of the belt';
         }
@@ -236,20 +237,20 @@ export class OnFoot {
     const tf = this.o.mode === 'dep' && this.parts && this.parts.term ? this.parts.term.flow : null; if (!tf || this.auto) return false;
     const F = this.flow, sec = tf.sec, lp = this.parts.term.group.worldToLocal(this.pos.clone());
     if (this._ckAt) return true;
-    if (!F.pass) { if (tf.ck.some(q => Math.hypot(lp.x - q.x, lp.z - q.z) < 2.4)) { this._ckAt = this.time + 1.4; return true; } return false; }
+    if (!F.crew) { if (tf.ck.some(q => Math.hypot(lp.x - q.x, lp.z - q.z) < 2.4)) { this._ckAt = this.time + 1.4; return true; } return false; }
     if (!F.tray) { const li = sec.lanes.findIndex(L => Math.hypot(lp.x - L.divest.x, lp.z - L.divest.z) < 1.9); if (li >= 0) { F.tray = true; F.trayLane = li; sec.setPlayerTray(li); return true; } return false; }
     if (F.arch && !F.done) { const li = F.trayLane; if (li >= 0 && Math.hypot(lp.x - sec.lanes[li].collect.x, lp.z - sec.lanes[li].collect.z) < 1.9) { F.done = true; sec.clearPlayerTray(); return true; } }
     return false;
   }
-  flowState() { const F = this.flow; return { pass: !!F.pass, tray: F.tray, arch: F.arch, done: F.done, lane: F.trayLane }; }
-  _showPass() { try { const old = document.getElementById('passCard'); if (old) old.remove();
-    const el = document.createElement('div'); el.id = 'passCard';
-    el.style.cssText = 'position:fixed;right:18px;top:64px;width:252px;background:#fdfdf8;color:#12202e;border-radius:10px;box-shadow:0 10px 34px rgba(0,0,0,.45);font:12px/1.5 system-ui,sans-serif;padding:0 0 10px;overflow:hidden;opacity:0;transition:opacity .45s;pointer-events:none;z-index:60';
+  flowState() { const F = this.flow; return { crew: !!F.crew, tray: F.tray, arch: F.arch, done: F.done, lane: F.trayLane }; }
+  _showCrew() { try { const old = document.getElementById('crewCard'); if (old) old.remove(); const oldPass = document.getElementById('passCard'); if (oldPass) oldPass.remove();
+    const el = document.createElement('div'); el.id = 'crewCard';
+    el.style.cssText = 'position:fixed;right:18px;top:64px;width:252px;background:#10161f;color:#eef2f6;border-radius:10px;box-shadow:0 10px 34px rgba(0,0,0,.45);font:12px/1.5 system-ui,sans-serif;padding:0 0 10px;overflow:hidden;opacity:0;transition:opacity .45s;pointer-events:none;z-index:60;border-top:3px solid #e07f2e';
     const gate = this.o.stand && this.o.stand.gateName ? this.o.stand.gateName : '—';
-    el.innerHTML = '<div style="background:#0d2b4c;color:#fff;padding:7px 12px;font-weight:700;letter-spacing:.06em">NICOFOXHEART AIR <span style="float:right;font-weight:400;opacity:.75">BOARDING PASS</span></div>'
-      + '<div style="padding:8px 12px 0">PASSENGER<br><b style="font-size:14px">GRAHAM / NICOLAS</b></div>'
-      + '<div style="padding:4px 12px 0">FLIGHT <b>NF 412</b> · ' + (this._destName || '') + '<br>GATE <b>' + gate + '</b> &nbsp; SEAT <b>14A</b> &nbsp; GROUP <b>3</b></div>'
-      + '<div style="padding:6px 12px 0;color:#1d7a3a;font-weight:700">✓ CHECKED IN — head through security</div>';
+    el.innerHTML = '<div style="background:#0d2b4c;color:#fff;padding:7px 12px;font-weight:700;letter-spacing:.06em">NICOFOXHEART AIR <span style="float:right;font-weight:400;color:#e8a35c">CREW</span></div>'
+      + '<div style="padding:8px 12px 0">CAPTAIN<br><b style="font-size:14px">CPT GRAHAM / NICOLAS</b></div>'
+      + '<div style="padding:4px 12px 0">FLIGHT <b>NF 412</b> · ' + (this._destName || '') + '<br>REPORT TO GATE <b>' + gate + '</b></div>'
+      + '<div style="padding:6px 12px 0;color:#7dc98a;font-weight:700">✓ SIGNED IN — through security, captain</div>';
     document.body.appendChild(el); requestAnimationFrame(() => { el.style.opacity = '1'; });
     setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 600); }, 7000);
   } catch (e) { } }
