@@ -368,19 +368,75 @@ export function uldMeshes(n) {
 
 // ---------------------------------------------------------------- ramp crew: lit, instanced (9 draw calls for everyone)
 // person faces +z; modes: idle walk wave salute guide push load sit
-const VEST = new THREE.Color(0xc6ef1e), STRIPE = new THREE.Color(0xdfe3e6);
+// [Ground crew visuals] Figures rebuilt to sit with the approved v3 stylised people: sculpted heads
+// (jaw taper, brow ridge, modelled eyes/brows/mouth/ears, hair under the cap), hi-vis jacket torsos —
+// the instance tint IS the vest colour, so role colours live in look(); retroreflective silver is
+// painted >1 so it flashes under ramp light day and night; dark kit (zipper, radio, collar, belt,
+// gloves, boots) is painted dark so it stays dark under any vest tint. Same 9 instanced meshes and
+// the same limbs() poses as before — visuals only, choreography untouched.
+const SILVER = new THREE.Color(2.3, 2.4, 2.5), REFL = new THREE.Color(2.0, 2.1, 2.2);
 function colored(g, c) { const k = new Kit(); k.add('crew', g, null, c); return k.L.crew[0]; }
 const capsule = (r, l) => new THREE.CapsuleGeometry(r, l, 3, 10);
+const slim = (r, l) => new THREE.CapsuleGeometry(r, l, 2, 9);
+function sculpt(g, fn) { const p = g.attributes.position, v = new THREE.Vector3(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); fn(v); p.setXYZ(i, v.x, v.y, v.z); } g.deleteAttribute('normal'); g.computeVertexNormals(); return g; }
+function vpaint(g, fn) { const p = g.attributes.position, C = g.attributes.color, v = new THREE.Vector3(), c = new THREE.Color(); for (let i = 0; i < p.count; i++) { v.fromBufferAttribute(p, i); fn(v, c); C.setXYZ(i, c.r, c.g, c.b); } return g; }
 function crewGeos() {
-  const torso = mergeGeometries([colored(capsule(0.165, 0.36).translate(0, 0.3, 0), 0xffffff), colored(cyl(0.19, 0.182, 0.46, 14).translate(0, 0.3, 0), VEST), colored(cyl(0.193, 0.19, 0.035, 14).translate(0, 0.2, 0), STRIPE), colored(cyl(0.193, 0.19, 0.035, 14).translate(0, 0.38, 0), STRIPE), colored(cyl(0.05, 0.055, 0.12, 8).translate(0, 0.6, 0), 0xb98a6a)]);
-  const head = mergeGeometries([colored(new THREE.SphereGeometry(0.105, 14, 10).scale(0.92, 1.05, 1), 0xffffff), colored(new THREE.SphereGeometry(0.03, 6, 4).translate(0, -0.01, 0.1), 0xffffff)]);
-  const cap = mergeGeometries([colored(new THREE.SphereGeometry(0.112, 14, 8, 0, PI * 2, 0, H).translate(0, 0.025, 0), 0xffffff), colored(cyl(0.11, 0.11, 0.015, 12).scale(1, 1, 1.05).translate(0, 0.03, 0.08), 0xffffff)]);
-  const ear = mergeGeometries([colored(cyl(0.045, 0.045, 0.04, 12).rotateZ(H).translate(0.112, 0, 0), 0xffffff), colored(cyl(0.045, 0.045, 0.04, 12).rotateZ(H).translate(-0.112, 0, 0), 0xffffff), colored(new THREE.TorusGeometry(0.12, 0.012, 4, 14, PI).translate(0, 0.0, 0), 0x222222)]);
-  const ua = colored(capsule(0.055, 0.24).translate(0, -0.15, 0), 0xffffff);
-  const fa = mergeGeometries([colored(capsule(0.05, 0.2).translate(0, -0.13, 0), 0xffffff), colored(new THREE.SphereGeometry(0.05, 8, 6).translate(0, -0.29, 0), 0x2a2a2a)]);
-  const th = colored(capsule(0.075, 0.32).translate(0, -0.22, 0), 0xffffff);
-  const sh = mergeGeometries([colored(capsule(0.064, 0.3).translate(0, -0.2, 0), 0xffffff), colored(cyl(0.068, 0.068, 0.04, 10).translate(0, -0.15, 0), STRIPE), colored(rb(0.12, 0.09, 0.27, 0.03).translate(0, -0.43, 0.05), 0x141414)]);
-  const wand = colored(cyl(0.022, 0.022, 0.42, 8).translate(0, -0.48, 0), 0xffffff);
+  // ---- torso: hi-vis jacket (origin at the hip joint; head joint at +0.75)
+  const core = vpaint(colored(capsule(0.168, 0.34).scale(1.14, 1, 0.8).translate(0, 0.30, 0), 0xffffff),
+    (v, c) => { if (v.y < 0.10) c.setRGB(0.13, 0.14, 0.16); else c.setRGB(1, 1, 1); }); // hem tucks into the trousers
+  const vest = vpaint(colored(new THREE.CylinderGeometry(0.180, 0.163, 0.52, 12, 10, true).scale(1.14, 1, 0.8).translate(0, 0.29, 0), 0xffffff),
+    (v, c) => { const band = (v.y > 0.125 && v.y < 0.195) || (v.y > 0.333 && v.y < 0.403); if (band) c.copy(SILVER); else { c.setRGB(1, 1, 1); if (v.y < 0.055) c.multiplyScalar(0.85); } });
+  const strap = (x, z, ry) => colored(box(0.05, 0.34, 0.012).rotateY(ry).translate(x, 0.35, z), SILVER);
+  const torso = mergeGeometries([core, vest,
+    colored(new THREE.CylinderGeometry(0.085, 0.185, 0.13, 12, 1, true).scale(1.14, 1, 0.8).translate(0, 0.585, 0), 0xffffff), // shoulder yoke
+    colored(new THREE.TorusGeometry(0.082, 0.026, 4, 10).rotateX(H).translate(0, 0.615, 0), 0x1a1c20), // collar
+    colored(box(0.02, 0.48, 0.014).rotateX(0.029).translate(0, 0.29, 0.1342), 0x141518), // zipper
+    strap(0.105, 0.113, 0.565), strap(-0.105, 0.113, -0.565), strap(0.105, -0.113, 2.57), strap(-0.105, -0.113, -2.57), // shoulder straps, front + back
+    colored(box(0.06, 0.095, 0.03).rotateY(0.5).translate(-0.098, 0.44, 0.121), 0x0c0c0f), // chest radio
+    colored(cyl(0.004, 0.005, 0.105, 5).translate(-0.098, 0.545, 0.121), 0x0c0c0f), // radio antenna
+    colored(new THREE.CylinderGeometry(0.172, 0.178, 0.06, 12, 1, true).scale(1.14, 1, 0.8).translate(0, 0.10, 0), 0x17181c), // belt
+    colored(box(0.05, 0.034, 0.012).translate(0, 0.10, 0.140), 0x80878f)]); // buckle
+  // ---- head: sculpted skull + modelled features (origin at the head joint; face is +z)
+  const skull = sculpt(new THREE.SphereGeometry(0.107, 15, 11), v => {
+    v.x *= 0.94; v.z *= 0.97; v.y = v.y * 1.08 + 0.018;
+    const t = Math.min(1, Math.max(0, (-0.02 - v.y) / 0.08));
+    if (t > 0) { v.x *= 1 - 0.24 * t; if (v.z > 0) v.z *= 1 - 0.12 * t; } // jaw taper
+    if (v.z > 0.05) v.z += 0.005 * Math.exp(-((v.y - 0.03) * (v.y - 0.03)) / 0.0007); // brow ridge
+  });
+  const headParts = [colored(skull, 0xffffff),
+    colored(new THREE.SphereGeometry(0.026, 8, 6).scale(0.75, 1.15, 1.05).translate(0, -0.01, 0.092), 0xffffff), // nose
+    colored(cyl(0.048, 0.056, 0.16, 9).translate(0, -0.095, 0), 0xffffff)]; // neck
+  for (const s of [-1, 1]) {
+    headParts.push(colored(new THREE.SphereGeometry(0.028, 7, 5).scale(0.38, 0.62, 0.52).translate(s * 0.102, 0.005, -0.002), 0xffffff)); // ear
+    headParts.push(colored(new THREE.SphereGeometry(0.0115, 7, 5).scale(1.05, 1.28, 0.55).translate(s * 0.0365, 0.02, 0.098), 0x14100c)); // eye
+    headParts.push(colored(box(0.033, 0.007, 0.01).rotateX(-0.15).rotateZ(-s * 0.12).translate(s * 0.037, 0.048, 0.0945), 0x241608)); // brow
+  }
+  headParts.push(colored(box(0.03, 0.005, 0.008).translate(0, -0.052, 0.0775), 0x8c4038)); // mouth
+  const head = mergeGeometries(headParts);
+  // ---- cap: hair shell under a proper crown + brim (shares the head matrix)
+  const cap = mergeGeometries([
+    colored(new THREE.SphereGeometry(0.1135, 14, 8, 0, PI * 2, 0, PI * 0.52).rotateX(-0.35).scale(0.96, 1.09, 0.985).translate(0, 0.02, -0.006), 0x7d5a34), // hair
+    colored(new THREE.SphereGeometry(0.115, 14, 6, 0, PI * 2, 0, PI * 0.42).rotateX(-0.10).scale(0.97, 0.8, 0.99).translate(0, 0.034, 0), 0xffffff), // crown
+    colored(new THREE.CylinderGeometry(0.128, 0.128, 0.013, 12, 1, false, -0.8, 1.6).rotateX(0.10).translate(0, 0.055, 0.016), 0xffffff), // brim
+    colored(cyl(0.017, 0.017, 0.012, 8).translate(0, 0.126, 0), 0xffffff)]); // button
+  // ---- headset: red defender cups (instance tint), band over the hair, mic boom to the mouth
+  const ear = mergeGeometries([
+    colored(cyl(0.05, 0.05, 0.04, 12).rotateZ(H).translate(0.113, 0.008, 0), 0xffffff),
+    colored(cyl(0.05, 0.05, 0.04, 12).rotateZ(H).translate(-0.113, 0.008, 0), 0xffffff),
+    colored(new THREE.TorusGeometry(0.126, 0.011, 4, 12, PI).translate(0, 0.014, 0), 0x1c1c20),
+    colored(bar([0.12, 0.0, 0.02], [0.052, -0.052, 0.104], 0.006, 5), 0x0d0d10),
+    colored(box(0.024, 0.016, 0.034).rotateY(0.4).translate(0.048, -0.055, 0.107), 0x0d0d10)]);
+  const ua = colored(slim(0.057, 0.22).translate(0, -0.15, 0), 0xffffff);
+  const fa = mergeGeometries([colored(slim(0.051, 0.18).translate(0, -0.13, 0), 0xffffff),
+    colored(cyl(0.056, 0.056, 0.034, 9).translate(0, -0.222, 0), REFL), // reflective wrist band
+    colored(new THREE.SphereGeometry(0.052, 8, 6).scale(0.85, 1.25, 0.95).translate(0, -0.315, 0.004), 0x17171a)]); // glove
+  const th = colored(slim(0.078, 0.30).translate(0, -0.22, 0), 0xffffff);
+  const sh = mergeGeometries([colored(slim(0.067, 0.28).translate(0, -0.20, 0), 0xffffff),
+    colored(cyl(0.0705, 0.0705, 0.042, 10).translate(0, -0.145, 0), REFL), // reflective ankle band
+    colored(new RoundedBoxGeometry(0.115, 0.085, 0.27, 1, 0.03).translate(0, -0.43, 0.05), 0x101013), // boot
+    colored(box(0.12, 0.024, 0.285).translate(0, -0.466, 0.05), 0x050506)]); // sole
+  const wand = mergeGeometries([colored(cyl(0.02, 0.025, 0.44, 7).translate(0, -0.48, 0), 0xffffff),
+    colored(new THREE.SphereGeometry(0.023, 7, 5).translate(0, -0.70, 0), 0xffffff)]);
   return { torso, head, cap, ear, ua, fa, th, sh, wand };
 }
 const _m = new THREE.Matrix4(), _a = new THREE.Matrix4(), _b = new THREE.Matrix4(), _e = new THREE.Euler(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3(1, 1, 1), ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
@@ -407,7 +463,7 @@ export class RampCrew {
     for (let i = 0; i < n; i++) {
       const p = { pos: new THREE.Vector3(), yaw: 0, mode: 'idle', vis: false, ph: i * 1.7, headset: false, wands: false };
       this.p.push(p);
-      this.look(i, { shirt: [0x2b3442, 0x23272e, 0x3a4250][i % 3], trousers: [0x23272e, 0x2e3440, 0x1d2129][i % 3], skin: SK[i % 5], cap: [0x1d2a44, 0xf2f2f2, 0xe8b416, 0x1d2a44][i % 4] });
+      this.look(i, { vest: 0xc6ef1e, shirt: [0x2b3442, 0x23272e, 0x3a4250][i % 3], trousers: [0x23272e, 0x2e3440, 0x1d2129][i % 3], skin: SK[i % 5], cap: [0x1d2a44, 0xf2f2f2, 0xe8b416, 0x1d2a44][i % 4] });
     }
     for (const k in this.M) this.M[k].instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   }

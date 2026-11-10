@@ -32,7 +32,32 @@ export class GroundCrew {
     const q = this.q = (() => { try { return JSON.parse(localStorage.getItem('foxheart.settings') || '{}').quality || quality; } catch (e) { return quality; } })();
     const mats = gseMats(q); this.mats = mats;
     // crew: slots 0-2 headset / wing walker / marshaller, 3-15 turnaround staff (env-turnaround.js)
-    this.crew = new RampCrew(this.g, 16, q); this.crew.p[2].wands = true; this.crew.p[0].headset = true; this.crew.look(2, { vest: 0xff8a3a, shirt: 0x23272e, trousers: 0x1d2129, skin: 0x8d5f43, cap: 0x1d2a44 });
+    this.crew = new RampCrew(this.g, 16, q); this.crew.p[2].wands = true;
+    // [Ground crew visuals] role outfits (visual only): standard ramp lime for most, marshaller orange,
+    // catering teal, cleaners sky-blue; dark work shirts from the v3 'ground' palette; cap colours nod
+    // to each vehicle's own livery (fuel red, water blue, lav slate, cleaning green). Slots: 0 headset,
+    // 1 wing walker, 2 marshaller, 3-4 belt loaders, 5 container operator, 6 fueler, 7-8 catering,
+    // 9 lavatory, 10 water, 11 tug driver, 12-13 cleaners, 14 standby agent, 15 spare.
+    const SKN = [0xb98a6a, 0x8d5f43, 0xe0b496, 0x6b4630, 0xc99a78], LIME = 0xc6ef1e;
+    const LOOKS = [
+      { vest: LIME, shirt: 0x2a2f38, trousers: 0x23272e, skin: SKN[0], cap: 0x1d2a44 },
+      { vest: LIME, shirt: 0x2a2f38, trousers: 0x2e3440, skin: SKN[1], cap: 0x1d2a44 },
+      { vest: 0xff8a3a, shirt: 0x23272e, trousers: 0x1d2129, skin: 0x8d5f43, cap: 0x1d2a44 },
+      { vest: LIME, shirt: 0x2a2f38, trousers: 0x23272e, skin: SKN[3], cap: 0x1d2a44 },
+      { vest: LIME, shirt: 0x23272e, trousers: 0x2e3440, skin: SKN[4], cap: 0xe8b416 },
+      { vest: LIME, shirt: 0x3a4250, trousers: 0x23272e, skin: SKN[0], cap: 0xe8b416 },
+      { vest: LIME, shirt: 0x2a2f38, trousers: 0x1d2129, skin: SKN[1], cap: 0xa12622 },
+      { vest: 0x7fd4c8, shirt: 0xd8d8d8, trousers: 0x2e3440, skin: SKN[2], cap: 0xf2f2f2 },
+      { vest: 0x7fd4c8, shirt: 0xcfd4d8, trousers: 0x23272e, skin: SKN[3], cap: 0x1d7f86 },
+      { vest: LIME, shirt: 0x3a4250, trousers: 0x23272e, skin: SKN[4], cap: 0x3d4f61 },
+      { vest: LIME, shirt: 0x2b3442, trousers: 0x2e3440, skin: SKN[0], cap: 0x1d5fae },
+      { vest: LIME, shirt: 0x2a2f38, trousers: 0x1d2129, skin: SKN[1], cap: 0x1d2a44 },
+      { vest: 0x63c7e6, shirt: 0xd8d8d8, trousers: 0x2e3440, skin: SKN[2], cap: 0x2a8f5a },
+      { vest: 0x63c7e6, shirt: 0xcfd4d8, trousers: 0x23272e, skin: SKN[3], cap: 0xf2f2f2 },
+      { vest: LIME, shirt: 0x23272e, trousers: 0x23272e, skin: SKN[4], cap: 0x1d2a44 },
+      { vest: LIME, shirt: 0x2a2f38, trousers: 0x23272e, skin: SKN[0], cap: 0x1d2a44 }];
+    LOOKS.forEach((L, i) => this.crew.look(i, L));
+    this.crew.p[0].headset = this.crew.p[1].headset = this.crew.p[2].headset = true; // the three aircraft-close crew wear defenders + mic
     this.turn = new Turnaround(this.g, this.crew, q);
     // pushback tug (hitch faces the aircraft) + tow bar
     const tug = new THREE.Group(); tug.add(pushTug()); this.tug = tug; this.g.add(tug);
