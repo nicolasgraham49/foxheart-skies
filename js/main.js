@@ -29,6 +29,7 @@ import { GroundCrew } from './groundcrew.js';
 import { LandingAids, fdGuide } from './landing.js';
 import { NavPlan, fmtEte, fmtClock } from './navmap.js';
 import { Music, moodFor } from './music.js';
+import * as Stories from './stories.js';
 import { GFX, setMsaaActive } from './gfx.js';
 import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
@@ -358,7 +359,7 @@ async function startFlight(cfg) {
   if (cfg.start !== 'route') { W.route = null; }
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
-  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false);
+  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); Stories.reset(); // [Stories era] a new flight starts with no story armed
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
@@ -467,6 +468,7 @@ function enterFoot(mode) {
   disposeFlightCabin(); if (!foot.parts) foot.build({ mode, apt: b.apt, b, stand: st, dest: mode === 'dep' ? W.dest : W.cfg.apt, featured: featured() });
   foot.enter(mode === 'dep' ? 'hall' : 'cockpit'); foot.hideInteriors(true); W.onFoot = true; W.footMode = mode;
   $('#flight').hidden = true; $('#foot').hidden = false; $('#radio').hidden = true; setView('cockpit');
+  if (mode === 'dep') Stories.arm(foot); // [Stories era] one of the 121 waiting in the lounge has a story today
   foot.onEvent = ev => {
     if (ev === 'boarding') { if (!beginBoarding()) toast('Boarding has started. Passengers are taking their seats.', 4000); }
     if (ev === 'greet') { toast('Cabin crew: “Welcome aboard Nicofoxheart Air, captain!”', 4000); }
@@ -583,7 +585,8 @@ function finishTrip() {
   if (W.tripDone) return; W.tripDone = true; try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { }
   const s = lastScore; const from = W.cfg.apt, to = W.primary.apt;
   const log = store.get('log', []); log.unshift({ date: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: 'trip', apt: from.icao + '→' + to.icao, rwy: s?.rwy || '-', fpm: s?.fpm ?? '-', score: s?.score ?? '-', grade: s?.grade || '-', wx: W.wx, tod: fmtTime(W.tod) }); store.set('log', log.slice(0, 200));
-  $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">Flight 412 is in the logbook${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. Thanks for flying Nicofoxheart Air.</p><div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
+  const storyLetter = Stories.completeTrip({ from: from.icao, to: to.icao }); // [Stories era] their letter lands with the trip (route as actually flown — a divert writes the divert field)
+  $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">Flight 412 is in the logbook${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. Thanks for flying Nicofoxheart Air.</p>${storyLetter ? '<p style="color:var(--fox2);margin:8px 0 0">✉ A letter is waiting in your logbook.</p>' : ''}<div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
   $('#result').hidden = false; $('#rMenu').onclick = () => { $('#result').hidden = true; toMenu(); }; $('#rCont').onclick = () => { $('#result').hidden = true; W.tripDone = false; };
 }
 function nearestFreeStand(maxD) { const b = W.primary; if (!b || !b.full) return null; let best = null, bd = maxD; for (const st of b.b.stands) { if (st.used && st !== W.arrStand) continue; const d = Math.hypot(b.x + st.x - fdm.pos.x, b.z + st.z - fdm.pos.z); if (d < bd) { bd = d; best = st; } } return best; }
@@ -1467,6 +1470,7 @@ function renderRest(dt, night) {
   if (!W.menuMode && !W.onFoot && settings.hud && W.view !== 'cockpit' && W.view !== 'cabin' && W.S) drawHUD(hx, hc.width, hc.height, W.S, camera, settings.units, settings.extHud); else hx.clearRect(0, 0, hc.width, hc.height);
   audio.update({ fdm, apuN: sys.apuN, paused: W.paused || W.menuMode, ground: fdm.onGround, camDist: camera.position.distanceTo(aircraft.position), rain: W.wx === 'rain', nearAirport: true, groundH: gh, flapTarget: FLAPS[fdm.flapIdx].flap }, dt, W.view);
   music.update(dt, musicWant()); musicNowUI(); if (svcPanel.open) svcPanel.update(dt);
+  Stories.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Stories era] marker bob + the one cruise beat
   if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
   if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
 }
@@ -1489,6 +1493,7 @@ function musicWant() {
   if (W.menuMode || !W.started || W.paused || W.crashShown) return null;
   const mood = moodFor((W.primary?.apt || W.apt)?.icao);
   if (W.onFoot) { const tag = foot.zoneTag(); if (tag === 'hall' || !tag) return { kind: 'terminal', mood, level: 0.9 }; if (tag === 'bridge' || tag === 'gatedoor') return { kind: 'cabin', mood, level: 0.3 }; return { kind: 'cabin', mood, level: tag === 'cockpit' || tag === 'ckdoor' ? 0.5 : 1 }; }
+  if (!fdm.onGround && W.cabPhase === 'cruise') return { kind: 'cabin', mood: 'lounge', level: 0.45 }; // [Stories era] Golden Airflow scores the cruise — soft, under the cabin sounds; the music on/off setting still rules (Music.update)
   const parked = fdm.onGround && Math.hypot(fdm.vel.x, fdm.vel.z) < 0.5 && sys.ac && ((W.stand && !W.push && !fdm.engRun[0] && !fdm.engRun[1]) || W.parkedAt);
   const lv = !parked ? 0 : W.view === 'cabin' ? 1 : W.view === 'cockpit' ? 0.3 : 0; return lv ? { kind: 'cabin', mood, level: lv } : null;
 }
@@ -1588,6 +1593,7 @@ function footInput(dt) {
 }
 function footInteract() {
   if (foot.interactFlow && foot.interactFlow()) return; // terminal flow (check-in / security) uses E first
+  if (Stories.tryMeet(foot)) return; // [Stories era] saying hello to the story passenger uses E next
   if (W.footMode === 'dep' && foot.pos.distanceTo(foot.seat) < 1.3) takeSeat();
   else if (W.footMode === 'arr' && foot.pos.distanceTo(foot.exitPos) < 6.5) finishTrip();
 }
@@ -1855,8 +1861,9 @@ function selectAirport(A, quiet) {
 }
 function renderLog() {
   const log = store.get('log', []); const body = $('#logBody');
-  if (!log.length) { body.innerHTML = '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>'; return; }
-  body.innerHTML = `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>`).join('')}</tbody></table></div>`;
+  const letters = Stories.lettersHtml(); // [Stories era] the Letters section lives under the flights table
+  if (!log.length && !letters) { body.innerHTML = '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>'; return; }
+  body.innerHTML = (!log.length ? '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' : '') + (log.length ? `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>`).join('')}</tbody></table></div>` : '') + letters;
 }
 async function go(cfg) {
   $('#menu').hidden = true; $('#flight').hidden = false; W.menuMode = false; W.paused = false;
@@ -1925,6 +1932,7 @@ window.__sim = {
   menu() { toMenu(); }, pause(p) { W.paused = p; }, setRes(v) { settings.res = String(v); applyRes(); }, orbitSet(y, p, d) { orbit.yaw = y; orbit.pitch = p; orbit.dist = d; }, chaseSet(y, p, d) { chase.yaw = y; chase.pitch = p; chase.dist = d; chasePos = null; }, lookSet(y, p, f) { look.yaw = y; look.pitch = p; look.fov = f; },
   score: () => lastScore, music, audio, musicWant: () => musicWant(), displays, terrain, city, sky, atc, foot,
   livery: () => (aircraft.userData.parts && aircraft.userData.parts.livery) || savedLivery(), setLivery: (id) => setPlayerLivery(id),
+  stories: () => Stories.state(),
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
   footStep(sec) { for (let i = 0; i < sec * 30; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); },
