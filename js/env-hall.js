@@ -270,6 +270,16 @@ export function buildHall(opts, rnd) {
   if (dep) { hang('signSec', 0, F + 4.4, z1sec + 2.2, 6, 1.4, 0, ceilLand); hang('wayS', 26, F + 4.0, z1sec + 2.2, 6, 1.5, 0, ceilLand); }
   // queue stanchions with belt barriers (visual; you can duck under them)
   for (let r = 0; r < qRows; r++) { const z = qz + r * 1.3; for (let x = -16; x <= 16; x += 2.2) { B.box(x, F + 0.5, z, 0.07, 1.0, 0.07, 'steel'); B.box(x, F + 0.01, z, 0.36, 0.02, 0.36, 'steel', { faces: 'py' }); } for (let x = -16; x < 16; x += 2.2) if (!((r % 2 ? x > 13 : x < -13))) B.box(x + 1.1, F + 0.92, z, 2.1, 0.05, 0.01, 'navy', { faces: 'pznz' }); }
+  // [Arrival ending] working baggage-claim state (arrivals only): bags loop both carousels
+  // (near lane past the waiting passengers, far lane back) and claimPax collect theirs and
+  // head for the exit. claimPos walks the belt loop: s in metres along a 29.4 m perimeter.
+  let claim = null; const claimPax = [];
+  const _cm = new THREE.Matrix4(), _cq = new THREE.Quaternion(), _ce = new THREE.Euler(), _cv = new THREE.Vector3(), _cs = new THREE.Vector3();
+  const claimPos = (belt, s) => { const a = 6.3, lz = 1.05, P = 4 * a + 4 * lz; s = ((s % P) + P) % P;
+    if (s < 2 * a) return [belt.x - a + s, belt.z + lz, 1, 0, 0];
+    if (s < 2 * a + 2 * lz) return [belt.x + a, belt.z + lz - (s - 2 * a), 0, -1, 1];
+    if (s < 4 * a + 2 * lz) return [belt.x + a - (s - 2 * a - 2 * lz), belt.z - lz, -1, 0, 2];
+    return [belt.x - a, belt.z - lz + (s - 4 * a - 2 * lz), 0, 1, 3]; };
   // ---- check-in (departures) or baggage claim + customs exit (arrivals)
   if (dep) {
     for (const x of ckIslands) { B.box(x, F + 1.3, ckZ + 1.2, 10, 2.6, 0.4, 'white'); glow(x, F + 2.2, ckZ + 0.98, 9.6, 1.6, 0.06, 'logo', { tiles: { nz: 'logo' }, emit: { nz: 1.15 }, faces: 'nz' }); glow(x, F + 2.2, ckZ + 1.42, 9.6, 1.6, 0.06, 'logo', { tiles: { pz: 'logo' }, emit: { pz: 1.1 }, faces: 'pz' });
@@ -280,6 +290,19 @@ export function buildHall(opts, rnd) {
     hang('signDep', 0, F + 6.8, D - 0.6, 12, 1.5, Math.PI);
   } else {
     for (const x of [-16, 16]) { const zc = (z0sec + D) / 2 - 2; B.box(x, F + 0.35, zc, 14, 0.7, 4, 'metal'); B.box(x, F + 0.72, zc, 13.4, 0.04, 3.4, 'belt', { faces: 'py', tiles: { py: 'belt' } }); B.box(x, F + 1.3, zc, 1.0, 1.2, 1.2, 'metal'); glow(x, F + 3.8, zc - 2.4, 3.2, 1.0, 0.1, 'steel', { tiles: { nz: 'signBag', pz: 'signBag' }, emit: { nz: 1.2, pz: 1.2 }, faces: 'pznz' }); blk(x, zc, 7.1, 2.1); }
+    { // [Arrival ending] the carousels RUN: instanced bags loop the belt and dark slats sweep
+      // the surface with them (same instanced-mesh pattern as the security trays).
+      const belts = [-16, 16].map(bx => ({ x: bx, z: (z0sec + D) / 2 - 2, bags: [] }));
+      const bagMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.52, 0.72, 0.2), new THREE.MeshBasicMaterial({ color: 0xffffff }), 16);
+      const bagCols = [0xb8452e, 0x2e5fb8, 0x30343c, 0x7a4fa3, 0x1f8a70, 0xd9a441, 0x8a8f98, 0x53381f];
+      let bi = 0;
+      for (const belt of belts) for (let i = 0; i < 8; i++) { const bag = { s: i * 3.675 + rnd() * 1.6, taken: 0, sc: 0.9 + rnd() * 0.25, ix: bi }; belt.bags.push(bag); bagMesh.setColorAt(bi, new THREE.Color(bagCols[bi % bagCols.length])); bi++; }
+      bagMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); bagMesh.frustumCulled = false; group.add(bagMesh);
+      const slatMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.03, 1.5), new THREE.MeshBasicMaterial({ color: 0x17181c }), 24);
+      const slats = []; for (const belt of belts) for (let i = 0; i < 12; i++) slats.push({ belt, s: i * 2.45 });
+      slatMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); slatMesh.frustumCulled = false; group.add(slatMesh);
+      claim = { belts, bagMesh, slatMesh, slats, collected: 0 };
+    }
     hang('wayX', 0, F + 4.0, D - 6, 7, 1.75, 0, ceilLand); B.box(0, F + 1.4, D - 0.25, 6, 2.8, 0.1, 'glassD', { faces: 'nz' }); hang('signHello', 0, F + 6.4, D - 0.6, 16, 2.0, Math.PI);
     if (big) hang('wayB', -24, F + 4, z0sec + 2, 6, 1.5, Math.PI, ceilSec);
   }
@@ -326,7 +349,7 @@ export function buildHall(opts, rnd) {
   if (dep) { for (const x of ckIslands) { for (let i = 0; i < 2; i++) staff(x - 3.6 + i * 4.8, ckZ + 0.7, Math.PI); const fl = { island: x, slots: [], timer: 3 + rnd() * 6 }; for (let q = 0; q < 4 && k < NP - 22; q++) { const p = crowd.p[k++]; Object.assign(p, { x: x - 2.5 + (q % 2) * 0.3, y: F, z: ckZ - 1.7 - q * 0.85, yaw: 0, mode: 'stand', act: rnd() < 0.3 ? 'phone' : 'idle', suitcase: rnd() < 0.7 }); p._home = [p.x, p.z]; fl.slots.push(p); } ckFlows.push(fl); }
     for (let q = 0; q < 6 && k < NP - 16; q++) { const p = crowd.p[k++]; Object.assign(p, { x: -12 + q * 2.4 + (q % 2) * 0.5, y: F, z: qz + 0.6 + (q % 3) * 1.3, yaw: Math.PI, mode: 'stand', act: 'idle', suitcase: rnd() < 0.5 }); }
     for (const li of flowLaneIdx) { const xc = lanes[li]; if (xc === undefined) continue; const sf = { lane: li, timer: 1.5 + li * 2.5, people: [] }; for (let q = 0; q < 3 && k < NP - 14; q++) { const p = crowd.p[k++]; Object.assign(p, { x: xc + (q - 1) * 0.55, y: F, z: z1sec + 1.1 + q * 0.75, yaw: Math.PI, mode: 'stand', act: 'idle', suitcase: false }); p.hidden = true; p._home = [p.x, p.z]; sf.people.push(p); } secFlows.push(sf); } }
-  else for (const x of [-16, 16]) for (let q = 0; q < 5 && k < NP - 14; q++) { const p = crowd.p[k++]; const a = q / 5 * Math.PI * 2; Object.assign(p, { x: x + Math.cos(a) * 8, y: F, z: (z0sec + D) / 2 - 2 + Math.sin(a) * 3.2, yaw: Math.atan2(-Math.cos(a), -Math.sin(a)), mode: 'stand', act: 'idle' }); }
+  else for (const x of [-16, 16]) for (let q = 0; q < 5 && k < NP - 14; q++) { const p = crowd.p[k++]; const sx = x - 5.6 + q * 2.8; Object.assign(p, { x: sx, y: F, z: (z0sec + D) / 2 - 2 + 3.1, yaw: Math.PI, mode: 'stand', act: rnd() < 0.4 ? 'phone' : 'idle' }); p._claim = { bi: x < 0 ? 0 : 1, spotX: sx, phase: 'wait', t: 3 + rnd() * 12 }; claimPax.push(p); }
   for (let i = 0; i < 4 && k < NP - 12; i++) { const p = crowd.p[k++]; Object.assign(p, { x: -6 + i * 4, y: F, z: zS - 1.4, yaw: i % 2 ? Math.PI / 2 : -Math.PI / 2, mode: 'sit', act: ACTS[i % ACTS.length] }); }
   // ---- this flight's passengers (departures): the gate lounge starts FULL — the whole cabin load waits
   // here, most of them on the benches nearest the gate, the rest standing at the windows and by the desk,
@@ -361,6 +384,23 @@ export function buildHall(opts, rnd) {
         if (trayState.player.lane >= 0) { trayState.player.u = Math.min(1, trayState.player.u + dt / 13); M.makeTranslation(lanes[trayState.player.lane] + 1.9, F + 0.55, zHi + (zLo - zHi) * trayState.player.u); } else M.makeScale(0.001, 0.001, 0.001).setPosition(0, F - 50, 0);
         trayMesh.setMatrixAt(pi, M); trayMesh.instanceMatrix.needsUpdate = true;
         for (let li = 0; li < archLights.length; li++) if (trayState.alarm[li] > 0) { trayState.alarm[li] -= dt; archLights[li].material.color.setHex(trayState.alarm[li] > 0 ? 0xff4444 : 0x2bd576); } }
+    }
+    if (!dep && claim) {
+      // [Arrival ending] baggage claim at work: step claim movers (same stepping as the dep
+      // flows), advance the belt field, then run each waiting passenger's collect cycle.
+      for (const p of crowd.p) if (p._mv || p._waitT > 0 || p._unhide > 0) { if (p._unhide > 0) { p._unhide -= dt; if (p._unhide <= 0 && !p._mv) p.hidden = false; } stepMover(p, dt); }
+      const spd = 0.55 * dt;
+      for (const belt of claim.belts) for (const bag of belt.bags) { if (bag.taken > 0) { bag.taken -= dt; if (bag.taken <= 0) bag.s = rnd() * 29.4; } else bag.s += spd; }
+      for (const sl of claim.slats) sl.s += spd;
+      for (const belt of claim.belts) for (const bag of belt.bags) { const [px, pz, hx, hz] = claimPos(belt, bag.s); const sc = bag.taken > 0 ? 0.001 : bag.sc; _ce.set(0, Math.atan2(hx, hz), 0); _cq.setFromEuler(_ce); _cv.set(px, F + 1.1, pz); _cs.set(sc, sc, sc); _cm.compose(_cv, _cq, _cs); claim.bagMesh.setMatrixAt(bag.ix, _cm); }
+      claim.bagMesh.instanceMatrix.needsUpdate = true;
+      for (let i = 0; i < claim.slats.length; i++) { const sl = claim.slats[i]; const [px, pz, hx, hz] = claimPos(sl.belt, sl.s); _ce.set(0, Math.atan2(hx, hz), 0); _cq.setFromEuler(_ce); _cv.set(px, F + 0.755, pz); _cs.set(1, 1, 1); _cm.compose(_cv, _cq, _cs); claim.slatMesh.setMatrixAt(i, _cm); }
+      claim.slatMesh.instanceMatrix.needsUpdate = true;
+      for (const p of claimPax) { const c = p._claim; if (!c || p._mv || p.hidden) continue; const belt = claim.belts[c.bi];
+        if (c.phase === 'wait') { if (c.t > 0) c.t -= dt; else { let grab = null; for (const bag of belt.bags) { if (bag.taken > 0) continue; const [bx2, , hx] = claimPos(belt, bag.s); if (hx === 1 && Math.abs(bx2 - p.x) < 0.7) { grab = bag; break; } }
+          if (grab) { c.phase = 'grab'; c.bag = grab; p.act = 'lift'; sendP(p, [[p.x, belt.z + 2.35, 0.85]], 1.1, () => { if (c.bag.taken <= 0) { c.bag.taken = 14 + rnd() * 10; claim.collected++; } p.suitcase = true; p.act = 'idle'; c.phase = 'leave'; }); } } }
+        else if (c.phase === 'leave') { c.phase = 'exit'; sendP(p, [[belt.x * 0.35, D - 3.4], [0, D - 2.6]], 1.25, () => { p.hidden = true; p.x = dx + (rnd() - 0.5) * 8; p.z = 2.5 + rnd() * 1.5; p.suitcase = false; p._unhide = 1.2; c.phase = 'return'; }); }
+        else if (c.phase === 'return') { c.phase = 'wait'; c.t = 2 + rnd() * 5; sendP(p, [[c.spotX, belt.z + 3.1]], 1.15, () => { p.yaw = Math.PI; }); } }
     }
     floorMat.color.copy(mat.color); crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
   };
@@ -401,5 +441,5 @@ export function buildHall(opts, rnd) {
       clearPlayerTray() { trayState.player.lane = -1; trayState.player.u = 0; },
       archAlarm(li) { trayState.alarm[li] = 1.6; if (archLights[li]) archLights[li].material.color.setHex(0xff4444); } }
   } : null;
-  return { group, walk: wm, update, crowd, mat, shafts: shaftM, spawn, xAxis, zAxis, O, F, D, doorX: dx, flightPax, exitPos: W(0, F, D - 2), world: W, flow, dispose() { group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); at.tex.dispose(); board.dispose(); } };
+  return { group, walk: wm, update, crowd, mat, shafts: shaftM, spawn, xAxis, zAxis, O, F, D, doorX: dx, flightPax, exitPos: W(0, F, D - 2), world: W, flow, claimInfo: () => claim ? { belts: claim.belts.map(b => ({ x: b.x, z: b.z })), visible: claim.belts.reduce((n, b) => n + b.bags.filter(g => g.taken <= 0).length, 0), total: claim.belts.reduce((n, b) => n + b.bags.length, 0), collected: claim.collected, pax: claimPax.length, sample: (() => { const b0 = claim.belts[0]; const bg = b0.bags.find(g => g.taken <= 0) || b0.bags[0]; const [sx, sz] = claimPos(b0, bg.s); return [Math.round(sx * 100) / 100, Math.round(sz * 100) / 100]; })() } : null, dispose() { group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); at.tex.dispose(); board.dispose(); } };
 }

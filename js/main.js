@@ -313,7 +313,7 @@ async function startFlight(cfg) {
   if (cfg.start !== 'route') { W.route = null; }
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
-  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false);
+  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false);
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
@@ -1340,6 +1340,11 @@ function renderFrame(dt) {
   updateShadows();
   cabinStep(dt);
   if (W.onFoot) { const fi = footInput(dt); foot.update(dt, fi, sky.exposure); $('#footPrompt').textContent = foot.prompt; $('#foot').classList.toggle('tp', foot.fpK < 0.5); }
+  // [Arrival ending] stepping into the arrivals exit pocket completes the trip by itself, so
+  // the flight ends on EVERY real walk-out (keyboard, pad, auto-walk), not only on an E press
+  // inside the 6.5 m prompt radius (that path still works as the early/explicit finish).
+  // Armed by leaving the prompt radius, so KEEP EXPLORING inside the pocket cannot re-fire it.
+  if (W.onFoot && W.footMode === 'arr' && !W.tripDone && foot.exitPos) { const dExit = foot.pos.distanceTo(foot.exitPos); if (dExit > 6.5) W._tripArm = true; else if (W._tripArm && dExit < 3.4) { W._tripArm = false; finishTrip(); } }
   if (cockpit.userData.setDoor) cockpit.userData.setDoor(W.onFoot);
   foStep(dt);
   updateDeck(dt);
