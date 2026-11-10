@@ -29,6 +29,8 @@ import { GroundCrew } from './groundcrew.js';
 import { LandingAids, fdGuide } from './landing.js';
 import { NavPlan, fmtEte, fmtClock } from './navmap.js';
 import { Music, moodFor } from './music.js';
+import { GFX, setMsaaActive } from './gfx.js';
+import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
 import { buildCabin } from './interiors.js';
 import { rng } from './terrain.js';
@@ -50,15 +52,58 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.outputColorSpace = 
 renderer.shadowMap.enabled = settings.quality !== 'low'; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.15, 420000);
-let composer, bloom, renderScale = 1, dprBase = Math.min(devicePixelRatio || 1, 1.5);
-function setupComposer() {
-  const q = settings.quality; const msaa = q === 'high' || q === 'ultra' ? 4 : 0;
-  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: msaa });
+let composer, bloom, renderPass, renderScale = 1, dprBase = Math.min(devicePixelRatio || 1, 1.5);
+// [Black screen fix] High/Ultra pitch-black on the owner's real GPU (Nov 7 + Nov 9 reports;
+// Medium fine): the tier name does not guarantee the post chain runs. The one render path
+// that exists ONLY on high/ultra is the composer's multisampled target — WebGLRenderTarget
+// { HalfFloatType, samples: 4 } on a logarithmicDepthBuffer renderer. On some ANGLE/D3D
+// drivers a multisampled half-float target is not renderable (incomplete framebuffer /
+// failed resolve): every pass then composites black while the DOM/HUD stays alive —
+// exactly the owner's screenshot. SwiftShader renders it fine, so the rig never sees it.
+// Fix shape: the composer PROBES ITSELF once at boot with a known-bright scene; on failure
+// it rebuilds with samples: 0; if even that fails, the frame loop renders directly (no
+// composer) rather than showing black. The verdict is published via gfx.js so the people
+// alpha-to-coverage cut follows the ACTUAL state. Where the probe passes, nothing changes:
+// MSAA 4, bloom, shadows and the shipped look are exactly as before.
+let composerOk = true, composerSamples = 0; const probeLog = [];
+function buildComposer(samples) {
+  if (composer) { try { composer.renderTarget1.dispose(); composer.renderTarget2.dispose(); } catch (e) { } }
+  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples });
   composer = new EffectComposer(renderer, rt);
-  composer.addPass(new RenderPass(scene, camera));
-  bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.32, 0.55, 1.0); bloom.enabled = q !== 'low';
+  renderPass = new RenderPass(scene, camera); composer.addPass(renderPass);
+  bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.32, 0.55, 1.0); bloom.enabled = settings.quality !== 'low';
   composer.addPass(bloom); composer.addPass(new OutputPass());
+  composerSamples = samples;
   applyRes();
+}
+const _probeScene = new THREE.Scene(); const _probeCam = new THREE.PerspectiveCamera(55, 1, 0.1, 10);
+const _probeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+{ const m = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), _probeMat); m.position.z = -2; _probeScene.add(m); _probeScene.background = new THREE.Color(0xffffff); }
+function probeComposer(attempt) { // one frame of a known-bright scene through the REAL composer, read back from the canvas synchronously
+  try {
+    const test = store.get('gfxtest', ''); // harness-only seam: 'blackprobe' = the first probe reads black, 'blackalways' = every probe reads black
+    const dark = test === 'blackalways' || (test === 'blackprobe' && attempt === 0);
+    _probeScene.background.setRGB(dark ? 0 : 1, dark ? 0 : 1, dark ? 0 : 1); _probeMat.color.setRGB(dark ? 0 : 1, dark ? 0 : 1, dark ? 0 : 1);
+    const sv = renderPass.scene, sc = renderPass.camera;
+    renderPass.scene = _probeScene; renderPass.camera = _probeCam;
+    composer.render(0);
+    renderPass.scene = sv; renderPass.camera = sc;
+    const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight, n = 16, buf = new Uint8Array(n * n * 4);
+    gl.readPixels((w >> 1) - (n >> 1), (h >> 1) - (n >> 1), n, n, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    let mx = 0, sum = 0; for (let i = 0; i < buf.length; i += 4) { const v = Math.max(buf[i], buf[i + 1], buf[i + 2]); if (v > mx) mx = v; sum += v; }
+    const mean = sum / (n * n);
+    return { ok: mx > 24 && mean > 8, mx, mean: +mean.toFixed(1) };
+  } catch (e) { return { ok: false, mx: 0, mean: 0, err: String((e && e.message) || e) }; }
+}
+function setupComposer() {
+  const want = settings.quality === 'high' || settings.quality === 'ultra' ? 4 : 0;
+  buildComposer(want);
+  let p = probeComposer(0); probeLog.push({ samples: want, ...p });
+  if (!p.ok && want > 0) { buildComposer(0); p = probeComposer(1); probeLog.push({ samples: 0, ...p }); }
+  composerOk = p.ok; GFX.composer = composerOk;
+  setMsaaActive(composerOk && composerSamples > 0); // gfx.js verdict — people uACut follows reality, not the tier name
+  if (!composerOk) console.warn('[gfx] composer probe failed at every level — rendering direct (no post) rather than black. probe:', JSON.stringify(probeLog));
+  else if (composerSamples !== want) console.warn('[gfx] MSAA composer probe failed — rebuilt without MSAA; post chain live. probe:', JSON.stringify(probeLog));
 }
 function targetScale() { const r = settings.res; return r === 'auto' ? renderScale : +r * (settings.quality === 'low' ? 0.75 : 1); }
 function applyRes() {
@@ -1415,7 +1460,7 @@ function renderRest(dt, night) {
   if (blob.visible) { blob.position.set(fdm.pos.x, gh + 0.12, fdm.pos.z); const e = fdm.euler(); blob.rotation.y = -e.hdg * D2R; blob.scale.set(30, 1, 38); blob.material.opacity = (1 - agl / 80) * (1 - W.sky_oc) * 0.9; }
   W.sky_oc = sky.weather.overcast;
   if (!W.menuMode && W.ils) aids.update(W.ils, fdm.pos, { px: renderer.getPixelRatio() }, ground); aids.g.visible = !W.menuMode && !!W.ils;
-  composer.render(dt);
+  if (composerOk) composer.render(dt); else renderer.render(scene, camera); // [Black screen fix] safety net: a dead composer must never leave a black canvas
   // instruments at ~20 Hz, spread across frames
   dispT += dt; if (dispT > (W.view === 'cockpit' ? 0.05 : 0.08)) { dispT = 0; const S = snapshot(); const order = W.view === 'cockpit' ? [['pfd'], ['nd'], ['ewd', 'sd']] : [['pfd'], ['pfd', 'nd']]; displays.draw(S, order[dispIdx++ % order.length]); W.S = S; updateNavStrip(S); }
   const hc = $('#hudc'); const hx = hc.getContext('2d');
@@ -1908,6 +1953,7 @@ window.__sim = {
     fdm.engRun = [true, true]; W.push = null; W.autoTaxi = null; if (o.ap !== false) { fdm.ap.on = true; fdm.ap.athr = true; fdm.ap.lat = 'HDG'; fdm.ap.vert = 'ALT'; fdm.ap.hdg = Math.round(hdg); fdm.ap.spd = o.kt ?? 200; } return this.state(); },
   place(o) { if (o.x != null) fdm.pos.x = o.x; if (o.z != null) fdm.pos.z = o.z; if (o.hdg != null) fdm.q.setFromEuler(new THREE.Euler(0, -o.hdg * D2R, 0, 'YXZ')); if (o.v != null) { const h = (o.hdg ?? fdm.euler().hdg) * D2R; fdm.vel.set(Math.sin(h) * o.v, 0, -Math.cos(h) * o.v); } return this.state(); },
   pixel(fx = 0.5, fy = 0.5) { renderFrame(0.016); const gl = renderer.getContext(), c = renderer.domElement, px = new Uint8Array(4); gl.readPixels(Math.floor(c.width * fx), Math.floor(c.height * (1 - fy)), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return [...px]; },
+  gfx() { const inst = PeopleHD.instances || []; return { composerOk, samples: composerSamples, msaa: GFX.msaa, probe: probeLog, peopleACut: inst.map(i => i.U.uACut.value) }; }, // [Black screen fix] boot probe verdict + live people alpha cuts
   camInfo() { const d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); return { p: camera.position.toArray().map(v => +v.toFixed(1)), d: d.toArray().map(v => +v.toFixed(2)), near: camera.near, far: camera.far, fov: camera.fov, exp: +sky.exposure.toFixed(2), vis: { term: foot.parts?.term.group.visible, cabin: foot.parts?.cabin.group.visible } }; },
   parkNear() { const st = nearestFreeStand(1e6); if (!st) return null; fdm.vel.set(0, 0, 0); parkAtGate(st); return st.gateName; }, enterArrival() { parkPromptAction(); return this.footState(); }, nextStep() { const s = nextStep(); return s && s.label; },
   deckLook(y, p, fov) { look.yaw = y; look.pitch = p; if (fov) look.fov = fov; look.target = null; }, deckLights(o) { Object.assign(sys.sw, o); },

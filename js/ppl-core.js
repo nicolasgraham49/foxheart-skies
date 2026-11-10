@@ -7,6 +7,7 @@ import { makeMaterials, DATA_W, BONE_W, DYN, DYN2 } from './ppl-shade.js';
 import { B, NB, J, QB, LM, HF, EO } from './ppl-body.js';
 import { atmos } from './sky.js';
 import { CabinDirector } from './ppl-service.js';
+import { GFX, onMsaaChange } from './gfx.js';
 
 const SKIN_OLD = ['#f3d2b8', '#e7b48f', '#c98c62', '#9a6440', '#6b4126'];
 // six calibrated tone bands (very light .. very dark) x three undertones (pink, neutral, olive / golden); the darkest albedo stays >= 0.05 linear
@@ -74,7 +75,12 @@ export class PeopleHD {
     this.dataArr = new Float32Array(DATA_W * 4 * n); this.dataTex = new THREE.DataTexture(this.dataArr, DATA_W, n, THREE.RGBAFormat, THREE.FloatType); this.dataTex.needsUpdate = true;
     this.U = { uBones: { value: this.boneTex }, uData: { value: this.dataTex }, uK: { value: 1 }, uSky: { value: new THREE.Color(0.5, 0.52, 0.56) }, uGnd: { value: new THREE.Color(0.3, 0.28, 0.26) }, uKey: { value: new THREE.Color(0.78, 0.75, 0.7) }, uObj: { value: new THREE.Matrix3() }, uPart: { value: 0 },
       uFill: { value: new THREE.Color(0.2, 0.23, 0.28) }, uRim: { value: new THREE.Color(0.22, 0.22, 0.24) }, uKeyD: { value: new THREE.Vector4(0, 1, 0, 0) }, uFillD: { value: new THREE.Vector4(1, 0, 0, 0) }, uRimD: { value: new THREE.Vector4(0, 0, -1, 0) },
-      uACut: { value: this.q === 'high' || this.q === 'ultra' ? 0.12 : 0.5 } }; // alpha-to-coverage needs the MSAA of high / ultra; otherwise an alpha test
+      uACut: { value: (this.q === 'high' || this.q === 'ultra') && GFX.msaa ? 0.12 : 0.5 } }; // alpha-to-coverage needs WORKING MSAA (gfx.js boot verdict), not just the tier name; otherwise an alpha test
+    (PeopleHD.instances || (PeopleHD.instances = [])).push(this);
+    // [Black screen fix] if the composer probe killed MSAA at boot (or kills it later), the
+    // hair/eye alpha cut must drop to the plain alpha test (0.5) even on high/ultra — at 0.12
+    // without multisampling there is no coverage dither and edges go wispy/ghostly.
+    onMsaaChange(v => { this.U.uACut.value = (this.q === 'high' || this.q === 'ultra') && v ? 0.12 : 0.5; });
     this.M = makeMaterials(this.U);
     this.L = buildLayers(this.q === 'low' ? 'low' : 'high');
     this.group = new THREE.Group(); this.group.name = 'people';
