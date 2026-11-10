@@ -87,6 +87,42 @@ export function tallOf(bi, bj, info) {
     if (H(20) < 0.6) out.push({ u: sx + W0 * 0.5, v: sz + D0 * 0.9, w: W0 * 0.8, d: 14, h: 3 * Math.round(mix(3, 6, H(21))), kind: 3 }); return out; }
   return out;
 }
+// ---- skyline clusters (City realism): dense, tinted tower massing for a downtown core blob.
+// core: { x, z, r (blob radius m), h (tallest building m) } in the local frame; style: a SKYLINE
+// row from wld-cities.js (glass / wall / accent tints, hScale, density). Towers are placed on a
+// jittered grid aligned to the street grid, peak at the centre falling off with the blob, and
+// ride the same far-ring kits as genTall (no new draw calls). `seen` (optional) dedupes the
+// overlap of neighbouring cores (Tokyo's three blobs share one downtown). Returns towers placed.
+export function genSkyline(core, style, ctx, out, seen) {
+  const peak = core.h * (style.hScale || 1), Rd = Math.min(core.r * 0.62, 5200); // cap: a huge shallow blob (London r14) gets a downtown-sized core; genTall fills beyond it
+  const [gu, gv] = toGrid(core.x, core.z);
+  const spacing = Math.max(52, Math.min(Rd / 13, 300)) / Math.sqrt(style.density || 1); // spacing cap: core density must not dilute as blob size grows (London was 670 m)
+  const n = Math.ceil(Rd / spacing), yaw = Math.atan2(HOOD.s, HOOD.c);
+  let placed = 0;
+  for (let j = -n; j <= n; j++) for (let i = -n; i <= n; i++) {
+    const hu = gu + i * spacing, hv = gv + j * spacing, d0 = Math.hypot(i * spacing, j * spacing);
+    if (d0 > Rd) continue;
+    const r1 = h12(hu * 0.731 + 11.3, hv * 0.917 + 5.1), r2 = h12(hu * 1.31 + 3.7, hv * 1.13 + 8.9), r3 = h12(hu * 0.53 + 7.9, hv * 0.61 + 2.3), r4 = h12(hu * 1.97 + 1.3, hv * 1.71 + 4.7);
+    if (r1 < 0.45) continue; // gaps in the massing: plazas, parks, water inlets
+    const u = hu + (r2 - 0.5) * spacing * 0.5, v = hv + (r3 - 0.5) * spacing * 0.5;
+    const [x, z] = toLocal(u, v);
+    if (seen) { const key = Math.round(x / 24) + ':' + Math.round(z / 24); if (seen.has(key)) continue; seen.add(key); }
+    if (ctx.blocked(x, z)) continue; const g = ctx.heightAt(x, z); if (g.water) continue;
+    const t = Math.min(1, Math.hypot(x - core.x, z - core.z) / Rd);
+    let h = peak * Math.pow(1 - t, 1.3) * (0.42 + 0.58 * r4);
+    if (d0 < spacing * 1.2) h = Math.max(h, peak * (0.8 + 0.2 * r4)); // the signature peak stands at the centre
+    if (h < 23 && r2 < 0.55) continue; // the fringe is left to the far ring's mid-rise
+    h = Math.max(20, h);
+    const w = (24 + r2 * 20) * (h > 90 ? 1.1 : 1), dep = 22 + r3 * 17, y = g.h - 0.5;
+    const kind = r1 < 0.72 ? 2 : 3; // mostly glass towers, some masonry office
+    const src = r4 > 0.93 ? style.accent : (kind === 2 ? style.glass : style.wall), v1 = 0.82 + r3 * 0.36;
+    const wall = _C.setRGB(Math.min(1, src[0] * v1), Math.min(1, src[1] * v1), Math.min(1, src[2] * v1)).clone();
+    if (h > 60) { const h1 = h * 0.55, h2 = h * 0.85; put(out.body, x, y, z, yaw, w, h1, dep, wall, kind); put(out.body, x, y + h1, z, yaw, w * 0.8, h2 - h1, dep * 0.8, wall, kind); put(out.body, x, y + h2, z, yaw, w * 0.62, h - h2, dep * 0.62, wall, kind); put(out.flat, x, y + h, z, yaw, w * 0.64, 0.8, dep * 0.64, _C.setRGB(0.45, 0.45, 0.46)); if (r2 < 0.5) put(out.gear, x, y + h + 0.6, z, yaw, w * 0.4, 4, dep * 0.4, '#ffffff'); }
+    else { put(out.body, x, y, z, yaw, w, h, dep, wall, kind); put(out.flat, x, y + h, z, yaw, w + 0.4, 0.7, dep + 0.4, _C.setRGB(0.42, 0.42, 0.43)); }
+    placed++;
+  }
+  return placed;
+}
 export const toLocal = (u, v) => [HOOD.c * u + HOOD.s * v, -HOOD.s * u + HOOD.c * v];
 export const toGrid = (x, z) => [HOOD.c * x - HOOD.s * z, HOOD.s * x + HOOD.c * z];
 
@@ -102,13 +138,17 @@ float hHull(vec2 x){ if (uHullN < 3.0) return -1e5; float m = 1e5; for (int i = 
 // distance to the road corridors (wld-roads.js): highway, access road, interchange disc
 float hRoads(vec2 x){ float m = 1e5; for (int i = 0; i < 24; i++) { if (float(i) >= uRoadN) break; vec4 s = uRoadSeg[i]; vec2 d = s.zw - s.xy; float t = clamp(dot(x - s.xy, d) / max(dot(d, d), 1.0), 0.0, 1.0); m = min(m, length(x - s.xy - d * t) - uRoadW[i]); } if (uRoadIx.z > 0.0) m = min(m, length(x - uRoadIx.xy) - uRoadIx.z); return m; }
 vec3 hoodGlow = vec3(0.0); // night light from the neighbourhood (street lamps, windows), added by the terrain shader
+vec3 hoodRoadGlow = vec3(0.0); // [City realism] night light spill along the road corridors (highway / access road), added by the terrain shader outside the urban-mask gate
 // returns: rgb = ground colour, a = coverage (0 = leave the terrain colour)
 vec4 hoodGround(vec2 p, vec2 pL, float urbMask, vec3 grass, vec3 dark, float px){
-  hoodGlow = vec3(0.0);
+  hoodGlow = vec3(0.0); hoodRoadGlow = vec3(0.0);
+  vec3 lampC = uHood.w > 0.5 ? vec3(0.85, 0.9, 1.0) : vec3(1.0, 0.62, 0.3);
   float hd0 = hHull(pL); if (hd0 > -24.0) { // inside the airport fence: airport grass; just outside: perimeter road and fence
     if (hd0 > 0.0) return vec4(0.0); float o = -hd0; vec3 c = o < 7.0 ? vec3(0.2, 0.2, 0.21) * (0.95 + 0.1 * h12(floor(pL / 3.0))) : o < 8.2 ? vec3(0.32, 0.33, 0.33) : mix(grass * 1.05, dark, 0.25);
     if (o > 8.2 && o < 9.0) c = vec3(0.12); hoodGlow = (o < 7.0 && fract(dot(pL, vec2(0.7071)) / 45.0) < 0.12) ? vec3(0.9, 0.7, 0.4) * 0.25 : vec3(0.0); return vec4(c, 1.0); }
-  float rdd = hRoads(pL); if (rdd < 16.0) return vec4(mix(grass * 1.05, dark, 0.2 + 0.15 * h12(floor(pL / 9.0))), 1.0); // highway verges / embankments
+  float rdd = hRoads(pL); if (rdd < 16.0) { // highway verges / embankments; at night the lit corridor spills onto them
+    hoodRoadGlow = lampC * exp(-pow(max(rdd + 4.0, 0.0) / 13.0, 2.0)) * smoothstep(-30.0, -12.0, rdd) * 0.55;
+    return vec4(mix(grass * 1.05, dark, 0.2 + 0.15 * h12(floor(pL / 9.0))), 1.0); }
   vec2 g = vec2(uHood.x * p.x - uHood.y * p.y, uHood.y * p.x + uHood.x * p.y); vec2 bi = floor(g / ${B.toFixed(1)}); vec2 f = g - bi * ${B.toFixed(1)};
   vec2 cg = (bi + 0.5) * ${B.toFixed(1)}; vec2 cl = vec2(uHood.x * cg.x + uHood.y * cg.y, -uHood.y * cg.x + uHood.x * cg.y);
   vec2 dc = hDens(cl); float dn = dc.x + (h12(bi * vec2(1.3, 0.7)) - 0.5) * 0.12, core = dc.y; if (dn < 0.14 || urbMask < 0.02) return vec4(0.0);
@@ -118,19 +158,27 @@ vec4 hoodGround(vec2 p, vec2 pL, float urbMask, vec3 grass, vec3 dark, float px)
   float dL = f.x - (aL ? ${RWA} : ${RW}), dR = ${B.toFixed(1)} - f.x - (aR ? ${RWA} : ${RW}), dB = f.y - (aB ? ${RWA} : ${RW}), dT = ${B.toFixed(1)} - f.y - (aT ? ${RWA} : ${RW});
   float de = min(min(dL, dR), min(dB, dT)); bool artNear = (dL == de && aL) || (dR == de && aR) || (dB == de && aB) || (dT == de && aT);
   vec3 asph = vec3(0.13, 0.135, 0.14) * (0.92 + 0.12 * h12(floor(g / 3.0)));
-  vec3 lawnB = mix(grass * 1.08, uHoodS2.rgb, 0.6), lamp = uHood.w > 0.5 ? vec3(0.85, 0.9, 1.0) : vec3(1.0, 0.62, 0.3);
+  vec3 lawnB = mix(grass * 1.08, uHoodS2.rgb, 0.6), lamp = lampC;
   bool apt = cls >= 4.0 || (cls >= 3.0 && uHoodS.w >= 15.0);
   // ---- far LODs: lot average (7-16 m per pixel) then block average (beyond 30 m per pixel), streets anti-aliased by coverage
   float k = smoothstep(3.0, 7.0, px), kB = smoothstep(16.0, 32.0, px); vec3 rm = (uRoofs[0] + uRoofs[1] + uRoofs[2] + uRoofs[3]) * 0.25, conc = vec3(0.55, 0.53, 0.5);
-  vec3 blk = park ? mix(lawnB, dark * 1.1, 0.5) : apt ? mix(vec3(0.36, 0.355, 0.35), dark * 1.1, 0.2) : lawnB * 0.62 + rm * 0.2 + dark * 1.05 * 0.11 + conc * 0.07;
-  blk *= 0.9 + 0.16 * h12(bi * 0.71); vec3 lotC3 = blk;
+  vec3 blk = park ? mix(lawnB, dark * 1.1, 0.5) : apt ? mix(vec3(0.36, 0.355, 0.35), dark * 1.1, 0.2) : lawnB * 0.5 + rm * 0.3 + dark * 1.05 * 0.11 + conc * 0.09; // [City realism] far suburbs carry more roof/concrete and less lawn, so sprawl reads as built fabric from altitude, not farmland
+  blk *= 0.84 + 0.32 * h12(bi * 0.71); if (apt) blk *= 0.85 + 0.3 * h12(bi * vec2(3.7, 2.9)); vec3 lotC3 = blk; // [City realism] wider block-to-block variance so the far field keeps structure instead of washing flat
   if (!park && !apt && kB < 1.0) { // per-lot speckle: each lot's own roof colour and lawn tone
     bool tr = cls == 3.0 && h12(bi * vec2(2.1, 1.7)) < uHoodS.z; float sL = aL ? 10.8 : 7.6, sR = aR ? 10.8 : 7.6, lwF = cls == 1.0 ? 30.0 : cls == 2.0 ? 22.0 : tr ? 6.4 : 15.0, nF = max(1.0, floor((${B.toFixed(1)} - sL - sR) / lwF)), lw2 = (${B.toFixed(1)} - sL - sR) / nF;
     float rw2 = f.y < ${(B / 2).toFixed(1)} ? 0.0 : 1.0, li2 = clamp(floor((f.x - sL) / lw2), 0.0, nF - 1.0); vec2 k2 = vec2(bi.x * 7.0 + li2, bi.y * 5.0 + rw2 * 2.3);
-    vec3 roofL = uRoofs[int(h12(k2 + 18.0 * vec2(3.7, 1.9)) * 5.99)]; float rf = cls == 1.0 ? 0.17 : cls == 2.0 ? 0.21 : 0.32; lotC3 = lawnB * (0.84 + 0.24 * h12(k2 + 20.0 * vec2(3.7, 1.9))) * (1.0 - rf - 0.17) + roofL * rf + dark * 1.05 * 0.11 + conc * 0.06; }
+    vec3 roofL = uRoofs[int(h12(k2 + 18.0 * vec2(3.7, 1.9)) * 5.99)]; float rf = cls == 1.0 ? 0.20 : cls == 2.0 ? 0.27 : 0.38; lotC3 = lawnB * (0.84 + 0.24 * h12(k2 + 20.0 * vec2(3.7, 1.9))) * (1.0 - rf - 0.17) + roofL * rf + dark * 1.05 * 0.11 + conc * 0.06; } // [City realism] roof fraction up in the lot-average band (see blk above)
   float dcl = min(min(f.x, ${B.toFixed(1)} - f.x), min(f.y, ${B.toFixed(1)} - f.y)), sw = ${(RW + SW).toFixed(1)}; float st = clamp((sw - dcl) / px + 0.5, 0.0, 1.0) * clamp(2.0 * sw / px, 0.0, 1.0);
   vec3 far = mix(mix(lotC3, blk, kB), asph * 1.25, st);
-  vec3 farGlow = lamp * clamp((10.0 - dcl) / px + 0.5, 0.0, 1.0) * clamp(16.0 / px, 0.0, 1.0) * (artNear ? 0.6 : 0.32) + vec3(1.0, 0.75, 0.45) * 0.03 * step(cls, 3.5) * (1.0 - float(park));
+  // [City realism] the arterial grid (every 8th street) stays legible at far LOD: a real corridor
+  // (road + setbacks + parking, ~22 m of dark band) reads darker than the block average long after
+  // single streets have sub-pixeled out — without it the painted city washes into a flat smear.
+  float dArt = 1e5;
+  if (!park && dn > 0.3) { vec2 ga = abs(fract(g / ${(8 * B).toFixed(1)}) - 0.5) * ${(8 * B).toFixed(1)}; dArt = min(ga.x, ga.y);
+    float aCov = clamp((11.0 - dArt) / px + 0.5, 0.0, 1.0) * clamp(26.0 / px, 0.0, 1.0);
+    far = mix(far, asph * 1.15, aCov * (cls >= 3.0 ? 0.5 : 0.3)); }
+  vec3 farGlow = lamp * clamp((10.0 - dcl) / px + 0.5, 0.0, 1.0) * clamp(16.0 / px, 0.0, 1.0) * (artNear ? 0.6 : 0.32) + vec3(1.0, 0.75, 0.45) * 0.03 * step(cls, 3.5) * (1.0 - float(park)) + vec3(1.0, 0.78, 0.5) * 0.05 * step(4.5, cls) * (1.0 - float(park)) // [City realism] core blocks glow faintly warm at far LOD too
+    + lamp * clamp((11.0 - dArt) / px + 0.5, 0.0, 1.0) * clamp(20.0 / px, 0.0, 1.0) * 0.4; // [City realism] arterials burn brighter than side streets at night, so the night grid gains hierarchy
   if (k >= 1.0) { hoodGlow = farGlow; return vec4(far, 1.0); }
   vec3 c = lawnB; vec3 glow = vec3(0.0);
   if (de < 0.0) { c = asph; float ax = min(abs(f.x), abs(${B.toFixed(1)} - f.x)), ay = min(abs(f.y), abs(${B.toFixed(1)} - f.y));

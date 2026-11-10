@@ -5,7 +5,8 @@ import * as THREE from 'three';
 import { ATM, ATM_GLSL, NOISE_GLSL, atmos } from './sky.js';
 import { REGIONS, climateFor } from './surroundings.js';
 import { Geo, haversine, D2R } from './data.js';
-import { HOOD, HOOD_GLSL, hoodUniformDefs, blockInfo, genTall, lists as hoodLists, toGrid, tallKits, B as HB } from './wld-hood.js';
+import { HOOD, HOOD_GLSL, hoodUniformDefs, blockInfo, genTall, genSkyline, lists as hoodLists, toGrid, tallKits, B as HB } from './wld-hood.js';
+import { skylineStyle } from './wld-cities.js';
 
 export const HILL_SCALE = 4000, MOUNT = 5000, NAPT = 8; // hand-made region hills (masks) / planet mountain belts (ridged noise × amplitude)
 const NEAR_SIZE = 48000, WIDE_SIZE = 440000;
@@ -256,6 +257,7 @@ void main(){
     float st = street * mix(1.0, 0.25, smoothstep(0.1, 0.4, px));
     lit += (lc * lightsF * 3.0 + vec3(1.0, 0.55, 0.22) * st * 0.35 * urb) * uNight;
   }
+  lit += hoodRoadGlow * uNight * vFlatO * 1.4; // [City realism] lit-highway spill along the road corridors (set in hoodGround, not urban-gated) — placed after the if/else above, never between an if and its else
   lit = atmApply(lit, rel);
   gl_FragColor = vec4(lit, 1.0);
   #include <logdepthbuf_fragment>
@@ -367,7 +369,7 @@ export class City {
   *_gen(terrain, geo, cx, cz, airportsLocal) {
     const q = this.quality; this.at = { x: cx, z: cz }; const max = { low: 0, medium: 2500, high: 6000, ultra: 11000 }[q] ?? 4000; if (!max) return;
     const near = terrain.masks.near; if (!near) return;
-    const cities = near.cities.map(c => ({ x: geo.x(c.lon), z: geo.z(c.lat), r: c.r * 1000, h: c.h, d: c.d }));
+    const cities = near.cities.map(c => ({ x: geo.x(c.lon), z: geo.z(c.lat), r: c.r * 1000, h: c.h, d: c.d, ref: c }));
     const R = rng(1234), out = [];
     const range = q === 'ultra' ? 17000 : 13000, step0 = 85;
     // [env] keep city blocks off EVERY built airport: runway strip + safety area (150 m each side, 300 m past the ends)
@@ -379,7 +381,16 @@ export class City {
     this.blocked = (x, z) => airportsLocal.some(a => Math.hypot(x - a.x, z - a.z) < a.r + 500) || !kept(x, z) || (this.extraBlocked ? this.extraBlocked(x, z) : false); // + road corridors (wld-roads.js)
     if (HOOD.on) { // block-based far ring (wld-hood.js): apartment rows, mid-rise blocks and towers with setbacks on the street grid; houses come from the near tiles
       const L = hoodLists(), ctx = { heightAt: (x, z) => terrain.heightAt(x, z), blocked: this.blocked }, [gu, gv] = toGrid(cx, cz), n = Math.ceil(range / HB);
-      for (let bj = Math.floor(gv / HB) - n; bj <= Math.floor(gv / HB) + n; bj++) { yield; for (let bi = Math.floor(gu / HB) - n; bi <= Math.floor(gu / HB) + n; bi++) { const info = blockInfo(bi, bj); if (info.cls >= 3 && Math.hypot(info.x - cx, info.z - cz) < range) genTall(bi, bj, info, ctx, L); } }
+      // [City realism] skyline cores: qualifying downtown blobs (wld-cities.js) get dense tinted
+      // massing out to 48 km — far beyond the block ring — and replace the block towers inside
+      // their discs, so a downtown reads as a skyline from approach and cruise, not a painted smear.
+      const discs = [];
+      for (const c of cities) { const st = skylineStyle(c.ref); if (!st) continue; const d = Math.hypot(c.x - cx, c.z - cz); if (d > 48000) continue; discs.push({ x: c.x, z: c.z, rB: c.r, rD: Math.min(c.r * 0.62, 5200), h: c.h, st, d }); }
+      discs.sort((a, b) => a.d - b.d);
+      const inDisc = (x, z) => discs.some(D => { const dx = x - D.x, dz = z - D.z; return dx * dx + dz * dz < D.rD * D.rD * 0.85; });
+      for (let bj = Math.floor(gv / HB) - n; bj <= Math.floor(gv / HB) + n; bj++) { yield; for (let bi = Math.floor(gu / HB) - n; bi <= Math.floor(gu / HB) + n; bi++) { const info = blockInfo(bi, bj); if (info.cls >= 3 && Math.hypot(info.x - cx, info.z - cz) < range && !inDisc(info.x, info.z)) genTall(bi, bj, info, ctx, L); } }
+      if (discs.length) { const seen = new Set(); let budget = 2600; // nearest cores first; the cap keeps a multi-core world (Tokyo) inside the perf envelope
+        for (const D of discs) { yield; if (budget <= 0) break; budget -= genSkyline({ x: D.x, z: D.z, r: D.rB, h: D.h }, D.st, ctx, L, seen); } this.skyline = discs.length; }
       this.clear(); this.count = 0; const K = tallKits(); for (const [name, geo, mat] of K) { const l = L[name]; if (!l.n) continue; const im = new THREE.InstancedMesh(geo, mat, l.n); im.instanceMatrix.array.set(l.m.subarray(0, l.n * 16)); im.instanceColor = new THREE.InstancedBufferAttribute(l.c.slice(0, l.n * 3), 3);
         if (name === 'body') { geo.setAttribute('aStyle', new THREE.InstancedBufferAttribute(l.s.slice(0, l.n), 1)); this.count = l.n; } im.frustumCulled = false; this.group.add(im); }
       this._landmarks(terrain, geo, cx, cz); return; }
