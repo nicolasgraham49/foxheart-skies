@@ -338,7 +338,7 @@ export function frame(dt, env) {
   // crew clears the stand ('off') — it re-arms when a fresh stand begins
   // (parked straight out of 'off'); reset() clears it per flight anyway.
   if (gs === 'off') S.pushClock = 0;
-  else {
+  else if (!env.hold) { // [Nothing starts until sign-in] env.hold: the interphone stays silent until the captain signs in — Ray does not call a captain who is not there yet. The beats are level-based with catch-up, so the current state's calls fire on release and none are lost or consumed early. (On-foot crew talk below is NOT held: he may chat on the apron whenever he gets there.)
     if (gs === 'parked' && S.prevState === 'off') { S.beats = {}; S.pushClock = 0; }
     if (gs === 'prep' && !S.beats.connect) showBeat('connect');
     if (gs === 'pushing') {

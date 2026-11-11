@@ -370,7 +370,8 @@ async function startFlight(cfg) {
   if (cfg.start !== 'route') { W.route = null; }
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
-  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); Stories.reset(); // [Stories era] a new flight starts with no story armed
+  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); W.signedIn = cfg.start !== 'terminal'; // [Nothing starts until sign-in] only a terminal (on-foot) departure waits for its captain — every other start is live from the first frame, as before
+  Stories.reset(); // [Stories era] a new flight starts with no story armed
   CrewTalk.reset(); // [Crew conversations] and no crew conversation or interphone state carried over
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
@@ -391,6 +392,7 @@ async function startFlight(cfg) {
     W.dest = cfg.toApt || (cfg.dest && World.byIcao.get(cfg.dest)) || (any ? A : null) || World.byIcao.get(DEST_DEFAULT[A.icao]) || nearestAirports(A.lat, A.lon, 900000, 6).find(x => x !== A && x.large) || A;
     atc.auto = settings.atcAuto || false;
     atc.setup({ start: any ? 'route' : cfg.start, dep: A, arr: cfg.start === 'final' ? A : W.dest, depEnd: E, gate: String(W.stand?.gateName || 7), ctx: atcCtx });
+    atc.setHold(cfg.start === 'terminal'); // [Nothing starts until sign-in] the frequency stays silent until the captain signs in (captainSignedIn releases it)
     renderRadio();
     setView(cfg.view || (cfg.start === 'final' ? 'cockpit' : 'chase'));
     showNote(A);
@@ -482,6 +484,7 @@ function enterFoot(mode) {
   $('#flight').hidden = true; $('#foot').hidden = false; $('#radio').hidden = true; setView('cockpit');
   if (mode === 'dep') Stories.arm(foot); // [Stories era] one of the 121 waiting in the lounge has a story today
   foot.onEvent = ev => {
+    if (ev === 'checkedin') captainSignedIn(); // [Nothing starts until sign-in] the crew sign-in is the flight's true start
     if (ev === 'boarding') { if (!beginBoarding()) toast('Boarding has started. Passengers are taking their seats.', 4000); }
     if (ev === 'greet') { toast('Cabin crew: “Welcome aboard Nicofoxheart Air, captain!”', 4000); }
     if (ev === 'boarded') { audio.chime(); toast('Boarding complete', 3000); if (!foot.announced) { foot.announced = true; setTimeout(() => announce(), 1200); } }
@@ -531,6 +534,32 @@ function svcPaStep() {
   if (kind && kind !== W._svcSeen) { if (kind === 'meal') paSay('svc_meal'); else if (kind === 'drinks') paSay('svc_drinks'); else if (kind === 'collect') paSay('svc_collect'); }
   W._svcSeen = kind;
 }
+// ---------------------------------------------------------------- nothing starts until sign-in.
+// Owner report (11 Nov): starting IN THE TERMINAL, the flight was already alive before he had done
+// anything — boarding began by itself ~15 s in and the gate PA spoke in the hall, and with ATC auto
+// on, the clearance was auto-requested and read out while he was still walking. A terminal departure
+// now waits for its captain: until the crew sign-in (captainSignedIn, below) the boarding clock does
+// not run and beginBoarding refuses every caller, ATC is held (atc.setHold — no auto-choices, no
+// proactive calls to his flight, no chatter; he is on foot with no radio) and the ground interphone
+// beats wait (CrewTalk env.hold). Silent GSE prep keeps running — airlines prep the aircraft before
+// the crew arrives — and the crewtalk stand status reads those live vehicle states, so it stays
+// truthful. Gate / runway / final / route starts have no sign-in and are untouched.
+function captainSignedIn() { if (W.signedIn) return; W.signedIn = true; atc.setHold(false); }
+// Past security is crew-only ground: the arch cannot be crossed without the sign-in (the terminal
+// flow gates it) and the bridge / cabin / apron zones lie beyond it, so finding the captain airside
+// on a departure means the sign-in happened — count it. This covers the paths that place him past
+// the counter without running the counter interaction itself (the J skip releases explicitly in
+// footSkip; this is the safety net for placement paths) and it cannot fire landside. The zone test
+// WHITELISTS the aircraft-side tags: landside floor rects can be untagged (''), so "not hall" must
+// never read as airside — inside the hall, only the geometry test (past the security wall line)
+// decides.
+const AIRSIDE_TAGS = new Set(['bridge', 'gatedoor', 'entry', 'door', 'aisle', 'apron']);
+function captainAirside() {
+  if (!W.onFoot || W.footMode !== 'dep' || !foot.parts) return false;
+  if (AIRSIDE_TAGS.has(foot.zoneTag())) return true; // at the aircraft — past security by construction
+  const t = foot.parts.term; if (!t || !t.flow || !t.flow.sec) return false;
+  return t.group.worldToLocal(foot.pos.clone()).z < t.flow.sec.wallOut - 0.5;
+}
 // ---------------------------------------------------------------- real boarding: the gate session.
 // At a gate departure the cabin starts EMPTY and the load waits in the lounge. Boarding is part of the
 // turnaround: with automatic ground services it begins on its own (~15 s in, once the first services are
@@ -540,6 +569,7 @@ function svcPaStep() {
 // door on the same group calls. Completion hands back to the normal departure flow (announce + pushback).
 function beginBoarding() {
   const S = W.boarding; if (!S || S.phase !== 'pending') return false;
+  if (!W.signedIn) return false; // [Nothing starts until sign-in] every caller — the auto clock, the bridge crossing, the next step — waits for the captain
   const c = ensureCabin(); if (!c) return false;
   S.phase = 'boarding'; S.group = 0; S.callT = 0;
   c.beginBoarding(); if (foot.parts && foot.parts.cabin === c) foot.boarding = true;
@@ -557,7 +587,8 @@ function callBoardingGroup(g) {
 }
 function boardingStep(dt) { // dt is sim seconds; called from cabinStep every frame
   const S = W.boarding; if (!S || W.menuMode || !W.started) return;
-  if (S.phase === 'pending') { if (crew.autoServices) { S.t += dt; if (S.t > 15) beginBoarding(); } return; }
+  if (!W.signedIn && captainAirside()) captainSignedIn(); // [Nothing starts until sign-in] airside ⇒ signed in (see captainAirside)
+  if (S.phase === 'pending') { if (crew.autoServices && W.signedIn) { S.t += dt; if (S.t > 15) beginBoarding(); } return; }
   if (S.phase !== 'boarding') return;
   const c = cabinObj(); if (!c) return;
   const info = c.boardingInfo();
@@ -575,6 +606,7 @@ function finishBoardingNow() { // the game's skip-ahead idiom: wrap boarding up 
   S.phase = 'done'; toast('Boarding complete — everyone is aboard.', 3500);
 }
 function takeSeat() {
+  captainSignedIn(); // [Nothing starts until sign-in] taking the seat is taking command — the gate releases here, so no path can strand the flight
   const BS = W.boarding;
   if (BS && BS.phase === 'boarding') { foot.parts?.cabin.setFeeder?.('door'); } // boarding continues behind the captain — the lounge hands over to the door clock
   else { if (!foot.boardingDone) { audio.chime(); foot.boardingDone = true; foot.parts?.cabin.seatAll(); } if (BS && BS.phase === 'pending') BS.phase = 'done'; }
@@ -1483,7 +1515,7 @@ function renderRest(dt, night) {
   audio.update({ fdm, apuN: sys.apuN, paused: W.paused || W.menuMode, ground: fdm.onGround, camDist: camera.position.distanceTo(aircraft.position), rain: W.wx === 'rain', nearAirport: true, groundH: gh, flapTarget: FLAPS[fdm.flapIdx].flap }, dt, W.view);
   music.update(dt, musicWant()); musicNowUI(); if (svcPanel.open) svcPanel.update(dt);
   Stories.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Stories era] marker bob + the one cruise beat
-  CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats
+  CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot, hold: !W.signedIn }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats; [Nothing starts until sign-in] hold: the interphone beats wait for the captain (on-foot crew talk is not held)
   if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
   if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
 }
@@ -1612,7 +1644,8 @@ function footInteract() {
   else if (W.footMode === 'arr' && foot.pos.distanceTo(foot.exitPos) < 6.5) finishTrip();
 }
 function footSkip() {
-  if (W.footMode === 'dep') { foot.pos.copy(foot.routeToCockpit[foot.routeToCockpit.length - 1]); foot.floorY = foot.pos.y; foot.boarding = true; beginBoarding(); }
+  // [Nothing starts until sign-in] the J crew path is exempt from the terminal flow by design — skipping ahead IS taking command, so it releases the gate before boarding is called.
+  if (W.footMode === 'dep') { foot.pos.copy(foot.routeToCockpit[foot.routeToCockpit.length - 1]); foot.floorY = foot.pos.y; foot.boarding = true; captainSignedIn(); beginBoarding(); }
   else { foot.pos.copy(foot.exitPos).add(V3(0, 0, 0)); foot.floorY = foot.pos.y; foot.pos.addScaledVector(foot.parts.n, 3); }
 }
 function updateParkPrompt() {

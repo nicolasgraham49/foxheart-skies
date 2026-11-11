@@ -160,7 +160,7 @@ export class ATC {
   constructor(audio) {
     this.audio = audio; this.log = []; this.queue = []; this.auto = false; this.speakMe = true; this.voices = [];
     this.cs = 'Foxheart 412'; this.csS = 'Foxheart four one two'; this.phase = 'idle'; this.listeners = []; this.errors = []; this.tuned = null; this.t = 0;
-    this.autoT = 0; this.atisOn = false; this.voicePref = {}; this.chatterOn = true; this.tx = null; this.gapT = 0; this.flags = {}; this.heard = {}; this.atisSt = {}; this.contacted = new Set();
+    this.hold = false; this.autoT = 0; this.atisOn = false; this.voicePref = {}; this.chatterOn = true; this.tx = null; this.gapT = 0; this.flags = {}; this.heard = {}; this.atisSt = {}; this.contacted = new Set();
     this.onNote = null; this.fast = false; // fast: pace transmissions on sim time only (headless tests)
     try { const load = () => { this.rankVoices(); this.listeners.forEach(f => { try { f(this, 'voices'); } catch (e) { } }); }; this.rankVoices(); speechSynthesis.addEventListener ? speechSynthesis.addEventListener('voiceschanged', load) : (speechSynthesis.onvoiceschanged = load); } catch (e) { }
   }
@@ -170,7 +170,7 @@ export class ATC {
   // ---------------------------------------------------------------- setup per flight
   setup(o) {
     this.o = o; this.dep = o.dep; this.arr = o.arr || o.dep; this.stopAtis(); this.log = []; this.queue = []; this.tx = null; this.gapT = 0;
-    this.rb = null; this.ho = null; this.alt = null; this.hdgA = null; this.spdA = null; this.flags = {}; this.heard = {}; this.contacted = new Set(); this.personas = {}; this.lastInstr = null; this.taxiRoute = null; this.exitName = null; this.minAgl = 1e9; this.chatT = 14; this.chatLog = []; this.phT = 0; this.divertApt = null; this.divertedFrom = null;
+    this.hold = false; this.rb = null; this.ho = null; this.alt = null; this.hdgA = null; this.spdA = null; this.flags = {}; this.heard = {}; this.contacted = new Set(); this.personas = {}; this.lastInstr = null; this.taxiRoute = null; this.exitName = null; this.minAgl = 1e9; this.chatT = 14; this.chatLog = []; this.phT = 0; this.divertApt = null; this.divertedFrom = null;
     let sq; do { sq = String(2 + (Math.random() * 5 | 0)) + [0, 0, 0].map(() => Math.random() * 8 | 0).join(''); } while (/^(2000|7000|1200)$/.test(sq)); this.squawk = sq;
     const dep = this.dep, arr = this.arr, d = gcNm(dep.lat, dep.lon, arr.lat, arr.lon), crs = gcBrg(dep.lat, dep.lon, arr.lat, arr.lon);
     let cr = Math.max(8000, Math.min(37000, Math.round(d * 1.4 / 10) * 1000)); if (((cr / 1000) % 2 === 1) !== (crs < 180)) cr += cr >= 37000 ? -1000 : 1000; // semicircular rule: eastbound odd, westbound even
@@ -186,6 +186,11 @@ export class ATC {
   apt() { return DEP_PH.has(this.phase) ? this.dep : this.arr; }
   fac(kind, apt) { return facility(apt || (kind === 'DEP' ? this.dep : kind === 'APP' ? this.arr : kind === 'CTR' ? (this.ctrApt || this.dep) : this.apt()), kind); }
   tune(kind, silent) { this.tuned = this.fac(kind); if (kind !== 'ATIS') this.stopAtis(); if (kind === 'ATIS' && !silent) this.startAtis(); this.emit(); }
+  // [Nothing starts until sign-in] while held (a terminal departure whose captain has not signed in
+  // yet) the frequency stays silent: update() makes no auto-choice, issues no proactive call to his
+  // flight and runs no chatter — he is on foot in the terminal with no radio. pumpTx still drains,
+  // so a transmission already in progress when the hold lands finishes instead of freezing.
+  setHold(b) { this.hold = !!b; if (b) this.autoT = 0; }
   setPhase(p) { if (this.phase !== p) { this.phase = p; this.phT = this.t; this.emit(); } }
   ctxS() { return this.o.ctx.state(); }
   easy() { const c = this.o?.ctx; return !!(c && c.assist && c.assist() === 'easy'); }
@@ -500,9 +505,9 @@ export class ATC {
   }
   update(dt) {
     this.t += dt; if (!this.o) return;
-    try { this.pumpTx(dt); this.fT = (this.fT || 0) + dt; if (this.fT >= 0.25) { const d = this.fT; this.fT = 0; this.follow(d); this.chatter(d); this.assistStep(); } } // the controller looks at the scope 4x a second
+    try { this.pumpTx(dt); if (!this.hold) { this.fT = (this.fT || 0) + dt; if (this.fT >= 0.25) { const d = this.fT; this.fT = 0; this.follow(d); this.chatter(d); this.assistStep(); } } } // the controller looks at the scope 4x a second (never while held — see setHold)
     catch (e) { if (this.errors.length < 20) this.errors.push(String(e && e.stack || e)); }
-    if (this.auto && !this.queue.length && !this.tx) { this.autoT += dt; if (this.autoT > 2.5) { this.autoT = 0; const o = this.options().find(o => o.auto); if (o) this.choose(o.id); } } else this.autoT = 0;
+    if (!this.hold && this.auto && !this.queue.length && !this.tx) { this.autoT += dt; if (this.autoT > 2.5) { this.autoT = 0; const o = this.options().find(o => o.auto); if (o) this.choose(o.id); } } else this.autoT = 0;
   }
   // Easy assist: the first officer reads back and checks in if you have not after a while
   assistStep() {
