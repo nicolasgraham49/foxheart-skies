@@ -4,6 +4,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { World, loadWorld, Geo, airportGeometry, search, nearestAirports, haversine, sunPosition, sunTimes, tzFor, fmtTime, ilsFreq, FT, KT, NM, D2R, R2D } from './data.js';
 import { Sky, ATM } from './sky.js';
 import { Terrain, City, genericSurroundings } from './terrain.js';
@@ -57,18 +59,30 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.15, 420000);
 let composer, bloom, renderPass, renderScale = 1, dprBase = Math.min(devicePixelRatio || 1, 1.5);
 // [Black screen fix] High/Ultra pitch-black on the owner's real GPU (Nov 7 + Nov 9 reports;
-// Medium fine): the tier name does not guarantee the post chain runs. The one render path
-// that exists ONLY on high/ultra is the composer's multisampled target — WebGLRenderTarget
-// { HalfFloatType, samples: 4 } on a logarithmicDepthBuffer renderer. On some ANGLE/D3D
-// drivers a multisampled half-float target is not renderable (incomplete framebuffer /
-// failed resolve): every pass then composites black while the DOM/HUD stays alive —
-// exactly the owner's screenshot. SwiftShader renders it fine, so the rig never sees it.
-// Fix shape: the composer PROBES ITSELF once at boot with a known-bright scene; on failure
-// it rebuilds with samples: 0; if even that fails, the frame loop renders directly (no
-// composer) rather than showing black. The verdict is published via gfx.js so the people
-// alpha-to-coverage cut follows the ACTUAL state. Where the probe passes, nothing changes:
-// MSAA 4, bloom, shadows and the shipped look are exactly as before.
+// Medium fine). Attempt 1 (9 Nov) made the composer self-healing: a boot probe rendered a
+// known-bright scene (white background + a MeshBasicMaterial white plane) through the real
+// composer and, on failure, rebuilt without MSAA, else fell back to direct rendering.
+// ATTEMPT 2 (11 Nov): attempt 1 did NOT fix the owner's machine. His __sim.gfx() read
+// { composerOk: true, samples: 4, msaa: true, probe: [{ ok: true, mx: 226, mean: 226 }] } —
+// the probe PASSED on his real GPU while the real scene still composited black everywhere
+// on High/Ultra (Medium, samples: 0, stayed fine; Ctrl+F5 confirmed). The toy probe scene
+// cannot see the real scene's failure factors — the full material set, logarithmic depth at
+// real depth ranges, shadows, and the multisampled half-float resolve under load on
+// ANGLE/D3D. DETECTION CANNOT BE TRUSTED HERE, so attempt 2 removes the dangerous path
+// instead: the composer target is built with samples: 0 on EVERY tier — the exact
+// configuration Medium already proves on the owner's machine. HalfFloat stays (bloom
+// quality unchanged); shadow sizes, bloom, draw distances and all other tier differences
+// are untouched. Edge quality on high/ultra comes from an FXAA pass instead of MSAA: FXAA
+// is an LDR algorithm (its luminance weights assume display-referred values), so per the
+// three r160 guidance it sits AFTER OutputPass (tone mapping + sRGB) as the last pass,
+// sampling the tone-mapped buffer; its resolution uniform is maintained in applyRes.
+// Medium/low keep today's chain exactly (no FXAA there). The attempt-1 probe + direct-
+// render net remain as a second line of defence: they now guard the samples:0 chain —
+// if even that probe fails, the frame loop renders directly rather than showing black.
+// The verdict is published via gfx.js: setMsaaActive reports false on every tier now, so
+// the people alpha-to-coverage cut follows to the plain 0.5 alpha test (Medium behaviour).
 let composerOk = true, composerSamples = 0; const probeLog = [];
+let fxaaPass = null;
 function buildComposer(samples) {
   if (composer) { try { composer.renderTarget1.dispose(); composer.renderTarget2.dispose(); } catch (e) { } }
   const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples });
@@ -76,6 +90,11 @@ function buildComposer(samples) {
   renderPass = new RenderPass(scene, camera); composer.addPass(renderPass);
   bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.32, 0.55, 1.0); bloom.enabled = settings.quality !== 'low';
   composer.addPass(bloom); composer.addPass(new OutputPass());
+  fxaaPass = null;
+  if (settings.quality === 'high' || settings.quality === 'ultra') { // [Black screen fix — attempt 2] FXAA replaces the removed MSAA on high/ultra only
+    fxaaPass = new ShaderPass(FXAAShader);
+    composer.addPass(fxaaPass);
+  }
   composerSamples = samples;
   applyRes();
 }
@@ -99,19 +118,22 @@ function probeComposer(attempt) { // one frame of a known-bright scene through t
   } catch (e) { return { ok: false, mx: 0, mean: 0, err: String((e && e.message) || e) }; }
 }
 function setupComposer() {
-  const want = settings.quality === 'high' || settings.quality === 'ultra' ? 4 : 0;
+  // [Black screen fix — attempt 2] samples: 0 on EVERY tier by design (see the block
+  // above): the multisampled target is gone, not detected-and-avoided. The probe remains
+  // as the second net — if even the samples:0 chain reads black at boot, composerOk goes
+  // false and the frame loop renders direct rather than showing a black canvas.
+  const want = 0;
   buildComposer(want);
-  let p = probeComposer(0); probeLog.push({ samples: want, ...p });
-  if (!p.ok && want > 0) { buildComposer(0); p = probeComposer(1); probeLog.push({ samples: 0, ...p }); }
+  const p = probeComposer(0); probeLog.push({ samples: want, ...p });
   composerOk = p.ok; GFX.composer = composerOk;
-  setMsaaActive(composerOk && composerSamples > 0); // gfx.js verdict — people uACut follows reality, not the tier name
-  if (!composerOk) console.warn('[gfx] composer probe failed at every level — rendering direct (no post) rather than black. probe:', JSON.stringify(probeLog));
-  else if (composerSamples !== want) console.warn('[gfx] MSAA composer probe failed — rebuilt without MSAA; post chain live. probe:', JSON.stringify(probeLog));
+  setMsaaActive(composerOk && composerSamples > 0); // always false now (samples 0) — people uACut follows to the 0.5 alpha test
+  if (!composerOk) console.warn('[gfx] composer probe failed — rendering direct (no post) rather than black. probe:', JSON.stringify(probeLog));
 }
 function targetScale() { const r = settings.res; return r === 'auto' ? renderScale : +r * (settings.quality === 'low' ? 0.75 : 1); }
 function applyRes() {
   const pr = dprBase * (settings.res === 'auto' ? renderScale : targetScale());
   renderer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight, false); composer.setPixelRatio(pr); composer.setSize(innerWidth, innerHeight);
+  if (fxaaPass) fxaaPass.uniforms.resolution.value.set(1 / (innerWidth * pr), 1 / (innerHeight * pr)); // [Black screen fix — attempt 2] FXAA texel size tracks the composer buffer
   LIGHT_U.uPx.value = pr; const hc = $('#hudc'); hc.width = innerWidth * Math.min(devicePixelRatio, 2); hc.height = innerHeight * Math.min(devicePixelRatio, 2);
 }
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); applyRes(); });
@@ -2046,7 +2068,7 @@ window.__sim = {
     fdm.engRun = [true, true]; W.push = null; W.autoTaxi = null; if (o.ap !== false) { fdm.ap.on = true; fdm.ap.athr = true; fdm.ap.lat = 'HDG'; fdm.ap.vert = 'ALT'; fdm.ap.hdg = Math.round(hdg); fdm.ap.spd = o.kt ?? 200; } return this.state(); },
   place(o) { if (o.x != null) fdm.pos.x = o.x; if (o.z != null) fdm.pos.z = o.z; if (o.hdg != null) fdm.q.setFromEuler(new THREE.Euler(0, -o.hdg * D2R, 0, 'YXZ')); if (o.v != null) { const h = (o.hdg ?? fdm.euler().hdg) * D2R; fdm.vel.set(Math.sin(h) * o.v, 0, -Math.cos(h) * o.v); } return this.state(); },
   pixel(fx = 0.5, fy = 0.5) { renderFrame(0.016); const gl = renderer.getContext(), c = renderer.domElement, px = new Uint8Array(4); gl.readPixels(Math.floor(c.width * fx), Math.floor(c.height * (1 - fy)), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); return [...px]; },
-  gfx() { const inst = PeopleHD.instances || []; return { composerOk, samples: composerSamples, msaa: GFX.msaa, probe: probeLog, peopleACut: inst.map(i => i.U.uACut.value) }; }, // [Black screen fix] boot probe verdict + live people alpha cuts
+  gfx() { const inst = PeopleHD.instances || []; return { composerOk, samples: composerSamples, msaa: GFX.msaa, fxaa: !!(fxaaPass && fxaaPass.enabled), probe: probeLog, peopleACut: inst.map(i => i.U.uACut.value) }; }, // [Black screen fix] boot probe verdict + live people alpha cuts; attempt 2 adds the FXAA flag (samples reads 0 on high/ultra now — that is how the owner confirms the new build is running)
   camInfo() { const d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion); return { p: camera.position.toArray().map(v => +v.toFixed(1)), d: d.toArray().map(v => +v.toFixed(2)), near: camera.near, far: camera.far, fov: camera.fov, exp: +sky.exposure.toFixed(2), vis: { term: foot.parts?.term.group.visible, cabin: foot.parts?.cabin.group.visible } }; },
   parkNear() { const st = nearestFreeStand(1e6); if (!st) return null; fdm.vel.set(0, 0, 0); parkAtGate(st); return st.gateName; }, enterArrival() { parkPromptAction(); return this.footState(); }, nextStep() { const s = nextStep(); return s && s.label; },
   deckLook(y, p, fov) { look.yaw = y; look.pitch = p; if (fov) look.fov = fov; look.target = null; }, deckLights(o) { Object.assign(sys.sw, o); },
