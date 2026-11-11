@@ -345,16 +345,26 @@ async function startFlight(cfg) {
   W.end = E; W.apt = A; W.ils = ilsFor(A, E, P); W.depIls = W.ils;
   fdm.law = settings.law;
   const sp = fdm.speeds();
-  if (cfg.start === 'final' || cfg.start === 'route' || any) {
-    let pos, hdg, alt, spd = cfg.start === 'final' ? 160 : any ? (cfg.kt || 280) : (cfg.route?.spd || 250);
+  if (cfg.start === 'final' || cfg.start === 'route' || any || cfg.start === 'air') {
+    let pos, hdg, alt, spd = cfg.start === 'final' ? 160 : any ? (cfg.kt || 280) : cfg.start === 'air' ? 280 : (cfg.route?.spd || 250);
     if (cfg.start === 'final') { const d = (cfg.finalNm || 10) * NM; pos = W.ils.thr.clone().addScaledVector(dir, -d); alt = elev + 15 + (d + 286) * Math.tan(3 * D2R); hdg = E.hdg; }
     else if (any) { pos = new THREE.Vector3(W.geo.x(cfg.lon), 0, W.geo.z(cfg.lat)); hdg = cfg.hdg ?? 90; alt = Math.max((cfg.altFt ?? 15000) * FT, ground(pos.x, pos.z).h + 2000 * FT); }
+    else if (cfg.start === 'air') { // [Free Flight: sandbox + living world] airborne spawn at the chosen airport: 30 nm out on the
+      // departure centreline at cruise altitude, AP holding a heading for the destination — the Free Flight
+      // mode's own spawn-anywhere (the global Part B FLY_ANYWHERE switch stays OFF; this is just a start kind).
+      const d = 30 * NM; pos = W.ils.thr.clone().addScaledVector(dir, -d);
+      const D = cfg.toApt || (cfg.dest && World.byIcao.get(cfg.dest)) || autoDest(A); const T = (D && D !== A) ? D : A;
+      const ll = W.geo.toLatLon(pos.x, pos.z), dLon = (T.lon - ll.lon) * D2R;
+      hdg = (Math.atan2(Math.sin(dLon) * Math.cos(T.lat * D2R), Math.cos(ll.lat * D2R) * Math.sin(T.lat * D2R) - Math.sin(ll.lat * D2R) * Math.cos(T.lat * D2R) * Math.cos(dLon)) * R2D + 360) % 360;
+      alt = Math.max(elev + 24000 * FT, ground(pos.x, pos.z).h + 2000 * FT);
+    }
     else { const r = cfg.route; const s = r.start; pos = new THREE.Vector3(W.geo.x(s.lon), 0, W.geo.z(s.lat)); alt = s.alt * FT; hdg = s.hdg; }
     const V = spd * KT; const flaps = cfg.start === 'final' ? 2 : 0;
     fdm.reset({ x: pos.x, y: alt, z: pos.z, hdg, speed: V, vs: cfg.start === 'final' ? -V * Math.tan(3 * D2R) : 0, pitch: cfg.start === 'final' ? 1 : 2.5, gear: false, flaps, tl: cfg.start === 'final' ? 0.42 : 0.62, n1: cfg.start === 'final' ? 52 : 68, onGround: false, spdSel: spd, altSel: Math.round(alt / FT / 100) * 100 });
     fdm.qInt = 0.075; fdm.ap.on = true; fdm.ap.athr = true; fdm.ap.hdg = Math.round(hdg); fdm.ap.alt = Math.round(alt / FT / 100) * 100;
     if (cfg.start === 'final') { fdm.ap.ils = W.ils; fdm.ap.locArmed = true; fdm.ap.gsArmed = true; fdm.ap.lat = 'HDG'; fdm.ap.vert = 'ALT'; fdm.ap.alt = Math.max(2000, Math.round((elev / FT + 2000) / 100) * 100); fdm.ap.appr = true; }
     else if (any) { fdm.ap.lat = 'HDG'; fdm.ap.vert = 'ALT'; fdm.ap.alt = Math.round(alt / FT / 100) * 100; W.route = fdm.ap.route = null; }
+    else if (cfg.start === 'air') { fdm.ap.lat = 'HDG'; fdm.ap.vert = 'ALT'; fdm.ap.alt = Math.round(alt / FT / 100) * 100; }
     else { fdm.ap.route = W.route = cfg.route.wps.map(([lat, lon, name]) => ({ lat, lon, name, x: W.geo.x(lon), z: W.geo.z(lat) })); fdm.ap.wp = 0; fdm.ap.lat = 'NAV'; fdm.ap.vert = 'ALT'; fdm.ap.alt = cfg.route.alt; }
     W.phase = 'approach';
   } else if ((cfg.start === 'gate' || cfg.start === 'terminal') && W.primary.b.stands.length) {
@@ -368,7 +378,7 @@ async function startFlight(cfg) {
     W.phase = 'takeoff';
   }
   if (cfg.start !== 'route') { W.route = null; }
-  fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any; W.dct = null;
+  fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any || cfg.start === 'air'; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
   W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); W.signedIn = cfg.start !== 'terminal'; // [Nothing starts until sign-in] only a terminal (on-foot) departure waits for its captain — every other start is live from the first frame, as before
   Stories.reset(); // [Stories era] a new flight starts with no story armed
@@ -391,13 +401,13 @@ async function startFlight(cfg) {
   if (!cfg.menu) {
     W.dest = cfg.toApt || (cfg.dest && World.byIcao.get(cfg.dest)) || (any ? A : null) || World.byIcao.get(DEST_DEFAULT[A.icao]) || nearestAirports(A.lat, A.lon, 900000, 6).find(x => x !== A && x.large) || A;
     atc.auto = settings.atcAuto || false;
-    atc.setup({ start: any ? 'route' : cfg.start, dep: A, arr: cfg.start === 'final' ? A : W.dest, depEnd: E, gate: String(W.stand?.gateName || 7), ctx: atcCtx });
+    atc.setup({ start: (any || cfg.start === 'air') ? 'route' : cfg.start, dep: A, arr: cfg.start === 'final' ? A : W.dest, depEnd: E, gate: String(W.stand?.gateName || 7), ctx: atcCtx }); // [Free Flight upgrade] an airborne spawn is enroute, like a route start
     atc.setHold(cfg.start === 'terminal'); // [Nothing starts until sign-in] the frequency stays silent until the captain signs in (captainSignedIn releases it)
     renderRadio();
     setView(cfg.view || (cfg.start === 'final' ? 'cockpit' : 'chase'));
     showNote(A);
     if (any) toast(`Free flight over ${fmtLL(cfg.lat, cfg.lon)}. Autopilot holds heading and altitude. Shift N: direct to ${W.dest.icao} (${Math.round(haversine(cfg.lat, cfg.lon, W.dest.lat, W.dest.lon) / NM)} nm) · . and , time acceleration.`, 8000); else
-    toast(cfg.start === 'runway' ? 'Parking brake set. Space releases it; Page Up / Shift adds thrust. T opens the radio.' : cfg.start === 'gate' ? 'At gate ' + W.stand.gateName + '. Press T for the radio: clearance, then pushback (or K to push without ATC).' : cfg.start === 'final' ? 'Autopilot flying the ILS. Press Z to take over, T for the radio.' : 'Autopilot on NAV. Use . and , for time acceleration. T opens the radio.', 6500);
+    toast(cfg.start === 'runway' ? 'Parking brake set. Space releases it; Page Up / Shift adds thrust. T opens the radio.' : cfg.start === 'gate' ? 'At gate ' + W.stand.gateName + '. Press T for the radio: clearance, then pushback (or K to push without ATC).' : cfg.start === 'final' ? 'Autopilot flying the ILS. Press Z to take over, T for the radio.' : cfg.start === 'air' ? 'Airborne near ' + A.icao + ' at ' + Math.round(fdm.pos.y / FT).toLocaleString() + ' ft, autopilot holding a heading for ' + (W.dest ? W.dest.icao : A.icao) + '. T opens the radio; Esc pauses for the Free Flight sandbox controls (time, weather, jump).' : 'Autopilot on NAV. Use . and , for time acceleration. T opens the radio.', 6500);
     // a departure at a gate starts with an EMPTY aircraft: the load waits in the lounge and boards in
     // groups as part of the turnaround (boardingStep conducts; see beginBoarding)
     if ((cfg.start === 'gate' || cfg.start === 'terminal') && !cfg.menu) W.boarding = { phase: 'pending', t: 0, group: 0, callT: 0, gate: String(W.stand?.gateName || 7) };
@@ -1767,7 +1777,14 @@ function bindFCU() {
     case 'hdgm': ap.lat = 'HDG'; ap.locArmed = false; break; case 'nav': if (W.route) { ap.lat = 'NAV'; } else toast('No route loaded'); break;
     case 'loc': if (!W.ils) armAppr(); ap.locArmed = true; break; case 'appr': armAppr(); break; } canvas.focus(); }));
 }
-function togglePause() { if (!W.started || W.menuMode) return; const p = $('#pause'); p.hidden = !p.hidden; W.paused = !p.hidden; }
+// [Free Flight: sandbox + living world] the pause menu carries the sandbox controls — instant time of
+// day, instant weather, and a jump to a fresh start of the same flight — in Free Flight ONLY. Other
+// modes never see the panel, and their pause menu is byte-for-byte as before. The controls call the
+// same setTimeOfDay/setWeather the setup panel uses, so nothing about the world model changes.
+function ffSync() { const ff = $('#ffPanel'); if (!ff) return; const show = W.mode === 'free' && !W.menuMode; ff.hidden = !show; if (!show) return;
+  const t = $('#ffTod'); if (t) { t.value = Math.round(W.tod / 5) * 5; $('#ffTodv').textContent = fmtTime(W.tod); }
+  $$('#ffWx button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === W.wx))); }
+function togglePause() { if (!W.started || W.menuMode) return; const p = $('#pause'); p.hidden = !p.hidden; W.paused = !p.hidden; if (!p.hidden) ffSync(); }
 function toMenu() { foot.dispose(); disposeFlightCabin(); if (paOpen) togglePA(false); svcPanel.toggle(false); W.onFoot = false; $('#foot').hidden = true; $('#radio').hidden = true; radioOpen = false; showTaxi(null); W.push = null; W.autoTaxi = null; crew.clear(); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { } $('#pause').hidden = true; W.paused = false; $('#flight').hidden = true; $('#menu').hidden = false; W.menuMode = true; startMenuScene(); }
 
 // ---- menu
@@ -1873,6 +1890,10 @@ function buildMenu() {
   const keysHtml = KEYS.map(([k, d]) => `<div><span>${d}</span><span>${k.split(' ').map(x => `<kbd>${x}</kbd>`).join(' ')}</span></div>`).join('');
   $('#keysA').innerHTML = keysHtml; $('#keysB').innerHTML = keysHtml;
   $('#resume').onclick = togglePause; $('#restart').onclick = () => { $('#pause').hidden = true; W.paused = false; startFlight(W.cfg); }; $('#toMenu').onclick = toMenu;
+  // [Free Flight upgrade] sandbox controls in the pause menu (panel itself is Free-Flight-only, see ffSync)
+  { const t = $('#ffTod'); if (t) t.oninput = () => { setTimeOfDay(+t.value); $('#ffTodv').textContent = fmtTime(+t.value); }; }
+  $$('#ffWx button').forEach(b => b.onclick = () => { setWeather(b.dataset.v, W.windFrom, W.windKt, W.gust > 0); $$('#ffWx button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); canvas.focus(); });
+  $$('#ffJump button').forEach(b => b.onclick = () => { $('#pause').hidden = true; W.paused = false; startFlight({ ...W.cfg, start: b.dataset.v, tod: W.tod, wx: W.wx, windFrom: W.windFrom, windKt: W.windKt }); });
   $('#pHelp').onclick = () => { $('#help').hidden = false; }; $('#helpClose').onclick = () => { $('#help').hidden = true; };
   $('#pSet').onclick = () => { $('#pause').hidden = true; W.paused = false; toMenu(); $('#nav button[data-sec=settings]').click(); };
   bindFCU();
@@ -1987,6 +2008,8 @@ window.__sim = {
   key(code, shift) { dispatchEvent(new KeyboardEvent('keydown', { code, key: code, shiftKey: !!shift })); dispatchEvent(new KeyboardEvent('keyup', { code, key: code })); },
   view(v) { setView(v); renderFrame(0.016); return W.view; },
   time(m) { setTimeOfDay(m); }, weather(k) { setWeather(k); },
+  ff() { const p = $('#ffPanel'); return { mode: W.mode, panel: !!p && !p.hidden, pauseOpen: !$('#pause').hidden, tod: W.tod, wx: W.wx, wet: W.wet.value, signedIn: W.signedIn, stand: W.stand ? W.stand.gateName : null }; }, // [Free Flight upgrade]
+  pauseToggle() { togglePause(); return !$('#pause').hidden; },
   render(n = 1) { for (let i = 0; i < n; i++) renderFrame(1 / 30); return true; },
   runwayCheck(icao, ident) { const A = World.byIcao.get(icao); const g = airportGeometry(A); const E = g.ends.find(e => e.ident === ident); return { csv: E.hdgCsv, geo: E.hdg, derived: E.derived, len: E.length / FT }; },
   menu() { toMenu(); }, pause(p) { W.paused = p; }, setRes(v) { settings.res = String(v); applyRes(); }, orbitSet(y, p, d) { orbit.yaw = y; orbit.pitch = p; orbit.dist = d; }, chaseSet(y, p, d) { chase.yaw = y; chase.pitch = p; chase.dist = d; chasePos = null; }, lookSet(y, p, f) { look.yaw = y; look.pitch = p; look.fov = f; },
