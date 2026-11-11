@@ -11,7 +11,27 @@ import { People } from './people.js';
 
 const EYE = 1.62, TAU = Math.PI * 2;
 // per walk-zone tag: [max boom (m), camera height cap above that floor (m), shoulder offset (m)]
-const ZCAM = { hall: [6, 3.35, 0.42], gatedoor: [2.0, 2.25, 0.24], bridge: [2.3, 2.1, 0.26], entry: [1.6, 1.84, 0.18], door: [1.3, 1.84, 0.12], aisle: [1.3, 1.82, 0.06] };
+const ZCAM = { hall: [6, 3.35, 0.42], gatedoor: [2.0, 2.25, 0.24], bridge: [2.3, 2.1, 0.26], entry: [1.6, 1.84, 0.18], door: [1.3, 1.84, 0.12], aisle: [1.3, 1.82, 0.06], apron: [5, 3.4, 0.35] };
+// [Crew conversations] the bridge rotunda's service stair down to the apron: treads on a
+// sloped stringer with handrails, built in a local frame (origin at the top, +z running
+// down-slope toward the apron). Pure dressing for the walk zone added in build().
+function buildApronStair(T, B, groundY) {
+  const g = new THREE.Group(); g.name = 'apron-stair';
+  const steel = new THREE.MeshStandardMaterial({ color: 0x8f979e, roughness: 0.55, metalness: 0.55 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x3c4249, roughness: 0.7, metalness: 0.35 });
+  const dir = B.clone().sub(T); dir.y = 0; const len = dir.length(); dir.normalize();
+  const drop = Math.max(0.5, T.y - groundY), steps = Math.max(6, Math.round(drop / 0.19));
+  g.position.copy(T); g.rotation.y = Math.atan2(dir.x, dir.z);
+  const add = (geo, mat, x, y, z, rx = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); if (rx) m.rotation.x = rx; m.castShadow = true; g.add(m); return m; };
+  add(new THREE.BoxGeometry(2.0, 0.09, 1.3), steel, 0, -0.05, -0.35); // top landing at the rotunda
+  const slopeLen = Math.hypot(len, drop), slopeA = Math.atan2(drop, len);
+  add(new THREE.BoxGeometry(1.5, 0.1, slopeLen + 0.4), dark, 0, -drop / 2 - 0.1, len / 2, slopeA); // stringer
+  for (let i = 0; i < steps; i++) { const f = (i + 0.5) / steps; add(new THREE.BoxGeometry(1.7, 0.05, len / steps + 0.05), steel, 0, -drop * f + 0.02, len * f); }
+  for (const sx of [-0.84, 0.84]) { add(new THREE.BoxGeometry(0.05, 0.05, slopeLen), dark, sx, -drop / 2 + 0.92, len / 2, slopeA); // handrail
+    for (let i = 0; i <= 3; i++) { const f = i / 3; add(new THREE.BoxGeometry(0.045, 0.92, 0.045), dark, sx, -drop * f + 0.46, len * f); } }
+  add(new THREE.BoxGeometry(2.1, 0.07, 1.1), steel, 0, -drop + 0.03, len + 0.25); // bottom pad
+  return g;
+}
 const FP_TAGS = new Set(['cockpit', 'ckdoor']);
 const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
 // occupancy grid (0.25 m cells) of the hall geometry in its own frame, in the camera band (0.15 to 3.9 m above the floor)
@@ -95,6 +115,16 @@ export class OnFoot {
     wm.rect(Fp.clone().addScaledVector(n, -1.2), n, 1.6, 1.1, base.y + 4.6, base.y + 4.6, 'gatedoor');
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.aircraft.quaternion).setY(0).normalize();
     for (const z of cabin.zones) { const c = this.aircraft.localToWorld(new THREE.Vector3(z.x, 0, z.z)); const yw = y => this.aircraft.localToWorld(new THREE.Vector3(0, y, 0)).y; wm.rect(c, fwd, z.hz, z.hx, yw(z.y0), yw(z.y1), z.tag); }
+    // [Crew conversations] the apron: captains do a walkaround, so the stand itself is
+    // walkable — down the rotunda service stair (sloped rect from the bridge deck to
+    // apron level, continuing along the door->rotunda axis) and around the aircraft
+    // (one stand-sized rect at apron level; floorAt separates it from the cabin and
+    // hall zones above by height). The stair mesh is dressing for the slope.
+    const apronY = base.y;
+    const stT = Rr.clone().addScaledVector(left, 0.8), stB = Rr.clone().addScaledVector(left, 10.5);
+    wm.rect(stT.clone().add(stB).multiplyScalar(0.5), left, 4.85, 0.95, Rr.y, apronY, 'apron');
+    wm.rect(new THREE.Vector3(this.aircraft.position.x, apronY, this.aircraft.position.z), fwd, 46, 42, apronY, apronY, 'apron');
+    this.apronMesh = buildApronStair(stT, stB, apronY); this.scene.add(this.apronMesh);
     this.walk = wm; this.parts = { term, bridge, cabin, Fp, Rr, D, n };
     this.grid = null; try { this.grid = hallGrid(term); } catch (e) { console.warn('hall camera grid failed', e); }
     this.avatar();
@@ -124,6 +154,7 @@ export class OnFoot {
     if (this.av) { const q = this.av.p[0]; q.mode = 'stand'; }
   }
   dispose() {
+    if (this.apronMesh) { this.scene.remove(this.apronMesh); this.apronMesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); this.apronMesh = null; }
     if (!this.parts) return; const { term, bridge, cabin } = this.parts;
     this.scene.remove(term.group); this.scene.remove(bridge.group); this.aircraft.remove(cabin.group); term.dispose(); bridge.dispose(); cabin.dispose();
     if (this.o?.stand?.jb) this.o.stand.jb.visible = true;
@@ -242,6 +273,9 @@ export class OnFoot {
         if (Math.hypot(lp.x - this.storyFig.x, lp.z - this.storyFig.z) < 2.4) this.prompt = 'E  Say hello to ' + (this.storyName || 'a passenger');
       }
     }
+    // [Crew conversations] standing by a working crew member (apron): the talk prompt,
+    // computed by crewtalk.js in the main loop, wins while it is set.
+    if (this.crewPrompt) this.prompt = this.crewPrompt;
   }
   interactFlow() { // E pressed on foot: run the terminal flow when it applies; true = the press was used
     const tf = this.o.mode === 'dep' && this.parts && this.parts.term ? this.parts.term.flow : null; if (!tf || this.auto) return false;

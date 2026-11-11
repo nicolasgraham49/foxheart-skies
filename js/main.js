@@ -30,6 +30,7 @@ import { LandingAids, fdGuide } from './landing.js';
 import { NavPlan, fmtEte, fmtClock } from './navmap.js';
 import { Music, moodFor } from './music.js';
 import * as Stories from './stories.js';
+import * as CrewTalk from './crewtalk.js';
 import { GFX, setMsaaActive } from './gfx.js';
 import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
@@ -365,6 +366,7 @@ async function startFlight(cfg) {
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
   W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); Stories.reset(); // [Stories era] a new flight starts with no story armed
+  CrewTalk.reset(); // [Crew conversations] and no crew conversation or interphone state carried over
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
@@ -1476,6 +1478,7 @@ function renderRest(dt, night) {
   audio.update({ fdm, apuN: sys.apuN, paused: W.paused || W.menuMode, ground: fdm.onGround, camDist: camera.position.distanceTo(aircraft.position), rain: W.wx === 'rain', nearAirport: true, groundH: gh, flapTarget: FLAPS[fdm.flapIdx].flap }, dt, W.view);
   music.update(dt, musicWant()); musicNowUI(); if (svcPanel.open) svcPanel.update(dt);
   Stories.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Stories era] marker bob + the one cruise beat
+  CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats
   if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
   if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
 }
@@ -1599,6 +1602,7 @@ function footInput(dt) {
 function footInteract() {
   if (foot.interactFlow && foot.interactFlow()) return; // terminal flow (check-in / security) uses E first
   if (Stories.tryMeet(foot)) return; // [Stories era] saying hello to the story passenger uses E next
+  if (CrewTalk.tryTalk(foot)) return; // [Crew conversations] talking to a ground crew member uses E next
   if (W.footMode === 'dep' && foot.pos.distanceTo(foot.seat) < 1.3) takeSeat();
   else if (W.footMode === 'arr' && foot.pos.distanceTo(foot.exitPos) < 6.5) finishTrip();
 }
@@ -1952,6 +1956,7 @@ window.__sim = {
   livery: () => (aircraft.userData.parts && aircraft.userData.parts.livery) || savedLivery(), setLivery: (id) => setPlayerLivery(id),
   type: () => TYPE.id, types: () => TYPES.map(t => ({ id: t.id, name: t.name, seats: t.cabin.seatXs.length * t.cabin.rows, pax: t.cabin.pax })), setType: (id) => setPlayerType(id),
   stories: () => Stories.state(),
+  crewTalk: () => CrewTalk.state(), // [Crew conversations] roster positions/phases, open card, interphone beats
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
   footStep(sec) { for (let i = 0; i < sec * 30; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); },
