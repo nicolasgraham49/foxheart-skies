@@ -217,100 +217,113 @@ function seatGeometry(hi, prem = false) {
 // ================================================================ build
 export function buildCabinShell(o) {
   const { seats, rnd = Math.random, floor: FL = -0.55, rows = 29, pitch = 0.79, z0: R0 = -10.6, quality = 'high' } = o;
+  // [Aircraft types] cabin profile of the selected type: sx scales every lateral (x) dimension of
+  // the fox shell; door1/door2 place the wall spans. The fox profile (default) is exactly the old shell.
+  const PR = o.profile || { sx: 1, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false };
+  const sx = PR.sx, SC = prof => prof.map(([x, y]) => [x * sx, y]);
   const hi = quality !== 'low';
   const A = paintAtlas(hi ? 512 : 256), mat = cabinMaterial(A);
   const group = new THREE.Group(); group.name = 'cabinShell';
-  const ZF = -14.2, ZA = 12.4, ZS0 = -12.55, ZS1 = 11.15; // walls; sidewall run between the door zones
-  const ao = (p, ny, nx) => { let a = 0.6 + 0.4 * smooth(FL, FL + 0.45, p.y); if (p.y > 0.55 && p.y < 1.05 && Math.abs(p.x) > 1.5) a *= 0.86 + 0.14 * smooth(1.05, 0.55, p.y); if (ny < -0.6 && p.y < 1.2 && p.y > 0.8) a *= 0.85; if (p.y > 1.5) a *= 0.97; return a; };
+  const ZF = PR.door1 - 1.2, ZA = PR.door2 + 0.8, ZS0 = PR.door1 + 0.45, ZS1 = PR.door2 - 0.45; // walls; sidewall run between the door zones
+  const ao = (p, ny, nx) => { let a = 0.6 + 0.4 * smooth(FL, FL + 0.45, p.y); if (p.y > 0.55 && p.y < 1.05 && Math.abs(p.x) > 1.5 * sx) a *= 0.86 + 0.14 * smooth(1.05, 0.55, p.y); if (ny < -0.6 && p.y < 1.2 && p.y > 0.8) a *= 0.85; if (p.y > 1.5) a *= 0.97; return a; };
   const P = new Parts(ao);
   const coneSpots = []; // lit PSU domes collect here; mood() fades their light cones in at night
   // ---------------- lining profile (right side)
   const BAND0 = 0.12, BAND1 = 0.7;
   const X = pchip([[-0.28, 1.80], [-0.05, 1.82], [BAND0, 1.835], [0.3, 1.842], [0.5, 1.828], [BAND1, 1.79], [0.86, 1.745], [0.98, 1.69], [1.03, 1.66]]);
+  const Xs = y => X(y) * sx;
   const dX = y => (X(y + 1e-3) - X(y - 1e-3)) / 2e-3;
-  const DADO = [[1.80, FL], [1.80, -0.28]], LO = [[1.80, -0.28], [X(-0.05), -0.05], [X(BAND0), BAND0]], HI = [[X(BAND1), BAND1], [X(0.86), 0.86], [X(0.98), 0.98], [1.66, 1.03]];
-  const UNDER = [[1.66, 1.03], [1.4, 1.045], [1.12, 1.06]], FRONT = [[1.12, 1.06], [1.085, 1.11], [1.062, 1.2], [1.064, 1.3], [1.085, 1.4], [1.13, 1.47], [1.19, 1.51]];
-  const LIP = [[1.19, 1.51], [1.15, 1.532], [1.168, 1.548]], COVE = [[1.168, 1.548], [1.26, 1.562]];
-  const CEIL = []; for (let k = 0; k <= (hi ? 10 : 5); k++) { const x = 1.26 * (1 - k / (hi ? 10 : 5)); CEIL.push([x, 1.56 + 0.13 * (1 - (x / 1.26) ** 2)]); }
+  const DADO = SC([[1.80, FL], [1.80, -0.28]]), LO = SC([[1.80, -0.28], [X(-0.05), -0.05], [X(BAND0), BAND0]]), HI = SC([[X(BAND1), BAND1], [X(0.86), 0.86], [X(0.98), 0.98], [1.66, 1.03]]);
+  const UNDER = SC([[1.66, 1.03], [1.4, 1.045], [1.12, 1.06]]), FRONT = SC([[1.12, 1.06], [1.085, 1.11], [1.062, 1.2], [1.064, 1.3], [1.085, 1.4], [1.13, 1.47], [1.19, 1.51]]);
+  const LIP = SC([[1.19, 1.51], [1.15, 1.532], [1.168, 1.548]]), COVE = SC([[1.168, 1.548], [1.26, 1.562]]);
+  const CEIL = []; for (let k = 0; k <= (hi ? 10 : 5); k++) { const x = 1.26 * (1 - k / (hi ? 10 : 5)); CEIL.push([x, 1.56 + 0.13 * (1 - (x / 1.26) ** 2)]); } const CEILs = SC(CEIL);
   for (const sd of [1, -1]) {
-    for (const [za, zb] of sd < 0 ? [[ZF, -13.43], [-12.57, ZA]] : [[ZF, ZA]]) P.add(loft(DADO, za, zb, sd), 'dado', { uvScale: [1 / 0.27, 1 / 0.5] });
+    for (const [za, zb] of sd < 0 ? [[ZF, PR.door1 - 0.43], [PR.door1 + 0.43, ZA]] : [[ZF, ZA]]) P.add(loft(DADO, za, zb, sd), 'dado', { uvScale: [1 / 0.27, 1 / 0.5] });
     P.add(loft(LO, ZS0, ZS1, sd), 'plastic'); P.add(loft(HI, ZS0, ZS1, sd), 'plastic');
     P.add(loft(UNDER, ZF + 0.5, ZA - 0.3, sd), 'psu', { uvScale: [1 / 0.55, 1 / 0.79], ao: 0.92 });
     P.add(loft(LIP, ZF + 0.5, ZA - 0.3, sd), 'bin', { uvScale: [4, 1] }); P.add(loft(COVE, ZF + 0.5, ZA - 0.3, sd), 'light', { e: [1.1, 0], flat: true, ao: 1 });
-    P.add(loft(CEIL, ZF, ZA, sd), 'ceiling', { uvScale: [1 / 2.6, 1 / (2 * pitch)] });
-    P.add(box(0.016, 0.03, ZS1 - ZS0, sd * (X(0.72) - 0.004), 0.72, (ZS0 + ZS1) / 2), 'plastic', { tint: [1.0, 0.42, 0.13], flat: true, ao: 1 }); // orange accent stripe along the dado top
+    P.add(loft(CEILs, ZF, ZA, sd), 'ceiling', { uvScale: [1 / 2.6, 1 / (2 * pitch)] });
+    P.add(box(0.016, 0.03, ZS1 - ZS0, sd * (Xs(0.72) - 0.004), 0.72, (ZS0 + ZS1) / 2), 'plastic', { tint: [1.0, 0.42, 0.13], flat: true, ao: 1 }); // orange accent stripe along the dado top
     // bins: dark backing + door fronts with seams, latches
     P.add(loft(FRONT.map(([x, y]) => [x + 0.012, y]), ZF + 0.5, ZA - 0.3, sd), 'dark', { ao: 0.5 });
     for (let z = R0 - 0.6 - 4 * pitch; z < ZA - 0.4; z += 2 * pitch) { const za = Math.max(ZF + 0.5, z) + 0.004, zb = Math.min(ZA - 0.3, z + 2 * pitch) - 0.004; if (zb - za < 0.2) continue;
       P.add(loft(FRONT, za, zb, sd), 'bin', { uvScale: [1 / 0.5, 1 / (2 * pitch)] });
-      const zc = (za + zb) / 2; P.add(rbox(0.035, 0.03, 0.2, 0.01, sd * 1.075, 1.112, zc, 1), 'dark', { ao: 0.9 }); P.add(box(0.006, 0.012, 0.15, sd * 1.058, 1.112, zc), 'alu', { flat: true, ao: 1.1 }); }
+      const zc = (za + zb) / 2; P.add(rbox(0.035, 0.03, 0.2, 0.01, sd * 1.075 * sx, 1.112, zc, 1), 'dark', { ao: 0.9 }); P.add(box(0.006, 0.012, 0.15, sd * 1.058 * sx, 1.112, zc), 'alu', { flat: true, ao: 1.1 }); }
     // window band: one bay per window (rounded hole), plain bays at the ends; reveals + shades
     const wins = WINDOWS.filter(w => w.side === sd).sort((a, b) => a.z - b.z), hole = rrPts(0.26, 0.37, 0.1, hi ? 4 : 2);
-    const mapBand = (g) => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const z = p.getX(i), y = p.getY(i); p.setXYZ(i, sd * X(y), y, z); } g.computeVertexNormals(); return inward(g); };
+    const mapBand = (g) => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const z = p.getX(i), y = p.getY(i); p.setXYZ(i, sd * Xs(y), y, z); } g.computeVertexNormals(); return inward(g); };
     const bay = (za, zb, w) => { const s = new THREE.Shape(); s.moveTo(za, BAND0); s.lineTo(zb, BAND0); s.lineTo(zb, BAND1); s.lineTo(za, BAND1); s.lineTo(za, BAND0);
       if (w) s.holes.push(new THREE.Path(hole.map(([a, b]) => new THREE.Vector2(w.z + a, WIN_Y + b))));
       const g = new THREE.ShapeGeometry(s, 2); const U = g.attributes.uv, p = g.attributes.position; for (let i = 0; i < U.count; i++) U.setXY(i, p.getX(i), p.getY(i)); P.add(mapBand(g), 'plastic'); };
     bay(ZS0, wins[0].z - 0.2675); for (const w of wins) bay(w.z - 0.2675, w.z + 0.2675, w); bay(wins[wins.length - 1].z + 0.2675, ZS1);
     for (const w of wins) {
       const ring = (sc, xAt) => hole.map(([a, b]) => { const y = WIN_Y + b * sc; return V3(sd * xAt(y), y, w.z + a * sc); });
-      const inner = ring(1, X), outer = ring(0.86, () => 1.915); const n = hole.length;
-      const g = sheet(2, n + 1, (i, j) => (i ? outer : inner)[j % n], (i, j) => [j / n * 1.0, i * 0.12]); P.add(inward(g, m => V3(sd * 1.85, WIN_Y, w.z)), 'plastic', { ao: 0.82 });
+      const inner = ring(1, Xs), outer = ring(0.86, () => 1.915 * sx); const n = hole.length;
+      const g = sheet(2, n + 1, (i, j) => (i ? outer : inner)[j % n], (i, j) => [j / n * 1.0, i * 0.12]); P.add(inward(g, m => V3(sd * 1.85 * sx, WIN_Y, w.z)), 'plastic', { ao: 0.82 });
       // shade: pulled down by a random amount (a few closed)
       const r = rnd(), f = r < 0.62 ? 0.04 : r < 0.85 ? 0.35 + rnd() * 0.3 : 0.97, top = WIN_Y + 0.37 * 0.86 / 2, h = Math.max(0.012, 0.37 * 0.86 * f);
-      const sg = new THREE.PlaneGeometry(0.26 * 0.86 * 0.98, h).rotateY(-sd * PI / 2).translate(sd * 1.905, top - h / 2, w.z); P.add(sg, 'plastic', { e: [0, 0.35], ao: 0.9 });
-      if (f > 0.05) P.add(box(0.016, 0.02, 0.235, sd * 1.90, top - h, w.z), 'alu', { flat: true, ao: 0.95 }); // shade bottom bar
-      if (w.exit) { P.add(box(0.012, 0.06, 0.24, sd * (X(0.66) - 0.006), 0.66, w.z), 'red', { flat: true, ao: 1 }); }
+      const sg = new THREE.PlaneGeometry(0.26 * 0.86 * 0.98, h).rotateY(-sd * PI / 2).translate(sd * 1.905 * sx, top - h / 2, w.z); P.add(sg, 'plastic', { e: [0, 0.35], ao: 0.9 });
+      if (f > 0.05) P.add(box(0.016, 0.02, 0.235, sd * 1.90 * sx, top - h, w.z), 'alu', { flat: true, ao: 0.95 }); // shade bottom bar
+      if (w.exit) { P.add(box(0.012, 0.06, 0.24, sd * (Xs(0.66) - 0.006), 0.66, w.z), 'red', { flat: true, ao: 1 }); }
     }
     // closed door linings (R1 forward right, L2 / R2 aft) and the open L1 frame
-    const doorWall = (za, zb, zd, open) => { const prof = [[1.80, -0.28], [1.84, 0.4], [1.75, 0.95], [1.66, 1.03]];
-      if (!open) { P.add(loft(prof, za, zb, sd), 'plastic'); for (const dz of [-0.42, 0.42]) P.add(box(0.02, 1.75, 0.025, sd * 1.83, 0.33, zd + dz), 'dark', { ao: 0.6 }); P.add(rbox(0.05, 0.05, 0.3, 0.015, sd * 1.8, 0.35, zd, 1), 'alu', { flat: true }); }
+    const doorWall = (za, zb, zd, open) => { const prof = SC([[1.80, -0.28], [1.84, 0.4], [1.75, 0.95], [1.66, 1.03]]);
+      if (!open) { P.add(loft(prof, za, zb, sd), 'plastic'); for (const dz of [-0.42, 0.42]) P.add(box(0.02, 1.75, 0.025, sd * 1.83 * sx, 0.33, zd + dz), 'dark', { ao: 0.6 }); P.add(rbox(0.05, 0.05, 0.3, 0.015, sd * 1.8 * sx, 0.35, zd, 1), 'alu', { flat: true }); }
       else { const zc = zd; P.add(loft(prof, za, zc - 0.43, sd), 'plastic'); P.add(loft(prof, zc + 0.43, zb, sd), 'plastic'); P.add(loft(prof.filter(p => p[1] > 0.9), zc - 0.43, zc + 0.43, sd), 'plastic');
-        for (const dz of [-0.43, 0.43]) P.add(box(0.12, 1.88, 0.03, sd * 1.86, 0.39, zc + dz), 'plastic', { ao: 0.85 }); }
-      P.add(box(0.03, 0.08, 0.2, sd * 1.06, 1.25, zd), 'exit', { e: [1.4, 0], flat: true }); };
-    doorWall(ZF, ZS0, -13.0, sd < 0); doorWall(ZS1, ZA, 11.6, false);
+        for (const dz of [-0.43, 0.43]) P.add(box(0.12, 1.88, 0.03, sd * 1.86 * sx, 0.39, zc + dz), 'plastic', { ao: 0.85 }); }
+      P.add(box(0.03, 0.08, 0.2, sd * 1.06 * sx, 1.25, zd), 'exit', { e: [1.4, 0], flat: true }); };
+    doorWall(ZF, ZS0, PR.door1, sd < 0); doorWall(ZS1, ZA, PR.door2, false);
     // PSUs above each row: reading lights (a few on), gaspers, attendant call button; a seat-number placard on the bin lip
     for (let r = 0; r < rows; r++) { const z = R0 + r * pitch - 0.14;
-      for (const [k, x] of [[0, 1.2], [1, 1.36], [2, 1.52]]) { const yb = 1.06 - (x - 1.12) / (1.66 - 1.12) * 0.015 - 0.008; const on = rnd() < 0.18;
+      for (const [k, xu] of [[0, 1.2], [1, 1.36], [2, 1.52]]) { const x = xu * sx; const yb = 1.06 - (xu - 1.12) / (1.66 - 1.12) * 0.015 - 0.008; const on = rnd() < 0.18;
         P.add(new THREE.CylinderGeometry(0.024, 0.027, 0.012, hi ? 12 : 6).translate(sd * x, yb, z), on ? 'light' : 'alu', { e: on ? [1.5, 0] : [0, 0], flat: true, ao: on ? 1 : 0.95 });
         if (on) coneSpots.push([sd * x, yb, z]);
         P.add(new THREE.CylinderGeometry(0.014, 0.019, 0.025, hi ? 10 : 5).translate(sd * x, yb - 0.004, z + 0.09), 'dark', { flat: true, ao: 0.9 }); }
-      P.add(box(0.03, 0.006, 0.03, sd * 1.62, 1.04, z + 0.06), 'red', { e: [0.5, 0], flat: true, ao: 0.6 });
-      P.add(new THREE.BoxGeometry(0.018, 0.055, 0.17).rotateX(-0.45).translate(sd * 1.08, 1.15, z + 0.14), 'dark', { flat: true, ao: 0.9 });
-      P.add(new THREE.BoxGeometry(0.02, 0.016, 0.11).rotateX(-0.45).translate(sd * 1.072, 1.15, z + 0.14), 'light', { e: [0.7, 0], flat: true, ao: 1 }); }
+      P.add(box(0.03, 0.006, 0.03, sd * 1.62 * sx, 1.04, z + 0.06), 'red', { e: [0.5, 0], flat: true, ao: 0.6 });
+      P.add(new THREE.BoxGeometry(0.018, 0.055, 0.17).rotateX(-0.45).translate(sd * 1.08 * sx, 1.15, z + 0.14), 'dark', { flat: true, ao: 0.9 });
+      P.add(new THREE.BoxGeometry(0.02, 0.016, 0.11).rotateX(-0.45).translate(sd * 1.072 * sx, 1.15, z + 0.14), 'light', { e: [0.7, 0], flat: true, ao: 1 }); }
   }
-  // ---------------- floor: carpet, aisle runner, floor-path lights
-  P.add(inward(sheet(2, 2, (i, j) => V3(lerp(-1.8, 1.8, j), FL, i ? ZA : ZF - 0.6), (i, j) => [lerp(-1.8, 1.8, j) / 0.6, (i ? ZA : ZF - 0.6) / 0.6])), 'carpet');
-  P.add(inward(sheet(2, 2, (i, j) => V3(lerp(-0.225, 0.225, j), FL + 0.002, i ? ZS1 : ZS0 + 0.6), (i, j) => [j, (i ? ZS1 : ZS0) / 0.8])), 'runner');
-  for (const x of [-0.245, 0.245]) P.add(inward(sheet(2, 2, (i, j) => V3(x + lerp(-0.008, 0.008, j), FL + 0.004, i ? ZS1 : ZS0 + 0.6), (i, j) => [0.25, 0.25])), 'light', { e: [0.35, 0], flat: true, ao: 0.6 });
+  // centre PSU domes over the middle seat block (twin-aisle types)
+  if (PR.centrePSU) for (let r = 0; r < rows; r++) { const z = R0 + r * pitch - 0.14;
+    for (const xu of [-0.45, 0, 0.45]) { const x = xu * sx, yb = 1.045, on = rnd() < 0.18;
+      P.add(new THREE.CylinderGeometry(0.024, 0.027, 0.012, hi ? 12 : 6).translate(x, yb, z), on ? 'light' : 'alu', { e: on ? [1.5, 0] : [0, 0], flat: true, ao: on ? 1 : 0.95 });
+      if (on) coneSpots.push([x, yb, z]);
+      P.add(new THREE.CylinderGeometry(0.014, 0.019, 0.025, hi ? 10 : 5).translate(x, yb - 0.004, z + 0.09), 'dark', { flat: true, ao: 0.9 }); } }
+  // ---------------- floor: carpet, aisle runner(s), floor-path lights
+  P.add(inward(sheet(2, 2, (i, j) => V3(lerp(-1.8 * sx, 1.8 * sx, j), FL, i ? ZA : ZF - 0.6), (i, j) => [lerp(-1.8 * sx, 1.8 * sx, j) / (0.6 * sx), (i ? ZA : ZF - 0.6) / 0.6])), 'carpet');
+  for (const a of PR.aisles) {
+    P.add(inward(sheet(2, 2, (i, j) => V3(lerp(a - 0.225, a + 0.225, j), FL + 0.002, i ? ZS1 : ZS0 + 0.6), (i, j) => [j, (i ? ZS1 : ZS0) / 0.8])), 'runner');
+    for (const x of [a - 0.245, a + 0.245]) P.add(inward(sheet(2, 2, (i, j) => V3(x + lerp(-0.008, 0.008, j), FL + 0.004, i ? ZS1 : ZS0 + 0.6), (i, j) => [0.25, 0.25])), 'light', { e: [0.35, 0], flat: true, ao: 0.6 });
+  }
   // ---------------- forward: lav (left), cockpit door passage, galley (right); bulkhead with the logo at row 1
   const face = (w, h, x, y, z, dir, tile, op = {}) => { const g = new THREE.PlaneGeometry(w, h); if (dir < 0) g.rotateY(PI); g.translate(x, y, z); return P.add(g, tile, op); };
-  P.add(box(1.1, 2.3, 0.4, -1.25, 0.6, ZF - 0.2), 'plastic', { ao: 0.9 }); face(0.6, 1.85, -1.22, FL + 0.93, ZF + 0.003, 1, 'lav', { ao: 1 }); P.add(box(0.06, 0.06, 0.012, -1.0, 0.35, ZF + 0.01), 'alu', { flat: true });
-  P.add(box(0.84, 0.6, 0.3, -0.2, 1.4, ZF - 0.35), 'plastic', { ao: 0.85 }); P.add(box(0.1, 2.3, 0.3, -0.67, 0.6, ZF - 0.35), 'plastic'); P.add(box(0.1, 2.3, 0.3, 0.27, 0.6, ZF - 0.35), 'plastic');
+  P.add(box(1.1 * sx, 2.3, 0.4, -1.25 * sx, 0.6, ZF - 0.2), 'plastic', { ao: 0.9 }); face(0.6, 1.85, -1.22 * sx, FL + 0.93, ZF + 0.003, 1, 'lav', { ao: 1 }); P.add(box(0.06, 0.06, 0.012, -1.0 * sx, 0.35, ZF + 0.01), 'alu', { flat: true });
+  P.add(box(0.84, 0.6, 0.3, -0.2, 1.4, ZF - 0.35), 'plastic', { ao: 0.85 }); P.add(box(0.1, 2.3, 0.3, -0.67 * sx, 0.6, ZF - 0.35), 'plastic'); P.add(box(0.1, 2.3, 0.3, 0.27 * sx, 0.6, ZF - 0.35), 'plastic');
   const galley = (x0, x1, zFace, dir) => { const w = x1 - x0, xc = (x0 + x1) / 2, d = 0.5, zc = zFace - dir * d / 2;
     P.add(box(w, 2.25, d, xc, 0.58, zc), 'alu', { ao: 0.8 });
     const n = Math.max(1, Math.floor(w / 0.32)); for (let k = 0; k < n; k++) { const x = x0 + (k + 0.5) * w / n; face(w / n - 0.02, 0.92, x, FL + 0.48, zFace + dir * 0.005, dir, 'trolley', { ao: 0.9 }); face(w / n - 0.02, 0.42, x, 0.95, zFace + dir * 0.005, dir, 'trolley', { ao: 0.95 }); }
     P.add(box(w, 0.035, 0.12, xc, 0.46, zFace + dir * 0.05), 'dark', { ao: 0.9 }); P.add(box(w, 0.03, 0.03, xc, 1.21, zFace + dir * 0.01), 'light', { e: [0.9, 0], flat: true }); };
-  galley(0.32, 1.76, ZF + 0.45, 1);
+  galley(0.32 * sx, 1.76 * sx, ZF + 0.45, 1);
   // forward galley dressing: an oven bank on the upper front, a parked trolley, and the galley curtain at the corner
-  for (const x of [0.64, 1.04, 1.44]) { face(0.36, 0.30, x, 1.30, ZF + 0.458, 1, 'dark', { ao: 0.9 }); P.add(box(0.30, 0.025, 0.02, x, 1.415, ZF + 0.462), 'alu', { flat: true }); }
-  { const tg = new THREE.BoxGeometry(0.34, 1.02, 0.58); tg.rotateY(0.05); tg.translate(1.48, FL + 0.51, -12.62); P.add(tg, 'trolley', { ao: 0.9 }); P.add(box(0.36, 0.03, 0.60, 1.48, FL + 1.045, -12.62), 'dark', { ao: 0.85 }); }
-  { const cg = new THREE.PlaneGeometry(0.55, 1.35, 6, 1); cg.rotateY(PI / 2); const cp = cg.attributes.position; for (let i = 0; i < cp.count; i++) cp.setX(i, Math.sin((cp.getZ(i) / 0.55 + 0.5) * PI * 3) * 0.025); cg.translate(0.33, 1.0, -13.42); P.add(inward(cg), 'fabric', { uvScale: [1.2, 1.2], tint: [0.72, 0.76, 0.9], ao: 0.9 }); }
-  { const g = box(1.3, 1.5, 0.06, 1.1, FL + 1.0, -12.05); P.add(g, 'plastic', { ao: 0.9 }); face(1.2, 1.2, 1.1, FL + 1.1, -12.017, 1, 'bulk', { flat: true, ao: 1 }); }
+  for (const x0 of [0.64, 1.04, 1.44]) { const x = x0 * sx; face(0.36, 0.30, x, 1.30, ZF + 0.458, 1, 'dark', { ao: 0.9 }); P.add(box(0.30, 0.025, 0.02, x, 1.415, ZF + 0.462), 'alu', { flat: true }); }
+  { const tg = new THREE.BoxGeometry(0.34, 1.02, 0.58); tg.rotateY(0.05); tg.translate(1.48 * sx, FL + 0.51, PR.door1 + 0.38); P.add(tg, 'trolley', { ao: 0.9 }); P.add(box(0.36, 0.03, 0.60, 1.48 * sx, FL + 1.045, PR.door1 + 0.38), 'dark', { ao: 0.85 }); }
+  { const cg = new THREE.PlaneGeometry(0.55, 1.35, 6, 1); cg.rotateY(PI / 2); const cp = cg.attributes.position; for (let i = 0; i < cp.count; i++) cp.setX(i, Math.sin((cp.getZ(i) / 0.55 + 0.5) * PI * 3) * 0.025); cg.translate(0.33 * sx, 1.0, PR.door1 - 0.42); P.add(inward(cg), 'fabric', { uvScale: [1.2, 1.2], tint: [0.72, 0.76, 0.9], ao: 0.9 }); }
+  { const g = box(1.3 * sx, 1.5, 0.06, 1.1 * sx, FL + 1.0, ZS0 + 0.5); P.add(g, 'plastic', { ao: 0.9 }); face(1.2 * sx, 1.2, 1.1 * sx, FL + 1.1, ZS0 + 0.533, 1, 'bulk', { flat: true, ao: 1 }); }
   // lavatory header light strips + coat hooks on the flight-deck passage pillars
-  P.add(box(0.52, 0.045, 0.018, -1.22, FL + 1.90, ZF + 0.012), 'light', { e: [0.85, 0], flat: true, ao: 1 });
-  for (const x of [-0.67, 0.27]) { P.add(box(0.03, 0.10, 0.03, x, 1.08, ZF - 0.17), 'alu', { flat: true }); P.add(box(0.03, 0.03, 0.08, x, 1.02, ZF - 0.145), 'alu', { flat: true }); }
+  P.add(box(0.52, 0.045, 0.018, -1.22 * sx, FL + 1.90, ZF + 0.012), 'light', { e: [0.85, 0], flat: true, ao: 1 });
+  for (const x0 of [-0.67, 0.27]) { const x = x0 * sx; P.add(box(0.03, 0.10, 0.03, x, 1.08, ZF - 0.17), 'alu', { flat: true }); P.add(box(0.03, 0.03, 0.08, x, 1.02, ZF - 0.145), 'alu', { flat: true }); }
   // ---------------- aft: galley centre, two lavs, wall
-  face(3.7, 2.3, 0, 0.6, ZA, -1, 'plastic', { ao: 0.9 });
-  galley(-0.72, 0.72, ZA - 0.5, -1); face(0.7, 0.5, 0, 1.42, ZA - 0.506, -1, 'bulk', { flat: true, ao: 1 });
-  for (const x of [-1.27, 1.27]) { P.add(box(0.95, 2.25, 0.5, x, 0.58, ZA - 0.25), 'plastic', { ao: 0.92 }); face(0.6, 1.85, x, FL + 0.93, ZA - 0.503, -1, 'lav', { ao: 1 }); P.add(box(0.52, 0.045, 0.018, x, FL + 1.90, ZA - 0.512), 'light', { e: [0.85, 0], flat: true, ao: 1 }); }
+  face(3.7 * sx, 2.3, 0, 0.6, ZA, -1, 'plastic', { ao: 0.9 });
+  galley(-0.72 * sx, 0.72 * sx, ZA - 0.5, -1); face(0.7, 0.5, 0, 1.42, ZA - 0.506, -1, 'bulk', { flat: true, ao: 1 });
+  for (const x0 of [-1.27, 1.27]) { const x = x0 * sx; P.add(box(0.95, 2.25, 0.5, x, 0.58, ZA - 0.25), 'plastic', { ao: 0.92 }); face(0.6, 1.85, x, FL + 0.93, ZA - 0.503, -1, 'lav', { ao: 1 }); P.add(box(0.52, 0.045, 0.018, x, FL + 1.90, ZA - 0.512), 'light', { e: [0.85, 0], flat: true, ao: 1 }); }
   // exit signs above the overwing exits (bins) and at the doors
-  for (const e of EXITS.filter(e => e.side > 0)) for (const sd of [1, -1]) { P.add(box(0.03, 0.08, 0.2, sd * 1.06, 1.25, e.z), 'exit', { e: [1.4, 0], flat: true }); }
+  for (const e of EXITS.filter(e => e.side > 0)) for (const sd of [1, -1]) { P.add(box(0.03, 0.08, 0.2, sd * 1.06 * sx, 1.25, e.z), 'exit', { e: [1.4, 0], flat: true }); }
   const shellMesh = new THREE.Mesh(P.merge(), mat); shellMesh.frustumCulled = false; group.add(shellMesh);
   // flight-only closures: the L1 door and the flight-deck door (on foot the boarding door is open and the deck has its own door)
   const PD = new Parts(ao);
-  PD.add(new THREE.PlaneGeometry(0.86, 1.86).rotateY(PI / 2).translate(-1.855, FL + 0.93, -13.0), 'plastic', { ao: 0.95 });
-  PD.add(rbox(0.04, 0.05, 0.32, 0.015, -1.83, 0.33, -13.0, 1), 'alu', { flat: true }); PD.add(rbox(0.02, 0.22, 0.18, 0.04, -1.845, 0.92, -13.0, 1), 'dark', { ao: 0.7 });
-  PD.add(box(0.1, 0.32, 0.7, -1.8, FL + 0.17, -13.0), 'shell', { ao: 0.8 }); PD.add(box(0.012, 0.03, 0.5, -1.745, FL + 0.3, -13.0), 'red', { flat: true });
+  PD.add(new THREE.PlaneGeometry(0.86, 1.86).rotateY(PI / 2).translate(-(1.842 * sx + 0.013), FL + 0.93, PR.door1), 'plastic', { ao: 0.95 });
+  PD.add(rbox(0.04, 0.05, 0.32, 0.015, -1.83 * sx, 0.33, PR.door1, 1), 'alu', { flat: true }); PD.add(rbox(0.02, 0.22, 0.18, 0.04, -1.845 * sx, 0.92, PR.door1, 1), 'dark', { ao: 0.7 });
+  PD.add(box(0.1, 0.32, 0.7, -1.8 * sx, FL + 0.17, PR.door1), 'shell', { ao: 0.8 }); PD.add(box(0.012, 0.03, 0.5, -1.745 * sx, FL + 0.3, PR.door1), 'red', { flat: true });
   PD.add(new THREE.PlaneGeometry(0.84, 1.66).translate(-0.2, FL + 0.83, ZF - 0.2), 'plastic', { ao: 0.92 }); PD.add(box(0.07, 0.11, 0.02, 0.06, 0.55, ZF - 0.19), 'dark', { ao: 0.8 }); PD.add(rbox(0.22, 0.04, 0.05, 0.015, -0.45, 0.3, ZF - 0.18, 1), 'alu', { flat: true });
   PD.add(new THREE.CylinderGeometry(0.012, 0.012, 0.01, 8).rotateX(PI / 2).translate(-0.2, 0.95, ZF - 0.195), 'dark', { flat: true, ao: 0.6 });
   const doors = new THREE.Mesh(PD.merge(), mat); doors.frustumCulled = false; doors.visible = false; group.add(doors);

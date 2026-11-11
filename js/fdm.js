@@ -5,8 +5,12 @@ import * as THREE from 'three';
 import { KT, FT, D2R, R2D } from './data.js';
 import { DIM } from './aircraft.js';
 import { ilsDeviation } from './airport.js';
+import { currentType } from './ac-types.js';
 
-const G = 9.80665, S = 122.6, CBAR = 4.19, B = 34.1;
+const G = 9.80665;
+// [Aircraft types] wing area / mean chord / span for the SELECTED type; the fox values are the
+// defaults and the FDM constructor re-points them (one FDM exists, built after applyType).
+let S = 122.6, CBAR = 4.19, B = 34.1;
 export const FLAPS = [
   { name: 'UP', flap: 0, slat: 0, dCL: 0, dCD: 0, aS: 14.5, vfe: 350 },
   { name: '1', flap: 0.25, slat: 0.7, dCL: 0.42, dCD: 0.007, aS: 15, vfe: 230 },
@@ -22,7 +26,10 @@ const V3 = () => new THREE.Vector3();
 export class FDM {
   constructor() {
     this.pos = V3(); this.vel = V3(); this.q = new THREE.Quaternion(); this.w = V3();
-    this.mass = 64000; this.I = { pitch: 3.4e6, roll: 1.5e6, yaw: 4.4e6 };
+    const spec = currentType().fdm; this.spec = spec; // [Aircraft types] per-type mass/inertia/thrust/probes
+    S = spec.S; CBAR = spec.CBAR; B = spec.B;
+    this.mass = spec.mass; this.I = { pitch: spec.I.pitch, roll: spec.I.roll, yaw: spec.I.yaw };
+    this.kScale = spec.mass / 64000; // gear spring/damper scale so heavier types squat the same
     this.gearPts = [new THREE.Vector3(0, DIM.wheelY, DIM.noseGearZ), new THREE.Vector3(-DIM.mainX, DIM.wheelY, DIM.mainZ), new THREE.Vector3(DIM.mainX, DIM.wheelY, DIM.mainZ)];
     this.law = 'fbw';
     this.reset({});
@@ -111,11 +118,11 @@ export class FDM {
       const run = this.engRun[i]; // a shut-down engine is driven by the systems model (start sequence / spool-down)
       if (run) { const k = (cmd > this.n1[i] ? 0.16 + 0.0105 * this.n1[i] : 0.55) * (this.assist === 'realistic' ? 1 : 1.8); this.n1[i] += (cmd - this.n1[i]) * Math.min(1, k * dt); this.n2[i] += ((58.6 + Math.max(0, this.n1[i] - 20) * 0.5) - this.n2[i]) * Math.min(1, dt * 1.5); }
       const f = run ? 0.04 + 0.96 * Math.pow(clamp((this.n1[i] - 20) / 80, 0, 1.1), 1.85) : 0;
-      const ti = 120000 * f * Math.pow(atm.rho / 1.225, 0.75) * (1 - 0.45 * mach + 0.25 * mach * mach);
+      const ti = this.spec.thrust * f * Math.pow(atm.rho / 1.225, 0.75) * (1 - 0.45 * mach + 0.25 * mach * mach);
       const tie = this.reverser > 0.1 ? -ti * 0.42 * this.reverser : ti; T += tie; Tasym += i ? -tie : tie;
       if (run) this.egt[i] += ((380 + this.n1[i] * 5.6) - this.egt[i]) * Math.min(1, dt * 0.8);
     }
-    this.fuel = Math.max(0, this.fuel - ((this.engRun[0] ? this.n1[0] : 0) + (this.engRun[1] ? this.n1[1] : 0)) * 0.0095 * dt);
+    this.fuel = Math.max(0, this.fuel - ((this.engRun[0] ? this.n1[0] : 0) + (this.engRun[1] ? this.n1[1] : 0)) * 0.0095 * (this.spec.thrust / 120000) * dt);
     this.reverser = clamp(this.reverser + (this.revCmd ? 1 : -1) * dt / 2, 0, 1);
     F_.addScaledVector(fwd, T);
     F_.y -= this.mass * G;
@@ -129,7 +136,7 @@ export class FDM {
     let Cn = 0.11 * beta + 0.07 * this.dr - 0.2 * (r * B / (2 * Vm)) - 0.006 * this.da;
     if (this.stall > 0.3 && !this.onGround) { Cl += (Math.random() - 0.5) * 0.02 * this.stall; Cm += (Math.random() - 0.5) * 0.03 * this.stall; }
     let Mx = qbar * S * CBAR * Cm + T * 1.6 * 0.5 * (this.reverser > 0.1 ? 0 : 1) / 1;
-    const Nasym = Tasym * 5.75; // engine thrust off the centreline (yaw-right positive when the left engine pulls harder)
+    const Nasym = Tasym * this.spec.engX; // engine thrust off the centreline (yaw-right positive when the left engine pulls harder)
     if (this.autoTrim) { const tgt = clamp(-Nasym / (Math.max(qbar, 400) * S * B * 0.11), -25 * D2R, 25 * D2R) * (this.onGround ? 0.5 : 1); this.rudTrim += clamp(tgt - this.rudTrim, -dt * 5 * D2R, dt * 5 * D2R); } else this.rudTrim += clamp(-this.rudTrim, -dt * D2R, dt * D2R); // on the runway the nose wheel helps, so half the trim
     let Lr = qbar * S * B * Cl, Nn = qbar * S * B * (Cn + 0.04 * this.rudTrim) + Nasym; // trim tab + full rudder authority (Cn_dr ~0.11) against engine-out yaw
     // body-frame torque accumulator
@@ -169,7 +176,7 @@ export class FDM {
       if (g.water) { this.crash('Ditched in the water'); return; }
       any = true; if (i) anyMain = true;
       const vw = this.vel.clone().add(new THREE.Vector3().crossVectors(this.w.clone().applyQuaternion(this.q), rw));
-      const k = i ? 1.25e6 : 6e5, d = i ? 2.4e5 : 9e4;
+      const k = (i ? 1.25e6 : 6e5) * this.kScale, d = (i ? 2.4e5 : 9e4) * this.kScale;
       let Fn = Math.max(0, k * c - d * vw.y + (c > 0.45 ? (c - 0.45) * 1.5e7 : 0));
       // wheel axes
       let wf = hFwd.clone(), wr = hRight.clone();
@@ -189,10 +196,10 @@ export class FDM {
       }
     }
     if (!gearOk) { // gear up: nacelles + belly are the contact points
-      const e0 = this.euler(); if (!this.belly) { const near = [[5.75, -3.0, -5], [-5.75, -3.0, -5], [0, -2.1, 0]].some(pr => { const pw = new THREE.Vector3(...pr).applyQuaternion(this.q).add(this.pos); return pw.y < env.ground(pw.x, pw.z).h + 0.05; });
+      const e0 = this.euler(); if (!this.belly) { const near = this.spec.belly.slice(0, 3).some(pr => { const pw = new THREE.Vector3(...pr).applyQuaternion(this.q).add(this.pos); return pw.y < env.ground(pw.x, pw.z).h + 0.05; });
         if (near && this.vel.y > -3.2 && Math.abs(e0.bank) < 9 && !env.ground(this.pos.x, this.pos.z).water) { this.belly = { vs: this.vel.y, t: this.time }; if (!this.td) { this.td = { vs: this.vel.y, ias: this._ias, t: this.time, x: this.pos.x, z: this.pos.z, pitch: e0.pitch, bank: e0.bank, ils: this.ap.ils, gs: Math.hypot(this.vel.x, this.vel.z), belly: true }; } this.events.push({ t: 'belly', v: this.vel.y }); } }
       if (this.belly) { this.scrape = 0;
-        for (const pr of [[5.75, -3.0, -5], [-5.75, -3.0, -5], [0, -2.1, 0], [0, -2.0, -14], [0, -1.08, 12]]) { /* nacelles, belly, nose, tail cone */ const rw = new THREE.Vector3(...pr).applyQuaternion(this.q), pw = rw.clone().add(this.pos), g = env.ground(pw.x, pw.z), c = g.h - pw.y + 0.03; if (c <= -0.3) continue; anyMain = any = true; if (c <= 0) continue; // within 30 cm counts as on the ground (no liftoff flicker)
+        for (const pr of this.spec.belly) { /* nacelles, belly, nose, tail cone */ const rw = new THREE.Vector3(...pr).applyQuaternion(this.q), pw = rw.clone().add(this.pos), g = env.ground(pw.x, pw.z), c = g.h - pw.y + 0.03; if (c <= -0.3) continue; anyMain = any = true; if (c <= 0) continue; // within 30 cm counts as on the ground (no liftoff flicker)
           const vw = this.vel.clone().add(new THREE.Vector3().crossVectors(this.w.clone().applyQuaternion(this.q), rw)); const Fn = Math.max(0, 2.2e6 * c - 3e5 * vw.y); const vh = new THREE.Vector3(vw.x, 0, vw.z); const sp = vh.length();
           const Ff = sp > 0.05 ? vh.multiplyScalar(-Math.min(0.42 * Fn, sp * 4e5) / sp) : vh.set(0, 0, 0); const Fw = new THREE.Vector3(0, Fn, 0).add(Ff); F.add(Fw); tq.add(new THREE.Vector3().crossVectors(rw, Fw).applyQuaternion(qinv)); this.scrape = Math.max(this.scrape, sp); }
         this.w.multiplyScalar(1 - Math.min(1, dt * 2)); }
@@ -201,7 +208,7 @@ export class FDM {
     if (this.onGround) { this.airTime = 0; this.gndTime += dt; } else { this.airTime += dt; this.gndTime = 0; }
     if (wasGround && !this.onGround) this.events.push({ t: 'liftoff' });
     // structural limits: fuselage / engines / wingtips / tail
-    const probes = [[0, -2.0, -17.5], [0, -1.08, 12], [5.75, -3.0, -5], [-5.75, -3.0, -5], [17, -0.2, 3.8], [-17, -0.2, 3.8], [0, -2.1, 0]];
+    const probes = this.spec.probes;
     for (let j = 0; j < probes.length; j++) {
       const pr = probes[j]; const pw = new THREE.Vector3(...pr).applyQuaternion(this.q).add(this.pos); const g = env.ground(pw.x, pw.z);
       if (pw.y < g.h + 0.02) {

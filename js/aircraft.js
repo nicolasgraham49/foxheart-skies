@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { atmos, ATM } from './sky.js';
 import { buildPlayerAircraft } from './ac-model.js';
 
-export const DIM = { length: 37.6, span: 35.8, noseZ: -18.6, tailZ: 19.0, R: 1.98, wheelY: -3.62, mainZ: 1.25, mainX: 3.8, noseGearZ: -12.9 };
+export const DIM = { length: 37.6, span: 35.8, noseZ: -18.6, tailZ: 19.0, R: 1.98, wheelY: -3.62, mainZ: 1.25, mainX: 3.8, noseGearZ: -12.9, engX: 5.75 };
 
 function fuselageGeometry() {
   const R = DIM.R, st = [];

@@ -2,7 +2,8 @@
 // for the fuselage, fin, wings, winglets, nacelles and spinners. Everything is generic (no real airline marks).
 import * as THREE from 'three';
 import { canvas, tex, heightToNormal, roundRect, rng, clamp } from './ac-util.js';
-import { NOSE_Z, HULL_L, SEC, thetaAt, WINDOWS, DOORS, DOOR, EXITS, WIN_Y } from './ac-shape.js';
+import { NOSE_Z, TAIL_Z, HULL_L, SEC, thetaAt, WINDOWS, DOORS, DOOR, EXITS, WIN_Y, GEAR } from './ac-shape.js';
+import { currentType } from './ac-types.js';
 
 export function foxHeart(c, x, y, s, light = false) {
   // heart with fox ears; s = half-size
@@ -56,7 +57,11 @@ class Layers {
 export function fuselageMaps(W = 4096, P = null) {
   const H = W / 2, L = new Layers(W, H, (P && P.baseFlat) || '#eef0f1', 0.3); const { C, H: Hc, O } = L; const R = rng(7);
   const X = z => (z - NOSE_Z) / HULL_L * W, Yt = th => th / (Math.PI * 2) * H, Yd = d => d / 360 * H;
-  const pxZ = W / HULL_L, pxT = H / (Math.PI * 2 * 2.02), K = H / 1024; // px per metre along / around (mid section)
+  // [Aircraft types] artwork anchors follow the selected type's doors / tail / gear; on the fox
+  // every expression below reproduces the original literal. pxT uses the mid-section mean radius.
+  const S0 = SEC(0), RADPX = (S0.w + (S0.top - S0.bot) / 2) / 2;
+  const D1 = DOORS[0].z, D2 = currentType().cabin.profile.door2, titleZ = D1 + 6.4, heartZ = D1 - 1.75, regZ = TAIL_Z - 3.8, flagZ = TAIL_Z - 2.3;
+  const pxZ = W / HULL_L, pxT = H / (Math.PI * 2 * RADPX), K = H / 1024; // px per metre along / around (mid section)
   // livery base treatment (gradient schemes): full-canvas wash under the tone variation
   if (P && P.baseGrad) { const bg = C.createLinearGradient(0, 0, W, 0); P.baseGrad.forEach((c, i) => bg.addColorStop(i / (P.baseGrad.length - 1), c)); C.fillStyle = bg; C.fillRect(0, 0, W, H); }
   // subtle large-scale tone variation of the white paint
@@ -74,30 +79,31 @@ export function fuselageMaps(W = 4096, P = null) {
   }
   // Retro Fox: a cheatline along the window line instead of the swoosh (the 3D window
   // glass sits proud of the skin, so the stripe reads as passing behind the windows)
-  if (P && P.cheat) { const thW = thetaAt(0, WIN_Y, 1), x0 = X(-15.8), x1 = X(17.8);
+  if (P && P.cheat) { const thW = thetaAt(0, WIN_Y, 1), x0 = X(NOSE_Z + 2.8), x1 = X(TAIL_Z - 1.2);
     for (const yc of [Yt(thW), Yt(Math.PI * 2 - thW)]) { C.fillStyle = P.cheat.main; C.fillRect(x0, yc - 0.19 * pxT, x1 - x0, 0.38 * pxT); C.fillStyle = P.cheat.pin; C.fillRect(x0, yc - 0.235 * pxT, x1 - x0, 0.03 * pxT); C.fillRect(x0, yc + 0.205 * pxT, x1 - x0, 0.03 * pxT); } }
   // titles (true proportions: squash x by the along/around pixel ratio), badge, registration
   const asp = pxZ / pxT;
   const side = (fn, th, z, flipX, flipY) => { C.save(); C.translate(X(z), Yt(th)); C.scale((flipX ? -1 : 1) * asp, flipY ? -1 : 1); fn(C); C.restore(); };
   const title = c => { const f = Math.round(0.78 * pxT); c.textBaseline = 'middle'; c.textAlign = 'center'; c.fillStyle = (P && P.title) || NAVY; c.font = `700 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.fillText('NICOFOXHEART', -0.9 * pxT, 0); const w = c.measureText('NICOFOXHEART').width; c.fillStyle = (P && P.air) || '#e8732f'; c.font = `300 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.textAlign = 'left'; c.fillText('AIR', -0.9 * pxT + w / 2 + 0.18 * pxT, 0); };
-  const thT = Math.acos(1.12 / 2.06);
-  side(title, thT, -6.6, true, false); side(title, Math.PI * 2 - thT, -6.6, false, true);
-  for (const [th, fx, fy] of [[thT, true, false], [Math.PI * 2 - thT, false, true]]) side(c => foxHeart(c, 0, 0, 0.42 * pxT), th, -14.75, fx, fy);
+  const thT = thetaAt(titleZ, 1.12, 1);
+  side(title, thT, titleZ, true, false); side(title, Math.PI * 2 - thT, titleZ, false, true);
+  for (const [th, fx, fy] of [[thT, true, false], [Math.PI * 2 - thT, false, true]]) side(c => foxHeart(c, 0, 0, 0.42 * pxT), th, heartZ, fx, fy);
   const reg = c => { c.fillStyle = '#5c6474'; c.font = `600 ${Math.round(0.26 * pxT)}px "B612 Mono", monospace`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('N-FOX7H', 0, 0); };
-  side(reg, Math.acos(0.9 / 2.0), 15.2, true, false); side(reg, Math.PI * 2 - Math.acos(0.9 / 2.0), 15.2, false, true);
+  const thR = thetaAt(regZ, 0.9, 1);
+  side(reg, thR, regZ, true, false); side(reg, Math.PI * 2 - thR, regZ, false, true);
   // house flag aft of the registration (invented Foxheart ensign — no real flag): navy field,
   // orange border, fox heart at the centre
   const flag = c => { const w = 0.58 * pxT, h = 0.38 * pxT; c.fillStyle = NAVY; c.fillRect(-w / 2, -h / 2, w, h); c.strokeStyle = '#e8732f'; c.lineWidth = 2.5 * K; c.strokeRect(-w / 2, -h / 2, w, h); foxHeart(c, 0, 0, 0.13 * pxT); };
-  side(flag, Math.acos(0.9 / 2.0), 16.7, true, false); side(flag, Math.PI * 2 - Math.acos(0.9 / 2.0), 16.7, false, true);
+  side(flag, thR, flagZ, true, false); side(flag, Math.PI * 2 - thR, flagZ, false, true);
   // ---- structure: frames (rivet rows), butt joints, lap joints, stringer rivets
-  const rv = [], frameZ = []; for (let z = -16.0; z < 18.6; z += 0.535) frameZ.push(z);
+  const rv = [], frameZ = []; for (let z = NOSE_Z + 2.6; z < TAIL_Z - 0.4; z += 0.535) frameZ.push(z);
   for (const z of frameZ) { const x = X(z); for (let y = 2; y < H; y += 3.2 * K) rv.push([x, y]); }
   for (let k = 0; k < frameZ.length; k += 4) { const x = X(frameZ[k]) + 0.12 * pxZ; L.groove(c => { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); }, 1.4 * K, 55, 0.09); for (let y = 2; y < H; y += 3.2 * K) rv.push([x - 2.4 * K, y], [x + 2.4 * K, y]); }
-  for (const d of [36, 128, 232, 324]) { const y = Yd(d); L.groove(c => { c.beginPath(); c.moveTo(X(-16.6), y); c.lineTo(X(18.4), y); }, 1.4 * K, 50, 0.08); for (let x = X(-16.6); x < X(18.4); x += 3.2 * K) rv.push([x, y - 2.4 * K], [x, y + 2.4 * K]); }
-  for (let d = 7.5; d < 360; d += 15) { const y = Yd(d); for (let x = X(-16.4); x < X(18.2); x += 5 * K) rv.push([x, y]); }
+  for (const d of [36, 128, 232, 324]) { const y = Yd(d); L.groove(c => { c.beginPath(); c.moveTo(X(NOSE_Z + 2.0), y); c.lineTo(X(TAIL_Z - 0.6), y); }, 1.4 * K, 50, 0.08); for (let x = X(NOSE_Z + 2.0); x < X(TAIL_Z - 0.6); x += 3.2 * K) rv.push([x, y - 2.4 * K], [x, y + 2.4 * K]); }
+  for (let d = 7.5; d < 360; d += 15) { const y = Yd(d); for (let x = X(NOSE_Z + 2.2); x < X(TAIL_Z - 0.8); x += 5 * K) rv.push([x, y]); }
   // radome joint, tail-cone joint
-  L.groove(c => { c.beginPath(); c.moveTo(X(-16.75), 0); c.lineTo(X(-16.75), H); }, 1.8 * K, 70, 0.18);
-  L.groove(c => { c.beginPath(); c.moveTo(X(17.6), 0); c.lineTo(X(17.6), H); }, 1.6 * K, 60, 0.12);
+  L.groove(c => { c.beginPath(); c.moveTo(X(NOSE_Z + 1.85), 0); c.lineTo(X(NOSE_Z + 1.85), H); }, 1.8 * K, 70, 0.18);
+  L.groove(c => { c.beginPath(); c.moveTo(X(TAIL_Z - 1.4), 0); c.lineTo(X(TAIL_Z - 1.4), H); }, 1.6 * K, 60, 0.12);
   // window doublers: rivet ring around each window
   for (const w of WINDOWS) { const x = X(w.z), y = Yt(thetaAt(w.z, WIN_Y, w.side)); for (let a = 0; a < 26; a++) { const t = a / 26 * Math.PI * 2; rv.push([x + Math.cos(t) * 0.2 * pxZ, y + Math.sin(t) * 0.26 * pxT]); } }
   L.rivets(rv, 1.15 * K, 22);
@@ -123,24 +129,24 @@ export function fuselageMaps(W = 4096, P = null) {
   for (const e of EXITS) { const b = outline(e.z, e.side, WIN_Y - 0.55, WIN_Y + 0.41, e.w, e.r, { red: true, gap: 1.8 }); const fy = e.side > 0 ? 1 : -1; C.fillStyle = 'rgba(200,40,30,0.9)'; C.fillRect(b.x + b.w * 0.25, b.y + b.h * 0.5 - fy * 0.3 * pxT, b.w * 0.5, 0.05 * pxT); }
   // cargo doors (right, lower), bulk door, avionics hatch, service panels
   const lowRect = (z0, z1, d0, d1, r = 0.1, o = {}) => L.groove(c => roundRect(c, X(z0), Yd(d0), X(z1) - X(z0), Yd(d1) - Yd(d0), r * pxZ), (o.gap || 1.8) * K, o.depth || 85, o.alpha ?? 0.35);
-  lowRect(-9.0, -7.2, 112, 150); lowRect(6.0, 7.8, 114, 150); lowRect(9.3, 10.1, 120, 146, 0.08); lowRect(-15.7, -14.9, 168, 192, 0.06);
-  lowRect(-16.3, -15.9, 118, 128, 0.03); lowRect(-15.5, -15.15, 236, 246, 0.03); lowRect(12.8, 13.2, 205, 215, 0.03); lowRect(14.0, 14.35, 150, 158, 0.03); lowRect(-11.6, -11.25, 200, 207, 0.03);
-  for (let i = 0; i < 26; i++) { const z = -12 + R() * 24, d = 150 + R() * 60, wz = 0.18 + R() * 0.3, wd = 2 + R() * 4; if (Math.abs(z - 1) < 6) continue; lowRect(z, z + wz, d, d + wd, 0.02, { gap: 1.2, depth: 55, alpha: 0.22 }); }
+  lowRect(D1 + 4.0, D1 + 5.8, 112, 150); lowRect(D2 - 5.6, D2 - 3.8, 114, 150); lowRect(D2 - 2.3, D2 - 1.5, 120, 146, 0.08); lowRect(D1 - 2.7, D1 - 1.9, 168, 192, 0.06);
+  lowRect(NOSE_Z + 2.3, NOSE_Z + 2.7, 118, 128, 0.03); lowRect(NOSE_Z + 3.1, NOSE_Z + 3.45, 236, 246, 0.03); lowRect(TAIL_Z - 6.2, TAIL_Z - 5.8, 205, 215, 0.03); lowRect(TAIL_Z - 5.0, TAIL_Z - 4.65, 150, 158, 0.03); lowRect(D1 + 1.4, D1 + 1.75, 200, 207, 0.03);
+  for (let i = 0; i < 26; i++) { const z = NOSE_Z + 6.6 + R() * (HULL_L - 13), d = 150 + R() * 60, wz = 0.18 + R() * 0.3, wd = 2 + R() * 4; if (Math.abs(z - 1) < 6) continue; lowRect(z, z + wz, d, d + wd, 0.02, { gap: 1.2, depth: 55, alpha: 0.22 }); }
   // static ports (grey "keep clean" patches) and the APU air inlet
-  for (const d of [96, 264]) { C.fillStyle = 'rgba(150,156,164,0.55)'; C.beginPath(); C.ellipse(X(-15.2), Yd(d), 0.1 * pxZ, 0.1 * pxT, 0, 0, 7); C.fill(); C.fillStyle = '#3a4048'; for (const k of [-1, 1]) { C.beginPath(); C.arc(X(-15.2) + k * 0.03 * pxZ, Yd(d), 1.8 * K, 0, 7); C.fill(); } C.strokeStyle = 'rgba(200,40,30,0.8)'; C.lineWidth = 2 * K; C.beginPath(); C.ellipse(X(-15.2), Yd(d), 0.13 * pxZ, 0.13 * pxT, 0, 0, 7); C.stroke(); }
-  lowRect(15.6, 16.2, 62, 72, 0.05); C.fillStyle = 'rgba(25,30,36,0.85)'; C.fillRect(X(15.65), Yd(63), X(16.15) - X(15.65), Yd(71) - Yd(63));
+  for (const d of [96, 264]) { C.fillStyle = 'rgba(150,156,164,0.55)'; C.beginPath(); C.ellipse(X(NOSE_Z + 3.4), Yd(d), 0.1 * pxZ, 0.1 * pxT, 0, 0, 7); C.fill(); C.fillStyle = '#3a4048'; for (const k of [-1, 1]) { C.beginPath(); C.arc(X(NOSE_Z + 3.4) + k * 0.03 * pxZ, Yd(d), 1.8 * K, 0, 7); C.fill(); } C.strokeStyle = 'rgba(200,40,30,0.8)'; C.lineWidth = 2 * K; C.beginPath(); C.ellipse(X(NOSE_Z + 3.4), Yd(d), 0.13 * pxZ, 0.13 * pxT, 0, 0, 7); C.stroke(); }
+  lowRect(TAIL_Z - 3.4, TAIL_Z - 2.8, 62, 72, 0.05); C.fillStyle = 'rgba(25,30,36,0.85)'; C.fillRect(X(TAIL_Z - 3.35), Yd(63), X(TAIL_Z - 2.85) - X(TAIL_Z - 3.35), Yd(71) - Yd(63));
   // nose gear bay (seen when the doors open)
-  C.fillStyle = '#2c3138'; C.fillRect(X(-14.7), Yd(170), X(-12.2) - X(-14.7), Yd(190) - Yd(170)); O.fillStyle = 'rgb(120,200,0)'; O.fillRect(X(-14.7), Yd(170), X(-12.2) - X(-14.7), Yd(190) - Yd(170));
+  C.fillStyle = '#2c3138'; C.fillRect(X(GEAR.noseZ - 1.8), Yd(170), X(GEAR.noseZ + 0.7) - X(GEAR.noseZ - 1.8), Yd(190) - Yd(170)); O.fillStyle = 'rgb(120,200,0)'; O.fillRect(X(GEAR.noseZ - 1.8), Yd(170), X(GEAR.noseZ + 0.7) - X(GEAR.noseZ - 1.8), Yd(190) - Yd(170));
   // ---- weathering: belly grime aft of the wing, streaks from doors/drains, wing-root stains, APU soot
   const streak = (x, y, len, dir, a, wdt) => { const g = C.createLinearGradient(x, y, x + len, y + dir * len * 0.25); g.addColorStop(0, `rgba(70,62,52,${a})`); g.addColorStop(1, 'rgba(70,62,52,0)'); C.save(); C.strokeStyle = g; C.lineWidth = wdt; C.beginPath(); C.moveTo(x, y); C.bezierCurveTo(x + len * 0.3, y + dir * len * 0.08, x + len * 0.7, y + dir * len * 0.2, x + len, y + dir * len * 0.26); C.stroke(); C.restore(); };
-  for (let i = 0; i < 140; i++) { const z = -4 + R() * 21, d = 150 + R() * 60; streak(X(z), Yd(d), (0.8 + R() * 3) * pxZ, d < 180 ? 1 : -1, 0.05 + R() * 0.07, (2 + R() * 6) * K); }
+  for (let i = 0; i < 140; i++) { const z = NOSE_Z + HULL_L * 0.39 + R() * HULL_L * 0.56, d = 150 + R() * 60; streak(X(z), Yd(d), (0.8 + R() * 3) * pxZ, d < 180 ? 1 : -1, 0.05 + R() * 0.07, (2 + R() * 6) * K); }
   for (const d of DOORS) for (const k of [0.1, 0.9]) { const y = Yt(thetaAt(d.z, DOOR.y0 + 0.1, d.side)); streak(X(d.z - DOOR.w / 2 + k * DOOR.w), y, 1.6 * pxZ, d.side > 0 ? 1 : -1, 0.07, 2.2 * K); }
-  { const g = C.createLinearGradient(0, Yd(140), 0, Yd(180)); g.addColorStop(0, 'rgba(60,55,48,0)'); g.addColorStop(1, 'rgba(60,55,48,0.12)'); C.fillStyle = g; C.fillRect(X(-2), Yd(140), X(17) - X(-2), Yd(40)); const g2 = C.createLinearGradient(0, Yd(180), 0, Yd(220)); g2.addColorStop(0, 'rgba(60,55,48,0.12)'); g2.addColorStop(1, 'rgba(60,55,48,0)'); C.fillStyle = g2; C.fillRect(X(-2), Yd(180), X(17) - X(-2), Yd(40)); }
+  { const gx0 = NOSE_Z + HULL_L * 0.4415, gx1 = NOSE_Z + HULL_L * 0.9468; const g = C.createLinearGradient(0, Yd(140), 0, Yd(180)); g.addColorStop(0, 'rgba(60,55,48,0)'); g.addColorStop(1, 'rgba(60,55,48,0.12)'); C.fillStyle = g; C.fillRect(X(gx0), Yd(140), X(gx1) - X(gx0), Yd(40)); const g2 = C.createLinearGradient(0, Yd(180), 0, Yd(220)); g2.addColorStop(0, 'rgba(60,55,48,0.12)'); g2.addColorStop(1, 'rgba(60,55,48,0)'); C.fillStyle = g2; C.fillRect(X(gx0), Yd(180), X(gx1) - X(gx0), Yd(40)); }
   // brake dust and runway grime thrown up behind the main gears, low on the belly
-  { const g = C.createLinearGradient(X(1.4), 0, X(5.4), 0); g.addColorStop(0, 'rgba(38,34,30,0)'); g.addColorStop(0.25, 'rgba(38,34,30,0.22)'); g.addColorStop(1, 'rgba(38,34,30,0)'); C.fillStyle = g; C.fillRect(X(1.4), Yd(166), X(5.4) - X(1.4), Yd(194) - Yd(166)); }
-  { const g = C.createLinearGradient(X(17.4), 0, X(19), 0); g.addColorStop(0, 'rgba(30,28,26,0)'); g.addColorStop(1, 'rgba(30,28,26,0.55)'); C.fillStyle = g; C.fillRect(X(17.4), 0, X(19) - X(17.4), H); O.fillStyle = g; }
-  { const g = O.createLinearGradient(X(17.4), 0, X(19), 0); g.addColorStop(0, 'rgba(230,140,0,0)'); g.addColorStop(1, 'rgba(200,215,0,0.8)'); O.fillStyle = g; O.fillRect(X(17.4), 0, X(19) - X(17.4), H); }
-  { O.save(); O.globalAlpha = 0.5; const g = O.createLinearGradient(0, Yd(140), 0, Yd(220)); g.addColorStop(0, 'rgba(255,90,0,0)'); g.addColorStop(0.5, 'rgb(240,140,0)'); g.addColorStop(1, 'rgba(255,90,0,0)'); O.fillStyle = g; O.fillRect(X(-2), Yd(140), X(17) - X(-2), Yd(80)); O.restore(); }
+  { const g = C.createLinearGradient(X(GEAR.mainZ + 0.15), 0, X(GEAR.mainZ + 4.15), 0); g.addColorStop(0, 'rgba(38,34,30,0)'); g.addColorStop(0.25, 'rgba(38,34,30,0.22)'); g.addColorStop(1, 'rgba(38,34,30,0)'); C.fillStyle = g; C.fillRect(X(GEAR.mainZ + 0.15), Yd(166), X(GEAR.mainZ + 4.15) - X(GEAR.mainZ + 0.15), Yd(194) - Yd(166)); }
+  { const g = C.createLinearGradient(X(TAIL_Z - 1.6), 0, X(TAIL_Z), 0); g.addColorStop(0, 'rgba(30,28,26,0)'); g.addColorStop(1, 'rgba(30,28,26,0.55)'); C.fillStyle = g; C.fillRect(X(TAIL_Z - 1.6), 0, X(TAIL_Z) - X(TAIL_Z - 1.6), H); O.fillStyle = g; }
+  { const g = O.createLinearGradient(X(TAIL_Z - 1.6), 0, X(TAIL_Z), 0); g.addColorStop(0, 'rgba(230,140,0,0)'); g.addColorStop(1, 'rgba(200,215,0,0.8)'); O.fillStyle = g; O.fillRect(X(TAIL_Z - 1.6), 0, X(TAIL_Z) - X(TAIL_Z - 1.6), H); }
+  { O.save(); O.globalAlpha = 0.5; const g = O.createLinearGradient(0, Yd(140), 0, Yd(220)); g.addColorStop(0, 'rgba(255,90,0,0)'); g.addColorStop(0.5, 'rgb(240,140,0)'); g.addColorStop(1, 'rgba(255,90,0,0)'); O.fillStyle = g; O.fillRect(X(NOSE_Z + HULL_L * 0.4415), Yd(140), X(NOSE_Z + HULL_L * 0.9468) - X(NOSE_Z + HULL_L * 0.4415), Yd(80)); O.restore(); }
   // fine orange-peel / dirt noise in height + colour
   Hc.save(); for (let i = 0; i < W * H / 60; i++) { const v = 128 + ((R() - 0.5) * 10) | 0; Hc.fillStyle = `rgb(${v},${v},${v})`; Hc.fillRect(R() * W, R() * H, 2, 2); } Hc.restore();
   C.save(); C.globalAlpha = 0.035; for (let i = 0; i < 9000; i++) { C.fillStyle = R() < 0.5 ? '#6f6a60' : '#ffffff'; C.fillRect(R() * W, R() * H, 2 + R() * 6, 1 + R() * 3); } C.restore();
@@ -151,8 +157,8 @@ export function fuselageMaps(W = 4096, P = null) {
     EC.fillStyle = 'rgb(255,122,26)'; EC.beginPath(); EC.moveTo(0, H / 2 - sw(0)); for (let x = 0; x <= W; x += 8) EC.lineTo(x, H / 2 - sw(x)); for (let x = W; x >= 0; x -= 8) EC.lineTo(x, H / 2 + sw(x)); EC.closePath(); EC.fill();
     const sideE = (fn, th, z, flipX, flipY) => { EC.save(); EC.translate(X(z), Yt(th)); EC.scale((flipX ? -1 : 1) * asp, flipY ? -1 : 1); fn(EC); EC.restore(); };
     const titleE = c => { const f = Math.round(0.78 * pxT); c.textBaseline = 'middle'; c.textAlign = 'center'; c.fillStyle = '#ffa04a'; c.font = `700 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.fillText('NICOFOXHEART', -0.9 * pxT, 0); const w = c.measureText('NICOFOXHEART').width; c.fillStyle = '#ffd9a8'; c.font = `300 ${f}px "Saira Condensed", "Arial Narrow", sans-serif`; c.textAlign = 'left'; c.fillText('AIR', -0.9 * pxT + w / 2 + 0.18 * pxT, 0); };
-    sideE(titleE, thT, -6.6, true, false); sideE(titleE, Math.PI * 2 - thT, -6.6, false, true);
-    for (const [th, fx, fy] of [[thT, true, false], [Math.PI * 2 - thT, false, true]]) sideE(c => foxHeart(c, 0, 0, 0.42 * pxT), th, -14.75, fx, fy);
+    sideE(titleE, thT, titleZ, true, false); sideE(titleE, Math.PI * 2 - thT, titleZ, false, true);
+    for (const [th, fx, fy] of [[thT, true, false], [Math.PI * 2 - thT, false, true]]) sideE(c => foxHeart(c, 0, 0, 0.42 * pxT), th, heartZ, fx, fy);
     outF.emis = tex(E.cv); }
   return outF;
 }

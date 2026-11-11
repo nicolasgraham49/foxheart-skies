@@ -9,9 +9,10 @@
 import * as THREE from 'three';
 import { atmos } from './sky.js';
 import { V3, clamp, smooth, lerp, rng, canvas, tex, latheZ, mergeAll, attr, boxUV, heightToNormal } from './ac-util.js';
-import { NOSE_Z, TAIL_Z, HULL_L, SEC, hullPoint, hullNormal, thetaAt, WINDOWS, DOORS, DOOR, WIN_Y, GEAR } from './ac-shape.js';
+import { NOSE_Z, NOSE_SCALE, TAIL_Z, HULL_L, SEC, hullPoint, hullNormal, thetaAt, WINDOWS, DOORS, DOOR, WIN_Y, GEAR } from './ac-shape.js';
 import { fuselageMaps, finMaps, wingMaps, wingletMaps, nacelleMaps, spinnerTex, panelTile, paintFor, savedLivery } from './ac-livery.js';
 import { airlinerGeometry } from './ac-traffic.js';
+import { currentType } from './ac-types.js';
 
 const PI = Math.PI, D = PI / 180;
 const _a = V3(), _b = V3(), _c = V3(), _n = V3(), _m = V3(), _n2 = V3();
@@ -61,7 +62,10 @@ function latheBand(prof, seg, v0, v1, flipN) { const g = latheZ(prof, seg, { uvL
 const arcLen = prof => { let L = 0; for (let i = 1; i < prof.length; i++) L += Math.hypot(prof[i][0] - prof[i - 1][0], prof[i][1] - prof[i - 1][1]); return L; };
 
 // ================================================================ hull (+ blended belly fairing)
-const FAIR = { zA: -7.6, zB: 7.2, yc: -0.95, a: 2.2, b: 1.24, n: 2.8, k: 0.22 };
+// [Aircraft types] FAIR/WG/HT/VT/ENG below are the FOX values; buildPlayerAircraft re-points them
+// at the selected type's vis spec before building (zA/zB derive from the wing root position).
+let FAIR = { zA: -7.6, zB: 7.2, yc: -0.95, a: 2.2, b: 1.24, n: 2.8, k: 0.22 };
+let MASK = false, FLATFAN = false;
 export function fairing(p) {
   const e = smooth(FAIR.zA, FAIR.zA + 3.4, p.z) * (1 - smooth(FAIR.zB - 5.4, FAIR.zB, p.z)); if (e <= 0) return p;
   const wy = 1 - smooth(-0.45, 0.3, p.y); if (wy <= 0) return p;
@@ -96,7 +100,7 @@ function windowsGeo(hi) {
   for (const w of cab) {
     const R = skin(w.z, w.th + 0.01).distanceTo(skin(w.z, w.th - 0.01)) / 0.02, sd = w.side;
     const at = (a, b, off) => { const z = w.z + a, th = w.th - sd * b / R; return [skin(z, th, off), hullNormal(z, th)]; };
-    const u = (idx++ + 0.5) / 128; const c = at(0, 0, 0.004); const ring = outline.map(([a, b]) => at(a, b, 0.004));
+    const u = (idx++ + 0.5) / GLOW_N; const c = at(0, 0, 0.004); const ring = outline.map(([a, b]) => at(a, b, 0.004));
     const ringO = outline.map(([a, b]) => { const l = Math.hypot(a, b) || 1; return at(a + a / l * 0.035, b + b / l * 0.035, 0.0015); });
     const ringI = outline.map(([a, b]) => { const l = Math.hypot(a, b) || 1; return at(a - a / l * 0.004, b - b / l * 0.004, 0.009); });
     const n = outline.length;
@@ -107,12 +111,14 @@ function windowsGeo(hi) {
   const panes = [[[1.24, 2.6], [2.24, 2.6], [2.56, 31.5], [1.62, 40]], [[1.8, 43.5], [2.62, 35.5], [3.12, 50.5], [2.3, 62]], [[2.44, 65], [3.2, 54], [3.66, 58.5], [3.0, 72.5]]];
   const nP = hi ? 5 : 2;
   for (const sd of [1, -1]) for (const pc of panes) {
-    const cor = pc.map(([d, t]) => [NOSE_Z + d, (sd > 0 ? t : 360 - t) * D]); const cz = cor.reduce((s, c) => s + c[0], 0) / 4, ct = cor.reduce((s, c) => s + c[1], 0) / 4;
+    const cor = pc.map(([d, t]) => [NOSE_Z + d * NOSE_SCALE, (sd > 0 ? t : 360 - t) * D]); const cz = cor.reduce((s, c) => s + c[0], 0) / 4, ct = cor.reduce((s, c) => s + c[1], 0) / 4;
     const bil = (u, v, grow = 0) => { let z = (1 - v) * ((1 - u) * cor[0][0] + u * cor[3][0]) + v * ((1 - u) * cor[1][0] + u * cor[2][0]); let t = (1 - v) * ((1 - u) * cor[0][1] + u * cor[3][1]) + v * ((1 - u) * cor[1][1] + u * cor[2][1]);
       if (grow) { const R = 1.6, dz = z - cz, dt = (t - ct) * R, l = Math.hypot(dz, dt) || 1; z += dz / l * grow; t += dt / l * grow / R; } return [z, t]; };
     const S = (z, t, off) => [skin(z, t, off), skinN(z, t)];
     const Q = (A, B, C, Dd, soup, uu) => { triO(soup, A, B, C, uu, 0.5); triO(soup, A, C, Dd, uu, 0.5); };
-    const u = 127.5 / 128; // flight deck: emissive slot 127 (dim)
+    if (MASK) { // Airbus-style black cockpit mask: a dark band grown around the pane, under the glass
+      const p = (a, b) => S(...bil(a, b, 0.11), 0.002); Q(p(0, 0), p(1, 0), p(1, 1), p(0, 1), seal, 0); }
+    const u = (GLOW_N - 0.5) / GLOW_N; // flight deck: last emissive slot (dim)
     for (let i = 0; i < nP; i++) for (let j = 0; j < nP; j++) { const p = (a, b) => S(...bil(a / nP, b / nP), 0.004); Q(p(i, j), p(i + 1, j), p(i + 1, j + 1), p(i, j + 1), glass, u); }
     // seal / frame ring around the pane (perimeter walk)
     const per = []; for (let k = 0; k < nP; k++) per.push([k / nP, 0]); for (let k = 0; k < nP; k++) per.push([1, k / nP]); for (let k = nP; k > 0; k--) per.push([k / nP, 1]); for (let k = nP; k > 0; k--) per.push([0, k / nP]);
@@ -122,7 +128,8 @@ function windowsGeo(hi) {
   }
   return { glass: glass.geo(), seal: colorise(boxUV(seal.geo(), 2), [0.16, 0.17, 0.19]), count: idx };
 }
-function windowGlowTex(n) { const { cv, c } = canvas(128, 1); const R = rng(5); for (let i = 0; i < 128; i++) { const lit = i === 127 ? 0.25 : (R() < 0.86 ? 0.75 + R() * 0.25 : 0.12); const h = 32 + R() * 10; c.fillStyle = `hsl(${h},85%,${Math.round(lit * 70)}%)`; c.fillRect(i, 0, 1, 1); } const t = tex(cv); t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; }
+const GLOW_N = 256; // window-glow slots (was 128; the widebody has more windows than slots — same first-128 sequence for the fox)
+function windowGlowTex(n) { const { cv, c } = canvas(GLOW_N, 1); const R = rng(5); for (let i = 0; i < GLOW_N; i++) { const lit = i === GLOW_N - 1 ? 0.25 : (R() < 0.86 ? 0.75 + R() * 0.25 : 0.12); const h = 32 + R() * 10; c.fillStyle = `hsl(${h},85%,${Math.round(lit * 70)}%)`; c.fillRect(i, 0, 1, 1); } const t = tex(cv); t.magFilter = t.minFilter = THREE.NearestFilter; t.generateMipmaps = false; return t; }
 
 // ================================================================ hull details: antennas, probes, handles, APU exhaust
 function blade(L, H, sw, t) { // swept blade antenna: x along (aft), y up, z lateral (centred)
@@ -137,20 +144,20 @@ function hullDetails(hi) {
   // GPS / satcom domes on the crown
   for (const [z, th] of [[-3.0, 0.07], [-3.0, -0.07], [-1.5, 0]]) { const g = new THREE.SphereGeometry(0.09, 10, 5, 0, PI * 2, 0, PI / 2); g.scale(1, 0.35, 1.5); paint.push(pv(g.applyMatrix4(onHullMatrix(z, th, 0.0)), [0.86, 0.87, 0.88])); }
   // pitot probes (L-shaped: blade mast + forward tube), AoA vanes, TAT probe
-  for (const [sd, y, z] of [[1, 0.3, -16.05], [-1, 0.3, -16.05], [-1, -0.05, -15.75]]) {
+  for (const [sd, y, z] of [[1, 0.3, NOSE_Z + 2.55 * NOSE_SCALE], [-1, 0.3, NOSE_Z + 2.55 * NOSE_SCALE], [-1, -0.05, NOSE_Z + 2.85 * NOSE_SCALE]]) {
     const m = onHullMatrix(z, thetaAt(z, y, sd), 0.01);
     metal.push(colorise(blade(0.12, 0.11, 0.07, 0.016).applyMatrix4(m), [0.78, 0.8, 0.82]));
     metal.push(colorise(new THREE.CylinderGeometry(0.011, 0.015, 0.2, 8).rotateZ(PI / 2).translate(-0.02, 0.105, 0).applyMatrix4(m), [0.8, 0.82, 0.84]));
   }
-  for (const sd of [1, -1]) { const z = -15.45, th = thetaAt(z, 0.02, sd); const g = new THREE.BoxGeometry(0.1, 0.07, 0.008).translate(0.04, 0.035, 0); dark.push(colorise(g.applyMatrix4(onHullMatrix(z, th, 0.005)), [0.12, 0.12, 0.13])); }
+  for (const sd of [1, -1]) { const z = NOSE_Z + 3.15 * NOSE_SCALE, th = thetaAt(z, 0.02, sd); const g = new THREE.BoxGeometry(0.1, 0.07, 0.008).translate(0.04, 0.035, 0); dark.push(colorise(g.applyMatrix4(onHullMatrix(z, th, 0.005)), [0.12, 0.12, 0.13])); }
   // windshield wipers, parked along the lower edge of the two front panes per side:
   // blade (long in the lateral axis) + arm, sitting just proud of the glass
   for (const sd of [1, -1]) for (const [d, thd, bl] of [[1.43, 21, 0.34], [2.05, 53, 0.28]]) {
-    const m = onHullMatrix(NOSE_Z + d, (sd > 0 ? thd : 360 - thd) * PI / 180, -0.004);
+    const m = onHullMatrix(NOSE_Z + d * NOSE_SCALE, (sd > 0 ? thd : 360 - thd) * PI / 180, -0.004);
     dark.push(colorise(new THREE.BoxGeometry(0.018, 0.010, bl).translate(0, 0.006, bl * 0.36).applyMatrix4(m), [0.10, 0.10, 0.11]));
     dark.push(colorise(new THREE.BoxGeometry(0.09, 0.008, 0.026).translate(0.03, 0.004, -0.03).applyMatrix4(m), [0.13, 0.13, 0.14]));
   }
-  { const z = -14.6, th = thetaAt(z, 0.75, -1); const g = blade(0.08, 0.07, 0.03, 0.02); metal.push(colorise(g.applyMatrix4(onHullMatrix(z, th, 0.01)), [0.75, 0.77, 0.8])); }
+  { const z = NOSE_Z + 4.0 * NOSE_SCALE, th = thetaAt(z, 0.75, -1); const g = blade(0.08, 0.07, 0.03, 0.02); metal.push(colorise(g.applyMatrix4(onHullMatrix(z, th, 0.01)), [0.75, 0.77, 0.8])); }
   // door handles (flush flaps) + slide-bar fairings, cargo-door hinge strips
   for (const d of DOORS) { const y = (DOOR.y0 + DOOR.y1) / 2 - 0.05, th = thetaAt(d.z, y, d.side); const g = new THREE.BoxGeometry(0.3, 0.012, 0.075, 2, 1, 1); g.translate(0, 0.004, 0); dark.push(colorise(g.applyMatrix4(onHullMatrix(d.z, th, 0.0)), [0.3, 0.32, 0.35]));
     const vp = new THREE.CylinderGeometry(0.075, 0.08, 0.012, hi ? 16 : 8).translate(0, 0.0, 0); const thv = thetaAt(d.z, y + 0.42, d.side); dark.push(colorise(vp.applyMatrix4(onHullMatrix(d.z, thv, 0.004)), [0.08, 0.09, 0.1])); }
@@ -199,7 +206,7 @@ function slab(sec, ss, cA, cB, lift = 0.012, uv) {
 function wick(p, dir, uvAt) { const g = new THREE.CylinderGeometry(0.004, 0.009, 0.3, 5); g.translate(0, 0.15, 0); g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), dir.clone().normalize())); g.translate(p.x, p.y, p.z); const n = g.toNonIndexed(); const U = n.attributes.uv; for (let i = 0; i < U.count; i++) U.setXY(i, uvAt[0], uvAt[1]); return n; }
 
 // main wing planform: cranked trailing edge, washout, supercritical-ish section
-const WG = { b0: 1.2, bK: 6.2, bT: 16.95, sweep: Math.tan(27 * D), dih: Math.tan(5.5 * D), zRef: -4.3, bRef: 1.7, yRef: -1.05 };
+let WG = { b0: 1.2, bK: 6.2, bT: 16.95, sweep: Math.tan(27 * D), dih: Math.tan(5.5 * D), zRef: -4.3, bRef: 1.7, yRef: -1.05 };
 export function wingSec(b) {
   const le = WG.zRef + (b - WG.bRef) * WG.sweep, y = WG.yRef + (b - WG.bRef) * WG.dih, kin = b <= WG.bK;
   const f = kin ? (b - WG.b0) / (WG.bK - WG.b0) : (b - WG.bK) / (WG.bT - WG.bK);
@@ -208,52 +215,59 @@ export function wingSec(b) {
   return { le: V3(b, y, le), chord: te - le, cdir: V3(0, -Math.sin(inc), Math.cos(inc)), tdir: V3(0, Math.cos(inc), Math.sin(inc)), t, cam: 0.022 };
 }
 const wingS = b => (b - WG.b0) / (WG.bT - WG.b0);
+let WLET = 1; // winglet size scale (per type)
 function sharkletSec(s) { // right side; s = 0 at the wingtip section
-  const T = wingSec(WG.bT), Rb = 0.62, phiM = 76 * D, arc = Rb * phiM, Ls = 2.0, L = s * (arc + Ls);
+  const T = wingSec(WG.bT), Rb = 0.62, phiM = 76 * D, arc = Rb * phiM, Ls = 2.0 * WLET, L = s * (arc + Ls);
   let x, y, phi; if (L <= arc) { phi = L / Rb; x = WG.bT + Rb * Math.sin(phi); y = T.le.y + Rb * (1 - Math.cos(phi)); } else { phi = phiM; x = WG.bT + Rb * Math.sin(phiM) + Math.cos(phiM) * (L - arc); y = T.le.y + Rb * (1 - Math.cos(phiM)) + Math.sin(phiM) * (L - arc); }
   const inc = lerp(-1.0, 0, s) * D, ci = Math.cos(inc);
   return { le: V3(x, y, T.le.z + 2.0 * Math.pow(s, 1.3)), chord: lerp(T.chord, 0.36, Math.pow(s, 0.75)), cdir: V3(0, -Math.sin(inc), ci), tdir: V3(-Math.sin(phi) * ci, Math.cos(phi) * ci, Math.sin(inc)), t: lerp(T.t, 0.085, s), cam: lerp(T.cam, 0.004, smooth(0, 0.4, s)) };
 }
-const HT = { b0: 0.35, bT: 6.3, z0: 13.7, y0: 1.0, sweep: Math.tan(32 * D), dih: Math.tan(6 * D), cr: 3.75, ct: 1.3 };
+let HT = { b0: 0.35, bT: 6.3, z0: 13.7, y0: 1.0, sweep: Math.tan(32 * D), dih: Math.tan(6 * D), cr: 3.75, ct: 1.3 };
 function htpSec(b) { const f = (b - HT.b0) / (HT.bT - HT.b0); return { le: V3(b, HT.y0 + (b - HT.b0) * HT.dih, HT.z0 + (b - HT.b0) * HT.sweep), chord: lerp(HT.cr, HT.ct, f), cdir: V3(0, 0, 1), tdir: V3(0, 1, 0), t: lerp(0.11, 0.09, f), cam: 0 }; }
-const VT = { y0: 1.4, h: 6.45, z0: 11.55, sweep: Math.tan(37 * D), cr: 6.05, ct: 2.05 };
+let VT = { y0: 1.4, h: 6.45, z0: 11.55, sweep: Math.tan(37 * D), cr: 6.05, ct: 2.05 };
 function finSec(s) { return { le: V3(0, VT.y0 + VT.h * s, VT.z0 + VT.h * s * VT.sweep), chord: lerp(VT.cr, VT.ct, s), cdir: V3(0, 0, 1), tdir: V3(1, 0, 0), t: lerp(0.115, 0.09, s), cam: 0 }; }
 
 // ================================================================ engine
-const ENG = { x: 5.75, y: -1.95, z0: -6.95 };
+let ENG = { x: 5.75, y: -1.95, z0: -6.95, scale: 1 };
 const NAC = [[0.99, 0.95], [0.985, 0.72], [0.968, 0.45], [0.948, 0.22], [0.942, 0.12], [0.948, 0.05], [0.962, 0.016], [0.982, 0.002], [1.0, 0], [1.024, 0.008], [1.05, 0.03], [1.078, 0.07], [1.105, 0.13], [1.135, 0.27], [1.16, 0.5], [1.178, 0.85], [1.187, 1.3], [1.187, 1.75], [1.18, 2.2]];
 const SLV = [[1.18, 2.2], [1.168, 2.65], [1.14, 3.15], [1.1, 3.6], [1.05, 3.95], [1.0, 4.2], [0.993, 4.236], [0.982, 4.232], [0.976, 4.19], [1.0, 3.8], [1.02, 3.2], [1.03, 2.6]];
 const CORE = [[0.0, 3.0], [0.74, 3.2], [0.76, 3.7], [0.74, 4.25], [0.69, 4.7], [0.62, 5.1], [0.56, 5.37], [0.553, 5.402], [0.542, 5.398], [0.535, 5.3]];
 const PLUG = [[0.0, 5.0], [0.41, 5.1], [0.4, 5.4], [0.36, 5.65], [0.27, 5.9], [0.15, 6.1], [0.04, 6.2], [0.0, 6.21]];
-function bladesGeo(n, hi) { // wide-chord swept fan blades around +z at z = 0
+function bladesGeo(n, hi, es = 1) { // wide-chord swept fan blades around +z at z = 0
   const P = []; const rows = hi ? 6 : 3, cols = hi ? 4 : 2;
   for (let k = 0; k < n; k++) { const ps = k / n * PI * 2; const er = V3(Math.cos(ps), Math.sin(ps), 0), et = V3(-Math.sin(ps), Math.cos(ps), 0), ez = V3(0, 0, 1);
-    const g = sheet(rows + 1, cols + 1, (i, j) => { const f = i / rows, r = lerp(0.32, 0.975, f), beta = lerp(32, 62, f) * D, ch = lerp(0.26, 0.44, Math.sin(f * PI * 0.62)), sw = 0.07 * f * f - 0.02, c = j / cols - 0.5, bow = 0.03 * (1 - 4 * c * c) * (1 - f * 0.5);
+    const g = sheet(rows + 1, cols + 1, (i, j) => { const f = i / rows, r = lerp(0.32, 0.975, f) * es, beta = lerp(32, 62, f) * D, ch = lerp(0.26, 0.44, Math.sin(f * PI * 0.62)) * es, sw = (0.07 * f * f - 0.02) * es, c = j / cols - 0.5, bow = 0.03 * (1 - 4 * c * c) * (1 - f * 0.5) * es;
       return er.clone().multiplyScalar(r).addScaledVector(ez, Math.cos(beta) * c * ch + sw).addScaledVector(et, Math.sin(beta) * c * ch).addScaledVector(ez.clone().multiplyScalar(-Math.sin(beta)).addScaledVector(et, Math.cos(beta)), bow); }, (i, j) => [j / cols, i / rows]);
     P.push(g); }
   return mergeAll(P);
 }
 const nacBandsOf = () => { const Lall = arcLen([...NAC, ...SLV.slice(1)]); return { lipIn: arcLen(NAC.slice(0, 6)) / Lall, lipOut: arcLen(NAC.slice(0, 13)) / Lall, cowl: arcLen(NAC) / Lall }; };
-function engineParts(sd, hi, ex = sd * ENG.x, ey = ENG.y, z0 = ENG.z0) {
-  const seg = hi ? 48 : 20, Lall = arcLen([...NAC, ...SLV.slice(1)]), Lnac = arcLen(NAC), bands = nacBandsOf();
-  const nac = latheBand(NAC, seg, 0, Lnac / Lall); nac.translate(ex, ey, z0);
-  const sleeve = latheBand(SLV, seg, Lnac / Lall, 1); sleeve.translate(ex, ey, z0);
-  const core = colorise(latheZ(CORE, seg), [0.62, 0.64, 0.67]); core.translate(ex, ey, z0);
-  const plug = colorise(latheZ(PLUG, seg >> 1), [0.34, 0.31, 0.29]); plug.translate(ex, ey, z0);
+function engineParts(sd, hi, ex = sd * ENG.x, ey = ENG.y, z0 = ENG.z0, es = ENG.scale || 1) {
+  const seg = hi ? 48 : 20;
+  const NACs = es === 1 ? NAC : NAC.map(([r, z]) => [r * es, z * es]), SLVs = es === 1 ? SLV : SLV.map(([r, z]) => [r * es, z * es]);
+  const COREs = es === 1 ? CORE : CORE.map(([r, z]) => [r * es, z * es]), PLUGs = es === 1 ? PLUG : PLUG.map(([r, z]) => [r * es, z * es]);
+  const Lall = arcLen([...NACs, ...SLVs.slice(1)]), Lnac = arcLen(NACs), bands = nacBandsOf();
+  const nac = latheBand(NACs, seg, 0, Lnac / Lall);
+  if (FLATFAN) { // Boeing-style flattened-bottom intake (ground clearance on a low-slung nacelle)
+    const P = nac.attributes.position; for (let i = 0; i < P.count; i++) { const y = P.getY(i); if (y < -0.5 * es) P.setY(i, -0.5 * es + (y + 0.5 * es) * 0.45); } nac.computeVertexNormals(); }
+  nac.translate(ex, ey, z0);
+  const sleeve = latheBand(SLVs, seg, Lnac / Lall, 1); sleeve.translate(ex, ey, z0);
+  const core = colorise(latheZ(COREs, seg), [0.62, 0.64, 0.67]); core.translate(ex, ey, z0);
+  const plug = colorise(latheZ(PLUGs, seg >> 1), [0.34, 0.31, 0.29]); plug.translate(ex, ey, z0);
   // fan face backdrop (booster / OGV ring) and the reverser cascade revealed when the sleeve opens
-  const disk = colorise(new THREE.RingGeometry(0.3, 0.995, seg, 1).translate(ex, ey, z0 + 1.2), [0.035, 0.037, 0.04]);
-  const ogv = colorise(latheZ([[0.99, 1.0], [0.99, 1.25]], seg, { flip: true }), [0.08, 0.085, 0.09]); ogv.translate(ex, ey, z0);
-  const casc = colorise(latheZ([[1.12, 2.15], [1.12, 2.85]], seg), [0.07, 0.07, 0.075]); casc.translate(ex, ey, z0);
+  const disk = colorise(new THREE.RingGeometry(0.3 * es, 0.995 * es, seg, 1).translate(ex, ey, z0 + 1.2 * es), [0.035, 0.037, 0.04]);
+  const ogv = colorise(latheZ([[0.99 * es, 1.0 * es], [0.99 * es, 1.25 * es]], seg, { flip: true }), [0.08, 0.085, 0.09]); ogv.translate(ex, ey, z0);
+  const casc = colorise(latheZ([[1.12 * es, 2.15 * es], [1.12 * es, 2.85 * es]], seg), [0.07, 0.07, 0.075]); casc.translate(ex, ey, z0);
   // pylon (strut) + aft fairing down to the core
   const b = Math.abs(ex), wl = z => { const S = wingSec(b); const c = clamp((z - S.le.z) / S.chord, 0, 1); return fpt(S, c, -1).y; };
   const zLE = wingSec(b).le.z;
   const pyl = loftZ(hi ? 16 : 8, hi ? 20 : 10, t => {
-    const z = lerp(z0 + 0.9, z0 + 7.0, t), top = z < zLE ? lerp(ey + 1.3, wl(zLE) + 0.05, smooth(z0 + 0.9, zLE, z)) : wl(z) + 0.12;
-    const bot = z < z0 + 4.0 ? ey + 1.02 : lerp(ey + 1.02, ey + 0.62, smooth(z0 + 4.0, z0 + 4.8, z)) + (z > z0 + 5.6 ? (wl(z) + 0.05 - ey - 0.62) * smooth(z0 + 5.6, z0 + 7.0, z) : 0);
-    const hx = 0.21 * smooth(z0 + 0.85, z0 + 1.9, z) * (1 - 0.55 * smooth(z0 + 4.6, z0 + 7.0, z)) + 0.02;
+    const z = lerp(z0 + 0.9 * es, z0 + 7.0 * es, t), top = z < zLE ? lerp(ey + 1.3 * es, wl(zLE) + 0.05, smooth(z0 + 0.9 * es, zLE, z)) : wl(z) + 0.12;
+    const bot = z < z0 + 4.0 * es ? ey + 1.02 * es : lerp(ey + 1.02 * es, ey + 0.62 * es, smooth(z0 + 4.0 * es, z0 + 4.8 * es, z)) + (z > z0 + 5.6 * es ? (wl(z) + 0.05 - ey - 0.62 * es) * smooth(z0 + 5.6 * es, z0 + 7.0 * es, z) : 0);
+    const hx = (0.21 * smooth(z0 + 0.85 * es, z0 + 1.9 * es, z) * (1 - 0.55 * smooth(z0 + 4.6 * es, z0 + 7.0 * es, z)) + 0.02) * es;
     return { z, cx: ex, cy: (top + bot) / 2, hx, hy: Math.max(0.03, (top - bot) / 2), n: 3.2 }; });
-  const pylon = pv(pyl, [0.9, 0.91, 0.92]); { const P = pylon.attributes.position, C = pylon.attributes.color; for (let i = 0; i < P.count; i++) if (P.getZ(i) > z0 + 4.2 && P.getY(i) < ey + 1.0) C.setXYZ(i, 0.55, 0.53, 0.5); }
-  return { nac, sleeve, core, plug, disk, ogv, casc, pylon, bands, fanZ: z0 + 0.95, ex, ey, z0 };
+  const pylon = pv(pyl, [0.9, 0.91, 0.92]); { const P = pylon.attributes.position, C = pylon.attributes.color; for (let i = 0; i < P.count; i++) if (P.getZ(i) > z0 + 4.2 * es && P.getY(i) < ey + 1.0 * es) C.setXYZ(i, 0.55, 0.53, 0.5); }
+  return { nac, sleeve, core, plug, disk, ogv, casc, pylon, bands, fanZ: z0 + 0.95 * es, ex, ey, z0 };
 }
 
 // ================================================================ gear
@@ -266,7 +280,7 @@ function hubGeo(R, W, hi) { const h = W / 2; const out = [[R * 0.61, h * 0.97], 
 function tyreTex() { const { cv, c } = canvas(64, 256); c.fillStyle = '#808080'; c.fillRect(0, 0, 64, 256); c.fillStyle = '#303030'; for (const v of [0.36, 0.45, 0.55, 0.64]) c.fillRect(0, (1 - v) * 256 - 2, 64, 4); c.fillStyle = '#9a9a9a'; for (let y = 0; y < 256; y += 9) if (y < 70 || y > 186) c.fillRect(0, y, 64, 1);
   const n = tex(heightToNormal(cv, 3, true), { srgb: false }); n.wrapS = n.wrapT = THREE.RepeatWrapping; return n; }
 function mainGear(sd, hi) {
-  const R = GEAR.wheelR, W = GEAR.wheelW, L = -(-3.62 + R) + GEAR.hingeY; // hinge -> axle drop (positive)
+  const R = GEAR.wheelR, W = GEAR.wheelW, L = -(GEAR.wheelY + R) + GEAR.hingeY; // hinge -> axle drop (positive)
   const ay = -L, paint = [], metal = [];
   const cyl = (r0, r1, y0, y1, n = hi ? 14 : 8, x = 0, z = 0) => new THREE.CylinderGeometry(r1, r0, y1 - y0, n).translate(x, (y0 + y1) / 2, z);
   paint.push(pv(new THREE.CylinderGeometry(0.13, 0.13, 0.75, hi ? 12 : 6).rotateX(PI / 2), [0.8, 0.81, 0.83])); // trunnion
@@ -287,7 +301,7 @@ function mainGear(sd, hi) {
   return { paint, metal, axleY: ay };
 }
 function noseGear(hi) {
-  const R = GEAR.noseR, W = GEAR.noseW, L = -(-3.62 + R) + GEAR.noseHingeY, ay = -L, paint = [], metal = [];
+  const R = GEAR.noseR, W = GEAR.noseW, L = -(GEAR.wheelY + R) + GEAR.noseHingeY, ay = -L, paint = [], metal = [];
   const cyl = (r0, r1, y0, y1, n = hi ? 12 : 6, x = 0, z = 0) => new THREE.CylinderGeometry(r1, r0, y1 - y0, n).translate(x, (y0 + y1) / 2, z);
   paint.push(pv(cyl(0.1, 0.1, -0.95, 0.05), [0.8, 0.81, 0.83]), pv(cyl(0.125, 0.125, -0.62, -0.45), [0.78, 0.79, 0.81]));
   metal.push(colorise(cyl(0.072, 0.072, ay + 0.12, -0.9), [0.92, 0.93, 0.95]));
@@ -327,6 +341,10 @@ function contrails() { // two world-space ribbons, newest sample first; billboar
 // ================================================================ build
 export function buildPlayerAircraft(quality = 'high') {
   const hi = quality !== 'low', big = quality === 'high' || quality === 'ultra', shadow = quality === 'ultra';
+  // [Aircraft types] point the shared planform/engine/fairing state at the selected type
+  const TV = currentType().vis;
+  WG = TV.wg; HT = TV.ht; VT = TV.vt; ENG = TV.eng; WLET = TV.wingletScale || 1; MASK = !!TV.mask; FLATFAN = !!TV.flatFan;
+  FAIR = { zA: WG.zRef - 3.3, zB: WG.zRef + 11.5, yc: TV.fair.yc, a: TV.fair.a, b: TV.fair.b, n: 2.8, k: 0.22 };
   const root = new THREE.Group(); root.name = 'aircraft';
   const model = new THREE.Group(); model.name = 'exterior'; root.add(model);
   const detail = new THREE.Group(); detail.name = 'detail'; model.add(detail);
@@ -366,32 +384,33 @@ export function buildPlayerAircraft(quality = 'high') {
     return { pivot, axis: h1.clone().sub(h0).normalize(), home: h0.clone(), sign: sd, chord: (sec(b0).chord + sec(b1).chord) / 2, mesh };
   };
   const attachTo = (P, geo, mat) => { const m = new THREE.Mesh(geo, mat); m.position.copy(P.home).negate(); m.castShadow = shadow; P.pivot.add(m); return m; };
+  const K = WG.bT / 16.95, KB = a => a.map(b => b * K); // spanwise station scale vs the fox planform (1 for the fox)
   for (const sd of [1, -1]) {
     const sec = sd > 0 ? wingSec : mirrorSec(wingSec), bs = b => b * 1; // stations in |b|
     const S = b => sec(b), sOf = b => wingS(b);
-    const box = [1.2, 2.0, 2.4, 3.0, 3.9, 4.75, 5.45, 6.05, 6.2, 7.3, 8.3, 9.4, 10.5, 11.6, 12.0, 12.2, 13.4, 14.4, 15.6, 16.3, 16.95];
+    const box = KB([1.2, 2.0, 2.4, 3.0, 3.9, 4.75, 5.45, 6.05, 6.2, 7.3, 8.3, 9.4, 10.5, 11.6, 12.0, 12.2, 13.4, 14.4, 15.6, 16.3, 16.95]);
     statWing.push(foil({ sec: S, ss: box, c0: 0.12, c1: 0.74, nc: ncB, uv: wUV, sOf }));
-    statWing.push(foil({ sec: S, ss: [1.2, 1.8, 2.4], c0: 0, c1: 0.12, nc: ncD, uv: wUV, sOf }), foil({ sec: S, ss: [5.45, 6.05], c0: 0, c1: 0.12, nc: ncD, uv: wUV, sOf, caps: [true, true] }), foil({ sec: S, ss: [16.6, 16.95], c0: 0, c1: 0.12, nc: ncD, uv: wUV, sOf, caps: [true, false] }));
-    statWing.push(foil({ sec: S, ss: [1.2, 2.0], c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf }), foil({ sec: S, ss: [12.0, 12.2], c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), foil({ sec: S, ss: [15.6, 16.3, 16.95], c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, false] }));
+    statWing.push(foil({ sec: S, ss: KB([1.2, 1.8, 2.4]), c0: 0, c1: 0.12, nc: ncD, uv: wUV, sOf }), foil({ sec: S, ss: KB([5.45, 6.05]), c0: 0, c1: 0.12, nc: ncD, uv: wUV, sOf, caps: [true, true] }), foil({ sec: S, ss: KB([16.6, 16.95]), c0: 0, c1: 0.12, nc: ncD, uv: wUV, sOf, caps: [true, false] }));
+    statWing.push(foil({ sec: S, ss: KB([1.2, 2.0]), c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf }), foil({ sec: S, ss: KB([12.0, 12.2]), c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), foil({ sec: S, ss: KB([15.6, 16.3, 16.95]), c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, false] }));
     // slats: five segments on one droop axis (gap over the pylon)
-    const slatG = mergeAll([[2.4, 3.9, 5.45], [6.05, 7.3, 8.9], [8.95, 10.3, 11.7], [11.75, 13.0, 14.3], [14.35, 15.5, 16.6]].map(ss => foil({ sec: S, ss, c0: 0, c1: 0.12, nc: ncD + 2, uv: wUV, sOf, caps: [true, true] })));
-    const slat = pivotOf(slatG, S, 2.4, 16.6, 0.12, wingMat, sd);
+    const slatG = mergeAll([[2.4, 3.9, 5.45], [6.05, 7.3, 8.9], [8.95, 10.3, 11.7], [11.75, 13.0, 14.3], [14.35, 15.5, 16.6]].map(ss => foil({ sec: S, ss: KB(ss), c0: 0, c1: 0.12, nc: ncD + 2, uv: wUV, sOf, caps: [true, true] })));
+    const slat = pivotOf(slatG, S, 2.4 * K, 16.6 * K, 0.12, wingMat, sd);
     // flaps (+ aft canoe fairings that ride on them), aileron with static wicks
-    const flapIn = pivotOf(foil({ sec: S, ss: [2.0, 3.0, 4.1, 5.2, 6.2], c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), S, 2.0, 6.2, 0.74, wingMat, sd);
-    const flapOut = pivotOf(foil({ sec: S, ss: [6.25, 7.3, 8.3, 9.4, 10.5, 12.0], c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), S, 6.25, 12.0, 0.74, wingMat, sd);
-    const ailB = [12.2, 13.0, 13.9, 14.8, 15.6]; const wk = [12.9, 14.0, 15.1].map(b => wick(fpt(S(b), 1, 0), V3(0, -0.05, 1), WICK_UV));
-    const ail = pivotOf(mergeAll([foil({ sec: S, ss: ailB, c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), ...wk]), S, 12.2, 15.6, 0.74, wingMat, sd);
+    const flapIn = pivotOf(foil({ sec: S, ss: KB([2.0, 3.0, 4.1, 5.2, 6.2]), c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), S, 2.0 * K, 6.2 * K, 0.74, wingMat, sd);
+    const flapOut = pivotOf(foil({ sec: S, ss: KB([6.25, 7.3, 8.3, 9.4, 10.5, 12.0]), c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), S, 6.25 * K, 12.0 * K, 0.74, wingMat, sd);
+    const ailB = KB([12.2, 13.0, 13.9, 14.8, 15.6]); const wk = KB([12.9, 14.0, 15.1]).map(b => wick(fpt(S(b), 1, 0), V3(0, -0.05, 1), WICK_UV));
+    const ail = pivotOf(mergeAll([foil({ sec: S, ss: ailB, c0: 0.74, c1: 1, nc: ncD, uv: wUV, sOf, caps: [true, true] }), ...wk]), S, 12.2 * K, 15.6 * K, 0.74, wingMat, sd);
     // canoes: lathe, narrowed, hung under the lower surface; aft part follows its flap
     const canoe = (b, flap) => { const Sb = S(b), zh = fpt(Sb, 0.74, -1).z, zf = fpt(Sb, 0.5, -1).z, zt = fpt(Sb, 1, 0).z + 1.0, len = zt - zf, yb = fpt(Sb, 0.62, -1).y - 0.03;
       const prof = []; for (let k = 0; k <= 12; k++) { const f = k / 12; prof.push([0.27 * Math.pow(Math.sin(PI * Math.pow(f, 0.62)), 0.75) + 0.002, zf + f * len]); }
       const front = prof.filter(p => p[1] <= zh + 0.001), back = prof.filter(p => p[1] >= zh - 0.001); if (front[front.length - 1][1] < zh) { const r = 0.27 * Math.pow(Math.sin(PI * Math.pow((zh - zf) / len, 0.62)), 0.75); front.push([r, zh]); back.unshift([r, zh]); }
       const mk = pr => { const g = latheZ(pr.map(([r, z]) => [r, z]), hi ? 14 : 8); g.scale(0.45, 1, 1); { const p = g.attributes.position; for (let i = 0; i < p.count; i++) if (p.getY(i) > 0) p.setY(i, p.getY(i) * 0.3); g.computeVertexNormals(); } g.translate(sd * b, yb, 0); return pv(g, [0.88, 0.89, 0.9]); };
       statPaint.push(mk(front)); return mk(back); };
-    attachTo(flapIn, mergeAll([canoe(3.9, flapIn)], ['position', 'normal', 'uv', 'color']), paintMat);
-    attachTo(flapOut, mergeAll([canoe(7.3, flapOut), canoe(9.4, flapOut), canoe(11.6, flapOut)], ['position', 'normal', 'uv', 'color']), paintMat);
+    attachTo(flapIn, mergeAll([canoe(3.9 * K, flapIn)], ['position', 'normal', 'uv', 'color']), paintMat);
+    attachTo(flapOut, mergeAll([canoe(7.3 * K, flapOut), canoe(9.4 * K, flapOut), canoe(11.6 * K, flapOut)], ['position', 'normal', 'uv', 'color']), paintMat);
     // spoilers (5), hinged at their leading edge
     const spoilers = [];
-    for (const [b0, b1] of [[3.0, 4.7], [4.75, 6.15], [6.3, 8.2], [8.25, 10.1], [10.15, 12.0]]) {
+    for (const [b0, b1] of [[3.0, 4.7], [4.75, 6.15], [6.3, 8.2], [8.25, 10.1], [10.15, 12.0]].map(([a, b]) => [a * K, b * K])) {
       const g = slab(S, [b0, (b0 + b1) / 2, b1], 0.585, 0.745, 0.01, (c, b) => wUV(c, sOf(b), 1));
       const a = fpt(S(b0), 0.585, 1), bb = fpt(S(b1), 0.585, 1); const pivot = new THREE.Group(); pivot.position.copy(a); detail.add(pivot);
       const m = new THREE.Mesh(g, wingMat); m.position.copy(a).negate(); m.castShadow = shadow; pivot.add(m); spoilers.push({ pivot, axis: bb.clone().sub(a).normalize(), sign: sd });
@@ -404,18 +423,19 @@ export function buildPlayerAircraft(quality = 'high') {
     const tipLE = fpt(S(WG.bT), 0.0, 0);
     parts.surfaces[sd > 0 ? 'R' : 'L'] = { flapIn, flapOut, ail, slat, spoilers, tip: fpt(shSec(1), 0.3, 0), wingTip: tipLE.clone() };
     // landing light lens (wing root, lower surface)
-    { const p = fpt(S(4.2), 0.05, -1); const g = new THREE.SphereGeometry(0.11, 10, 6, 0, PI * 2, 0, PI / 2); g.rotateX(PI); g.scale(1, 0.4, 1.3); g.translate(p.x, p.y + 0.02, p.z + 0.08); lens.push(colorise(g, [0.85, 0.88, 0.9])); }
+    { const p = fpt(S(WG.b0 + 3.0), 0.05, -1); const g = new THREE.SphereGeometry(0.11, 10, 6, 0, PI * 2, 0, PI / 2); g.rotateX(PI); g.scale(1, 0.4, 1.3); g.translate(p.x, p.y + 0.02, p.z + 0.08); lens.push(colorise(g, [0.85, 0.88, 0.9])); }
     // nav + strobe lens at the wingtip leading edge
-    { const p = fpt(S(16.85), 0.0, 0); const g = new THREE.SphereGeometry(0.075, 10, 6); g.scale(1.6, 0.8, 1.6); g.translate(p.x + sd * 0.0, p.y, p.z - 0.03); lens.push(colorise(g, sd > 0 ? [0.4, 0.9, 0.5] : [0.95, 0.35, 0.3])); }
+    { const p = fpt(S(WG.bT - 0.1), 0.0, 0); const g = new THREE.SphereGeometry(0.075, 10, 6); g.scale(1.6, 0.8, 1.6); g.translate(p.x + sd * 0.0, p.y, p.z - 0.03); lens.push(colorise(g, sd > 0 ? [0.4, 0.9, 0.5] : [0.95, 0.35, 0.3])); }
   }
   add(mergeAll(statWing), wingMat);
   // ---------------- tailplane
+  const KH = HT.bT / 6.3, KBH = a => a.map(b => b * KH); // tailplane station scale (1 for the fox)
   for (const sd of [1, -1]) {
     const sec = sd > 0 ? htpSec : mirrorSec(htpSec), sOf = b => 0.15 + 0.35 * (b - HT.b0) / (HT.bT - HT.b0);
-    const hs = [0.35, 0.95, 2.0, 3.2, 4.4, 5.5, 6.1, 6.3];
-    add(mergeAll([foil({ sec, ss: hs, c0: 0, c1: 0.7, nc: hi ? 12 : 6, uv: wUV, sOf, caps: [false, true] }), foil({ sec, ss: [0.35, 0.95], c0: 0.7, c1: 1, nc: 3, uv: wUV, sOf }), foil({ sec, ss: [6.1, 6.3], c0: 0.7, c1: 1, nc: 3, uv: wUV, sOf, caps: [true, true] })]), wingMat);
-    const eb = [0.95, 2.0, 3.2, 4.4, 5.5, 6.1]; const wk = [3.6, 4.8, 5.9].map(b => wick(fpt(sec(b), 1, 0), V3(0, 0, 1), WICK_UV));
-    const el = pivotOf(mergeAll([foil({ sec, ss: eb, c0: 0.7, c1: 1, nc: hi ? 5 : 3, uv: wUV, sOf, caps: [true, true] }), ...wk]), sec, 0.95, 6.1, 0.7, wingMat, sd);
+    const hs = KBH([0.35, 0.95, 2.0, 3.2, 4.4, 5.5, 6.1, 6.3]);
+    add(mergeAll([foil({ sec, ss: hs, c0: 0, c1: 0.7, nc: hi ? 12 : 6, uv: wUV, sOf, caps: [false, true] }), foil({ sec, ss: KBH([0.35, 0.95]), c0: 0.7, c1: 1, nc: 3, uv: wUV, sOf }), foil({ sec, ss: KBH([6.1, 6.3]), c0: 0.7, c1: 1, nc: 3, uv: wUV, sOf, caps: [true, true] })]), wingMat);
+    const eb = KBH([0.95, 2.0, 3.2, 4.4, 5.5, 6.1]); const wk = KBH([3.6, 4.8, 5.9]).map(b => wick(fpt(sec(b), 1, 0), V3(0, 0, 1), WICK_UV));
+    const el = pivotOf(mergeAll([foil({ sec, ss: eb, c0: 0.7, c1: 1, nc: hi ? 5 : 3, uv: wUV, sOf, caps: [true, true] }), ...wk]), sec, 0.95 * KH, 6.1 * KH, 0.7, wingMat, sd);
     parts.surfaces['E' + (sd > 0 ? 'R' : 'L')] = el;
   }
   // ---------------- fin, rudder, dorsal fillet
@@ -425,7 +445,8 @@ export function buildPlayerAircraft(quality = 'high') {
     const wk = [0.6, 0.75, 0.9].map(s => wick(fpt(finSec(s), 1, 0), V3(0, 0.05, 1), [0.3, 0.925]));
     const rg = mergeAll([foil({ sec: finSec, ss: [0.03, 0.25, 0.5, 0.75, 0.97], c0: 0.68, c1: 1, nc: hi ? 5 : 3, uv: finUV, caps: [true, true] }), ...wk]);
     const rud = pivotOf(rg, finSec, 0.03, 0.97, 0.68, finMat); parts.surfaces.rudder = rud;
-    const fil = loftZ(hi ? 12 : 6, hi ? 16 : 8, t => { const z = lerp(8.6, 13.4, t), crown = SEC(z).top; const top = crown + 1.05 * Math.pow(smooth(8.6, 13.6, z), 1.6); return { z, cx: 0, cy: (top + crown - 0.25) / 2, hx: 0.02 + 0.2 * Math.pow(smooth(8.6, 12.0, z), 0.8), hy: (top - crown + 0.25) / 2, n: 2.4 }; }, true, false);
+    const FZ0 = VT.z0 - 2.95, FZ1 = VT.z0 + 1.85, FH = 1.05 * VT.h / 6.45, FX = 0.2 * SEC(0).w / 1.98; // dorsal fillet follows the fin (fox: z 8.6..13.4)
+    const fil = loftZ(hi ? 12 : 6, hi ? 16 : 8, t => { const z = lerp(FZ0, FZ1, t), crown = SEC(z).top; const top = crown + FH * Math.pow(smooth(FZ0, FZ0 + 5.0, z), 1.6); return { z, cx: 0, cy: (top + crown - 0.25) / 2, hx: 0.02 + FX * Math.pow(smooth(FZ0, FZ0 + 3.4, z), 0.8), hy: (top - crown + 0.25) / 2, n: 2.4 }; }, true, false);
     { const U = fil.attributes.uv; for (let i = 0; i < U.count; i++) U.setXY(i, 0.12, 0.62); } add(fil, finMat);
   }
   // ---------------- engines
@@ -435,8 +456,9 @@ export function buildPlayerAircraft(quality = 'high') {
     statNac.push(E.nac); statMetal.push(E.core, E.plug); statPaint.push(E.pylon, E.disk, E.ogv, E.casc);
     const sl = new THREE.Mesh(E.sleeve, nacMat); sl.castShadow = shadow; detail.add(sl); parts.rev.push({ sleeve: sl, z: 0 });
     const fan = new THREE.Group(); fan.position.set(E.ex, E.ey, E.fanZ); detail.add(fan);
-    fan.add(new THREE.Mesh(bladesGeo(hi ? 18 : 12, hi), bladeMat));
-    const spin = latheZ([[0.0, -0.44], [0.07, -0.41], [0.15, -0.33], [0.23, -0.21], [0.29, -0.08], [0.325, 0.06], [0.335, 0.2]], hi ? 32 : 14, { uvLen: true }); fan.add(new THREE.Mesh(spin, spinMat));
+    fan.add(new THREE.Mesh(bladesGeo(hi ? 18 : 12, hi, ENG.scale || 1), bladeMat));
+    const spinP = [[0.0, -0.44], [0.07, -0.41], [0.15, -0.33], [0.23, -0.21], [0.29, -0.08], [0.325, 0.06], [0.335, 0.2]], es = ENG.scale || 1;
+    const spin = latheZ(es === 1 ? spinP : spinP.map(([r, z]) => [r * es, z * es]), hi ? 32 : 14, { uvLen: true }); fan.add(new THREE.Mesh(spin, spinMat));
     parts.fans.push(fan);
     // fan-cowl hinge line + exhaust soot on the core cowl via the metal tint already; nothing else per engine
   }
@@ -449,7 +471,10 @@ export function buildPlayerAircraft(quality = 'high') {
     for (const sd of [1, -1]) {
       const hinge = new THREE.Group(); hinge.position.set(sd * GEAR.mainX, GEAR.hingeY, GEAR.mainZ); detail.add(hinge);
       const G = mainGear(sd, hi); add(mergeAll(G.paint, ['position', 'normal', 'uv', 'color']), paintMat, hinge); add(mergeAll(G.metal, ['position', 'normal', 'uv', 'color']), metalMat, hinge);
-      const axle = axleSet(tg, hubG, GEAR.track); axle.position.y = G.axleY; hinge.add(axle); parts.wheels.push(axle);
+      if (GEAR.bogie > 0) { // widebody twin-axle bogie: beam + an axle set at each end
+        const beam = new THREE.Mesh(pv(new THREE.BoxGeometry(0.2, 0.24, GEAR.bogie * 2 + 0.55), [0.78, 0.79, 0.81]), paintMat); beam.position.y = G.axleY + 0.18; beam.castShadow = shadow; hinge.add(beam);
+        for (const bz of [-GEAR.bogie, GEAR.bogie]) { const axle = axleSet(tg, hubG, GEAR.track); axle.position.y = G.axleY; axle.position.z = bz; hinge.add(axle); parts.wheels.push(axle); }
+      } else { const axle = axleSet(tg, hubG, GEAR.track); axle.position.y = G.axleY; hinge.add(axle); parts.wheels.push(axle); }
       parts.gear['M' + (sd > 0 ? 'R' : 'L')] = { hinge, sign: sd };
     }
     const hinge = new THREE.Group(); hinge.position.set(0, GEAR.noseHingeY, GEAR.noseZ); detail.add(hinge);
@@ -462,7 +487,7 @@ export function buildPlayerAircraft(quality = 'high') {
     const taxiLight = new THREE.SpotLight(0xfff2dd, 0, 260, 0.42, 0.5, 1.3); taxiLight.position.set(0, 0.6, -0.3); steer.add(taxiLight); const tt = new THREE.Object3D(); tt.position.set(0, -2.5, -40); steer.add(tt); taxiLight.target = tt; parts.taxiLight = taxiLight;
     // nose-gear doors: hinged along the bay edges, open while the gear is down
     const doors = [];
-    for (const sd of [1, -1]) { const z0 = -14.6, z1 = -13.25, x = sd * 0.31, y = SEC(-13.9).bot - 0.012; const piv = new THREE.Group(); piv.position.set(x, y, 0); detail.add(piv);
+    for (const sd of [1, -1]) { const z0 = GEAR.noseZ - 1.7, z1 = GEAR.noseZ - 0.35, x = sd * 0.31, y = SEC(GEAR.noseZ - 1.0).bot - 0.012; const piv = new THREE.Group(); piv.position.set(x, y, 0); detail.add(piv);
       const g = new THREE.BoxGeometry(0.3, 0.018, z1 - z0); g.translate(-sd * 0.15, 0, (z0 + z1) / 2); const m = new THREE.Mesh(pv(g, [0.9, 0.91, 0.92]), paintMat); piv.add(m); doors.push({ piv, sd }); }
     parts.noseDoors = doors;
   }
@@ -480,9 +505,9 @@ export function buildPlayerAircraft(quality = 'high') {
   for (const sd of [1, -1]) { const L = new THREE.SpotLight(0xfff6e8, 0, 900, 0.2, 0.45, 1.2); const p = fpt(wingSec(4.2), 0.05, -1); L.position.set(sd * p.x, p.y - 0.05, p.z); model.add(L);
     const t = new THREE.Object3D(); t.position.set(sd * 6, -9, -200); model.add(t); L.target = t; landing.push(L); if (quality === 'low' && sd < 0) L.visible = false; }
   parts.landing = landing;
-  const sR = parts.surfaces.R.wingTip, sL = parts.surfaces.L.wingTip, ts = SEC(TAIL_Z), bcnT = skin(-1.2, 0, 0.08), bcnB = skin(3.0, PI, 0.08), lr = fpt(wingSec(4.2), 0.05, -1);
+  const sR = parts.surfaces.R.wingTip, sL = parts.surfaces.L.wingTip, ts = SEC(TAIL_Z), bcnT = skin(-1.2, 0, 0.08), bcnB = skin(3.0, PI, 0.08), lr = fpt(wingSec(WG.b0 + 3.0), 0.05, -1);
   const lp = [[sR.x + 0.05, sR.y, sR.z - 0.12, 'navG'], [sL.x - 0.05, sL.y, sL.z - 0.12, 'navR'], [0, ts.top - 0.06, TAIL_Z + 0.02, 'navW'], [bcnT.x, bcnT.y, bcnT.z, 'bcn'], [bcnB.x, bcnB.y, bcnB.z, 'bcn'],
-    [sR.x + 0.1, sR.y, sR.z + 0.05, 'stb'], [sL.x - 0.1, sL.y, sL.z + 0.05, 'stb'], [0, ts.ym, TAIL_Z + 0.15, 'stb'], [lr.x, lr.y - 0.08, lr.z, 'land'], [-lr.x, lr.y - 0.08, lr.z, 'land'], [0, -2.9, GEAR.noseZ - 0.5, 'taxi']];
+    [sR.x + 0.1, sR.y, sR.z + 0.05, 'stb'], [sL.x - 0.1, sL.y, sL.z + 0.05, 'stb'], [0, ts.ym, TAIL_Z + 0.15, 'stb'], [lr.x, lr.y - 0.08, lr.z, 'land'], [-lr.x, lr.y - 0.08, lr.z, 'land'], [0, GEAR.wheelY + 0.72, GEAR.noseZ - 0.5, 'taxi']];
   parts.lightPts = lightPoints(lp); model.add(parts.lightPts.pts);
   parts.mats = { bodyMat: glassMat, finMat };
   // ---------------- far LOD (> ~900 m): the merged traffic model, 2 draw calls
@@ -510,7 +535,7 @@ export function buildPlayerAircraft(quality = 'high') {
   parts.lightPts.pts.onBeforeRender = (r, s, cam) => { if (!cam.isPerspectiveCamera) return; root.getWorldPosition(_wp); const d = cam.position.distanceTo(_wp), want = detail.visible ? d < 1000 : d < 850; if (want !== detail.visible && far.children.length) { detail.visible = want; far.visible = !want; } };
   // ---------------- contrails (world space, added to the scene on first use)
   const trail = hi ? contrails() : null;
-  const _p = V3(), exh = [V3(ENG.x, ENG.y, ENG.z0 + 6.2), V3(-ENG.x, ENG.y, ENG.z0 + 6.2)];
+  const _p = V3(), exh = [V3(ENG.x, ENG.y, ENG.z0 + 6.2 * (ENG.scale || 1)), V3(-ENG.x, ENG.y, ENG.z0 + 6.2 * (ENG.scale || 1))];
   parts.anim = (st, dt, t, night, ac) => {
     for (const d of parts.noseDoors) d.piv.rotation.z = d.sd * st.gearPos * 82 * D;
     for (const r of parts.rev) r.sleeve.position.z = st.reverser * 0.62;

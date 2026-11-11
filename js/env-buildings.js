@@ -11,6 +11,7 @@ import { atmos, ATM, NOISE_GLSL } from './sky.js';
 import { Atlas } from './env-kit.js';
 import { ACCENTS } from './interiors.js';
 import { identityFor } from './env-identity.js';
+import { currentType } from './ac-types.js';
 
 const PI = Math.PI, H = PI / 2, V3 = (x, y, z) => new THREE.Vector3(x, y, z);
 const M4 = (x = 0, y = 0, z = 0, ry = 0, rx = 0, rz = 0, sx = 1, sy = sx, sz = sx) => new THREE.Matrix4().compose(V3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz, 'YXZ')), V3(sx, sy, sz));
@@ -132,7 +133,7 @@ export function buildBridges(group, stands, f, along, floorY = 4.6) {
     const R = { x: F0.x + nx * 10, z: F0.z + nz * 10 };
     const dock = { x: dsx + lx * 4.75, z: dsz + lz * 4.75, y: st.parkS ? 3.05 * s : 2.85, yaw: Math.atan2(lx, lz) }; // cab ORIGIN sits 4.75 m outboard of the door: the bellows reach 4.6 m from the origin, so the docked front stops ≈0.15 m OUTSIDE the hull skin (C-F1 — at the old 0.4 m offset the bellows/bumper stabbed up to ~1.7 m into the fuselage)
     const u0 = Math.atan2(-(dock.x - R.x), -(dock.z - R.z)); const ret = { yaw: u0 - 0.42, L: 16.5, y: 3.6 };
-    const b = { i, st, R, dock, ret, e: st.parkS ? 1 : 0, target: st.parkS ? 1 : 0, hidden: false, F0 };
+    const b = { i, st, R, dock, ret, e: st.parkS ? 1 : 0, target: st.parkS ? 1 : 0, hidden: false, F0, parkS: !!st.parkS };
     st.jb = new THREE.Object3D(); st.jb.name = 'jetbridge';
     Object.defineProperty(st.jb, 'visible', { get: () => !b.hidden, set: v => { b.hidden = !v; pose(b); } });
     st.jb.userData.setDocked = v => { b.target = v ? 1 : 0; b.t0 = performance.now(); anim.add(b); };
@@ -140,7 +141,12 @@ export function buildBridges(group, stands, f, along, floorY = 4.6) {
   });
   const pose = b => {
     const i = b.i; if (b.hidden) { for (const k in IM) { IM[k].setMatrixAt(i, ZERO); IM[k].instanceMatrix.needsUpdate = true; } return; }
-    const e = b.e * b.e * (3 - 2 * b.e), R = b.R, d = b.dock, fy = floorY;
+    // [Aircraft types] the player's bridge re-docks on the selected type's L1 door (position + sill
+    // height) at pose time; parked-traffic bridges keep their baked scaled-fox dock.
+    let d = b.dock;
+    if (!b.parkS && b.st.jb && b.st.jb.userData.forPlayer) { const T = currentType(), al = 2 - T.cabin.profile.door1, px = b.st.x - nx * al + lx * T.dim.R, pz = b.st.z - nz * al + lz * T.dim.R;
+      d = { x: px + lx * 4.75, z: pz + lz * 4.75, y: -T.dim.wheelY - 0.77, yaw: b.dock.yaw }; }
+    const e = b.e * b.e * (3 - 2 * b.e), R = b.R, fy = floorY;
     // cab position: retracted = along the swung tunnel at 16.5 m; docked = at the door
     const rx = R.x - Math.sin(b.ret.yaw) * b.ret.L, rz = R.z - Math.cos(b.ret.yaw) * b.ret.L;
     const cx = rx + (d.x - rx) * e, cz = rz + (d.z - rz) * e, cy = b.ret.y + (d.y - b.ret.y) * e;

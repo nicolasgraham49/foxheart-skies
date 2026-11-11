@@ -7,8 +7,9 @@
 // Pushback (prep): whatever is still docked undocks and leaves at speed; anything not clear in 6.6 s is hidden.
 import * as THREE from 'three';
 import { makeVehicle, POSE, bagsMesh, uldMeshes, hoseMesh, gseMats, T } from './env-gse.js';
+import { currentType } from './ac-types.js';
 
-const RZ = 42, FZ = -43, LX = 21, PI = Math.PI;
+const PI = Math.PI;
 const clamp = THREE.MathUtils.clamp, sm = THREE.MathUtils.smoothstep;
 class Leg {
   constructor(pts, rev = false, v = 5.2) { this.c = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(p[0], 0, p[1])), false, 'centripetal'); this.L = this.c.getLength(); this.T = 2.5 + this.L / v; this.rev = rev; }
@@ -41,33 +42,38 @@ export class Turnaround {
     this.svc.position.set(ac.position.x, groundH, ac.position.z); this.svc.rotation.set(0, yaw, 0); this.svc.updateMatrixWorld(true);
     const h = this.hAC = ac.position.y - groundH; this.hDoor = h - 0.55; this.hCargo = h - 1.55;
     const V = this.V;
+    // [Aircraft types] roads, lane and every dock/path derive from the selected type's spec;
+    // the offsets below reproduce the fox numbers exactly on the default type.
+    const GT = this.GT = currentType(), G = GT.gse;
+    const RZ = GT.dim.tailZ + 23, FZ = GT.dim.noseZ - 24.4, LX = GT.dim.span / 2 + 3.1;
+    const d1z = G.doorR1z, d2z = G.doorR2z, b1z = G.belt1z, b2z = G.belt2z, cz = G.contz, fx = G.fuelX, fz = G.fuelz, lz = G.lavz, wz = G.waterz, vz = G.vanz, tz = G.trainz, cx = G.catX, kx = G.contX, lx2 = G.lavX, wx = G.waterX;
     // docks (centre x, z, yaw) from the contact points on the hull
-    const tip = POSE.beltTip(V.belt1, this.hCargo), bx = 1.55 - tip.z; this.beltPhi = tip.phi;
-    const D = { cat1: [6.75, -13.0, PI / 2], cat2: [6.75, 11.6, PI / 2], belt1: [bx, -8.4, PI / 2], belt2: [bx, 9.2, PI / 2], cont: [6.15, 5.9, PI / 2], fuel: [16, -1.5, 0], lav: [3.2, 19.4, 0], water: [7.2, 17.8, 0], van: [14, -37, PI / 2], train: [12.8, -8.6, 0] };
+    const tip = POSE.beltTip(V.belt1, this.hCargo), bx = G.beltX ?? (1.55 - tip.z); this.beltPhi = tip.phi;
+    const D = { cat1: [cx, d1z, PI / 2], cat2: [cx, d2z, PI / 2], belt1: [bx, b1z, PI / 2], belt2: [bx, b2z, PI / 2], cont: [kx, cz, PI / 2], fuel: [fx, fz, 0], lav: [lx2, lz, 0], water: [wx, wz, 0], van: [14, vz, PI / 2], train: [12.8, tz, 0] };
     const P = {
-      cat1: [[[100, FZ], [40, FZ], [LX, FZ + 7], [LX, -19], [14.5, -13], [10.5, -13], [6.75, -13]], [[6.75, -13], [10, -13], [13, -11.6], [15, -9]], [[15, -9], [14.4, -9.8], [15.5, -17], [18, -26], [LX, -34], [28, FZ], [100, FZ]]],
-      cat2: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, 19], [14.5, 11.6], [10.5, 11.6], [6.75, 11.6]], [[6.75, 11.6], [11, 11.6], [16, 11.6]], [[16, 11.6], [14.5, 12.4], [13.6, 15], [14.5, 21], [17.5, 28], [LX + 1, 35], [30, RZ], [100, RZ]]],
-      belt1: [[[100, FZ], [40, FZ], [LX, FZ + 7], [LX, -16], [14, -8.4], [bx + 3.5, -8.4], [bx, -8.4]], [[bx, -8.4], [bx + 3, -8.4], [bx + 6.5, -7], [bx + 9, -4.2]], [[bx + 9, -4.2], [bx + 8.4, -4.9], [bx + 9, -12], [18, -22], [LX, -31], [28, FZ], [100, FZ]]],
-      belt2: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, 17], [14, 9.2], [bx + 3.5, 9.2], [bx, 9.2]], [[bx, 9.2], [bx + 3, 9.2], [bx + 6.5, 7.8], [bx + 9, 5]], [[bx + 9, 5], [bx + 8.4, 5.7], [bx + 9, 13], [18, 22], [LX, 31], [28, RZ], [100, RZ]]],
-      cont: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, 15], [15, 5.9], [9.75, 5.9], [6.15, 5.9]], [[6.15, 5.9], [8.95, 5.9], [12.95, 4.5], [15.45, 1.5]], [[15.45, 1.5], [14.85, 2.3], [15.5, 10], [18, 20], [LX, 30], [28, RZ], [100, RZ]]],
-      fuel: [[[100, RZ], [40, RZ], [LX + 1, RZ - 6], [LX, 22], [18.5, 10], [16.2, 4], [16, 1.5], [16, -1.5]], null, [[16, -1.5], [16, -6], [16.6, -12], [18.5, -22], [LX, -32], [28, FZ], [100, FZ]]],
-      lav: [[[100, RZ], [20, RZ], [8, RZ - 1], [4, RZ - 5], [3.2, 30], [3.2, 24], [3.2, 19.4]], [[3.2, 19.4], [3.2, 27], [2.5, 35], [-1, 40], [-5, 41.5]], [[-5, 41.5], [0, 42], [30, RZ], [100, RZ]]],
-      water: [[[100, RZ], [24, RZ], [12, RZ - 1], [8, RZ - 5], [7.2, 30], [7.2, 23], [7.2, 17.8]], [[7.2, 17.8], [7.2, 26], [6.5, 34], [3, 39.5], [-1, 41.5]], [[-1, 41.5], [4, 42], [30, RZ], [100, RZ]]],
-      van: [[[100, FZ], [40, FZ], [24, FZ + 1.5], [18, -38], [14, -37]], null, [[14, -37], [8, -37.5], [0, -39], [-12, FZ], [-100, FZ]]],
-      train: [[[100, RZ], [40, RZ], [LX + 1, RZ - 6], [LX, 26], [16, 15], [13.2, 6], [12.8, 0], [12.8, -8.6]], null, [[LX, 26], [16, 15], [13.2, 6], [12.8, 0], [12.8, -8.6], [12.8, -14], [14.5, -22], [LX, -31], [28, FZ], [100, FZ]]],
+      cat1: [[[100, FZ], [40, FZ], [LX, FZ + 7], [LX, d1z - 6], [cx + 7.75, d1z], [cx + 3.75, d1z], [cx, d1z]], [[cx, d1z], [cx + 3.25, d1z], [cx + 6.25, d1z + 1.4], [cx + 8.25, d1z + 4]], [[cx + 8.25, d1z + 4], [cx + 7.65, d1z + 3.2], [cx + 8.75, d1z - 4], [cx + 11.25, d1z - 13], [LX, d1z - 21], [28, FZ], [100, FZ]]],
+      cat2: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, d2z + 7.4], [cx + 7.75, d2z], [cx + 3.75, d2z], [cx, d2z]], [[cx, d2z], [cx + 4.25, d2z], [cx + 9.25, d2z]], [[cx + 9.25, d2z], [cx + 7.75, d2z + 0.8], [cx + 6.85, d2z + 3.4], [cx + 7.75, d2z + 9.4], [cx + 10.75, d2z + 16.4], [LX + 1, d2z + 23.4], [30, RZ], [100, RZ]]],
+      belt1: [[[100, FZ], [40, FZ], [LX, FZ + 7], [LX, b1z - 7.6], [14, b1z], [bx + 3.5, b1z], [bx, b1z]], [[bx, b1z], [bx + 3, b1z], [bx + 6.5, b1z + 1.4], [bx + 9, b1z + 4.2]], [[bx + 9, b1z + 4.2], [bx + 8.4, b1z + 3.5], [bx + 9, b1z - 3.6], [18, b1z - 13.6], [LX, b1z - 22.6], [28, FZ], [100, FZ]]],
+      belt2: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, b2z + 7.8], [14, b2z], [bx + 3.5, b2z], [bx, b2z]], [[bx, b2z], [bx + 3, b2z], [bx + 6.5, b2z - 1.4], [bx + 9, b2z - 4.2]], [[bx + 9, b2z - 4.2], [bx + 8.4, b2z - 3.5], [bx + 9, b2z + 3.8], [18, b2z + 12.8], [LX, b2z + 21.8], [28, RZ], [100, RZ]]],
+      cont: [[[100, RZ], [40, RZ], [LX, RZ - 7], [LX, cz + 9.1], [kx + 8.85, cz], [kx + 3.6, cz], [kx, cz]], [[kx, cz], [kx + 2.8, cz], [kx + 6.8, cz - 1.4], [kx + 9.3, cz - 4.4]], [[kx + 9.3, cz - 4.4], [kx + 8.7, cz - 3.6], [kx + 9.35, cz + 4.1], [kx + 11.85, cz + 14.1], [LX, cz + 24.1], [28, RZ], [100, RZ]]],
+      fuel: [[[100, RZ], [40, RZ], [LX + 1, RZ - 6], [LX, fz + 23.5], [fx + 2.5, fz + 11.5], [fx + 0.2, fz + 5.5], [fx, fz + 3], [fx, fz]], null, [[fx, fz], [fx, fz - 4.5], [fx + 0.6, fz - 10.5], [fx + 2.5, fz - 20.5], [LX, fz - 30.5], [28, FZ], [100, FZ]]],
+      lav: [[[100, RZ], [20, RZ], [8, RZ - 1], [4, RZ - 5], [lx2, lz + 10.6], [lx2, lz + 4.6], [lx2, lz]], [[lx2, lz], [lx2, lz + 7.6], [lx2 - 0.7, lz + 15.6], [lx2 - 4.2, lz + 20.6], [lx2 - 8.2, lz + 22.1]], [[lx2 - 8.2, lz + 22.1], [lx2 - 3.2, lz + 22.6], [30, RZ], [100, RZ]]],
+      water: [[[100, RZ], [24, RZ], [12, RZ - 1], [8, RZ - 5], [wx, wz + 12.2], [wx, wz + 5.2], [wx, wz]], [[wx, wz], [wx, wz + 8.2], [wx - 0.7, wz + 16.2], [wx - 4.2, wz + 21.7], [wx - 8.2, wz + 23.7]], [[wx - 8.2, wz + 23.7], [wx - 3.2, wz + 24.2], [30, RZ], [100, RZ]]],
+      van: [[[100, FZ], [40, FZ], [24, FZ + 1.5], [18, vz - 1], [14, vz]], null, [[14, vz], [8, vz - 0.5], [0, vz - 2], [-12, FZ], [-100, FZ]]],
+      train: [[[100, RZ], [40, RZ], [LX + 1, RZ - 6], [LX, tz + 34.6], [16, tz + 23.6], [13.2, tz + 14.6], [12.8, tz + 8.6], [12.8, tz]], null, [[LX, tz + 34.6], [16, tz + 23.6], [13.2, tz + 14.6], [12.8, tz + 8.6], [12.8, tz], [12.8, tz - 5.4], [14.5, tz - 13.4], [LX, tz - 22.4], [28, FZ], [100, FZ]]],
     };
     for (const id in V) {
       const v = V[id], [x, z, yw] = D[id], [pin, prev, pfwd] = P[id], tl = !auto ? [Infinity, null] : mode === 'dep' ? DEP[id] : [ARR[id], null];
       Object.assign(v, { dock: { x, z, yaw: yw }, legIn: new Leg(pin, false, id === 'train' ? 4 : 5.2), legRev: prev && new Leg(prev, true, 2.2), legFwd: new Leg(pfwd, false, id === 'train' ? 4 : 5.5), at: tl[0], out: tl[1], dep: DEPLOY[v.type === 'btug' ? 'train' : v.type] ?? 0, fast: 1, gone: false, docked: v.at === null, recall: false });
-      v.legIn.T = Math.max(v.legIn.T, 8); if (id === 'train') v.s0 = v.legFwd.near(12.8, -8.6);
+      v.legIn.T = Math.max(v.legIn.T, 8); if (id === 'train') v.s0 = v.legFwd.near(12.8, tz);
     }
     // hoses and cables (stand frame, static once docked)
     this.hoses.clear(); const hw = h - 0.05;
     const mk = (pts, r, col) => { const m = hoseMesh(pts, r, col); m.visible = false; this.hoses.add(m); return m; };
-    this.hFuel = mk([[16.5, 2.75, -0.25], [15.7, 3.1, 1.0], [14.6, hw - 0.05, 2.1], [13.5, hw, 2.62]], 0.05);
-    const pit = mk([[17.1, 0.7, -1.2], [17.7, 0.25, -0.8], [18.6, 0.06, -0.4]], 0.06); pit.add(new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.04, 16), gseMats().metal).translateX(18.6).translateY(0.02).translateZ(-0.4)); this.hPit = pit;
-    this.hLav = mk([[2.5, 0.9, 16.45], [2.0, 1.6, 16.0], [1.2, h - 0.95, 15.2], [0.6, h - 0.5, 14.8]], 0.06, 0x3a3f45);
-    this.hWater = mk([[6.5, 0.9, 14.85], [5.2, 1.4, 14.2], [2.5, h - 1.3, 13.0], [0.95, h - 0.95, 12.6]], 0.045, 0x2a4f8a);
+    this.hFuel = mk([[fx + 0.5, 2.75, fz + 1.25], [fx - 0.3, 3.1, fz + 2.5], [fx - 1.4, hw - 0.05, fz + 3.6], [G.fuelPanelX, hw, G.fuelPanelZ]], 0.05);
+    const pit = mk([[fx + 1.1, 0.7, fz + 0.3], [fx + 1.7, 0.25, fz + 0.7], [fx + 2.6, 0.06, fz + 1.1]], 0.06); pit.add(new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.04, 16), gseMats().metal).translateX(fx + 2.6).translateY(0.02).translateZ(fz + 1.1)); this.hPit = pit;
+    this.hLav = mk([[lx2 - 0.7, 0.9, lz - 2.95], [lx2 - 1.2, 1.6, lz - 3.4], [lx2 - 2.0, h - 0.95, lz - 4.2], [lx2 - 2.6, h - 0.5, lz - 4.6]], 0.06, 0x3a3f45);
+    this.hWater = mk([[wx - 0.7, 0.9, wz - 2.95], [wx - 2.0, 1.4, wz - 3.6], [wx - 4.7, h - 1.3, wz - 4.8], [wx - 6.25, h - 0.95, wz - 5.2]], 0.045, 0x2a4f8a);
     this.update(0);
   }
   prep() { // pushback requested: clear the stand
@@ -109,7 +115,7 @@ export class Turnaround {
       else { v.obj.position.set(o.x, 0, o.z); v.obj.rotation.y = o.yaw; }
       if (v.type === 'cat') POSE.cat(v, ph[id].k, this.hDoor, ph[id].work >= 0 ? ph[id].work : null);
       if (v.type === 'cont') POSE.cont(v, ph[id].k, this.hCargo);
-      if (v.type === 'fuel') POSE.fuel(v, ph[id].k, 1.7);
+      if (v.type === 'fuel') POSE.fuel(v, ph[id].k, this.hAC - 1.7);
       if (v.type === 'belt') v.boom.rotation.x = 0.02 + (this.beltPhi - 0.02) * sm(ph[id].k, 0, 1);
     }
     this.svc.updateMatrixWorld(true); gseMats().belt.map.offset.y -= dt * 1.9 * (dep ? 1 : -1);
@@ -151,10 +157,11 @@ export class Turnaround {
     man(11, tr, 0, 1.12, 0.45, PI, 'sit', ph.train.vis);
     // cleaners: walk between the van and the bridge stairs (they work inside the cabin)
     const van = this.V.van, vd = (van.at == null ? -1e9 : van.at) + van.legIn.T;
+    const G = this.GT.gse;
     for (const j of [0, 1]) { const p = C.p[12 + j]; let f = -1; if (dep) f = t > 28 + j * 1.5 && t < 44 ? 1 - (t - 28 - j * 1.5) / 14 : -1; else f = ph.van.vis && t > vd + 2 + j * 1.5 && t < vd + 16 + j * 1.5 ? (t - vd - 2 - j * 1.5) / 14 : -1;
-      p.vis = f >= 0 && this.svc.visible; if (!p.vis) continue; const a = [12.5, -35.6 + j * 0.8], b = [-3 + j * 0.8, -24.5]; const x = a[0] + (b[0] - a[0]) * f, z = a[1] + (b[1] - a[1]) * f; p.pos.set(x, 0, z); this.svc.localToWorld(p.pos);
+      p.vis = f >= 0 && this.svc.visible; if (!p.vis) continue; const a = [12.5, G.vanz + 1.4 + j * 0.8], b = [-3 + j * 0.8, G.doorR1z - 11.5]; const x = a[0] + (b[0] - a[0]) * f, z = a[1] + (b[1] - a[1]) * f; p.pos.set(x, 0, z); this.svc.localToWorld(p.pos);
       p.yaw = this.svc.rotation.y + Math.atan2((b[0] - a[0]) * (dep ? -1 : 1), (b[1] - a[1]) * (dep ? -1 : 1)); p.mode = 'walk'; }
-    { const p = C.p[14]; p.vis = this.svc.visible && this.prepT == null; p.pos.set(3.2, 0, -21.5); this.svc.localToWorld(p.pos); p.yaw = this.svc.rotation.y + 0.3; p.mode = 'idle'; }
+    { const p = C.p[14]; p.vis = this.svc.visible && this.prepT == null; p.pos.set(3.2, 0, this.GT.dim.noseZ - 2.9); this.svc.localToWorld(p.pos); p.yaw = this.svc.rotation.y + 0.3; p.mode = 'idle'; }
   }
   stats() { let tris = 0, calls = 0; this.svc.traverseVisible(o => { if (o.isMesh) { calls++; const g = o.geometry; tris += (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1); } }); return { calls, tris: Math.round(tris) }; }
 }

@@ -33,7 +33,8 @@ import * as Stories from './stories.js';
 import { GFX, setMsaaActive } from './gfx.js';
 import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
-import { buildCabin } from './interiors.js';
+import { buildCabin, applyCabinType } from './interiors.js';
+import { TYPES, currentType, savedType, saveType, applyType } from './ac-types.js';
 import { rng } from './terrain.js';
 import { buildCopilot } from './ppl-crew.js';
 import { buildPlanet, drawWorldMap } from './wld-planet.js';
@@ -120,6 +121,10 @@ let terrain = new Terrain(scene, settings.quality);
 let city = new City(scene, settings.quality);
 const hood = new Hood(scene, settings.quality); // neighbourhoods near the camera (wld-hood.js)
 const roads = new Roads(scene, settings.quality); // highway, interchange, access road and traffic (wld-roads.js)
+// [Aircraft types] install the selected type BEFORE anything builds from the shape state:
+// hull curves/doors/gear (ac-shape), DIM, the cabin seat map and the flight-deck offset.
+const TYPE = applyType(savedType().id); Object.assign(DIM, TYPE.dim); applyCabinType(TYPE.cabin);
+COCKPIT_EYE.z += TYPE.deckDz;
 const aircraft = buildAircraft(settings.quality); scene.add(aircraft);
 const displays = new Displays();
 let cockpit = new THREE.Group(); cockpit.userData = { screens: [] }; cockpit.visible = false; aircraft.add(cockpit); // the real flight deck is built at boot, once fonts are in
@@ -352,7 +357,7 @@ async function startFlight(cfg) {
     W.phase = 'gate';
   } else {
     const p0 = new THREE.Vector3(P.x + E.x, 0, P.z + E.z).addScaledVector(dir, 45);
-    fdm.reset({ x: p0.x, y: elev + 3.4, z: p0.z, hdg: E.hdg, speed: 0, gear: true, flaps: 1, tl: 0, onGround: true, parkBrake: !cfg.menu, spdSel: Math.round(sp.v2 + 10), altSel: Math.round((elev / FT + 5000) / 100) * 100 });
+    fdm.reset({ x: p0.x, y: elev - DIM.wheelY - 0.22, z: p0.z, hdg: E.hdg, speed: 0, gear: true, flaps: 1, tl: 0, onGround: true, parkBrake: !cfg.menu, spdSel: Math.round(sp.v2 + 10), altSel: Math.round((elev / FT + 5000) / 100) * 100 });
     fdm.ap.hdg = Math.round(E.hdg);
     W.phase = 'takeoff';
   }
@@ -364,7 +369,7 @@ async function startFlight(cfg) {
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
   const atGate = cfg.start === 'gate' || cfg.start === 'terminal', cold = !!cfg.cold && atGate;
-  sys.reset(cold ? 'cold' : atGate && !cfg.menu ? 'gate' : 'run'); fails.reset(); fails.random = cfg.menu ? 'off' : settings.failRand || 'off'; if (cfg.fail && !cfg.menu) fails.trigger(cfg.fail, { eng: 0 }); rescue.clear(); Object.assign(W, { evac: false, emerStop: false, rescueT: 0, foam: false, braced: false, emergPA: false, bellyT: 0, souls: 120 + ((Math.random() * 50) | 0) + 6 }); W.ndRange = null; lights._auto = undefined; W.coldDone = !cold; W.coldT = 0; W.autoStart = null;
+  sys.reset(cold ? 'cold' : atGate && !cfg.menu ? 'gate' : 'run'); fails.reset(); fails.random = cfg.menu ? 'off' : settings.failRand || 'off'; if (cfg.fail && !cfg.menu) fails.trigger(cfg.fail, { eng: 0 }); rescue.clear(); Object.assign(W, { evac: false, emerStop: false, rescueT: 0, foam: false, braced: false, emergPA: false, bellyT: 0, souls: TYPE.id === 'fox' ? 120 + ((Math.random() * 50) | 0) + 6 : TYPE.cabin.pax + 5 + ((Math.random() * 10) | 0) }); W.ndRange = null; lights._auto = undefined; W.coldDone = !cold; W.coldT = 0; W.autoStart = null;
   if (atGate && !cfg.menu) { fdm.engRun = [false, false]; fdm.n1 = [0, 0]; fdm.n2 = [0, 0]; fdm.egt = [24, 24]; fdm.tl = 0; fdm.ap.on = false; fdm.ap.athr = false; }
   if (cfg.start === 'route' || any) { W.ils = fdm.ap.ils = null; } W.simTime = 0; W.crashShown = false;
   // AI traffic on the runway in use (avoid the player's runway when on it)
@@ -394,8 +399,8 @@ async function startFlight(cfg) {
 // ---------------------------------------------------------------- gates, pushback, taxi routes, on foot, ATC context
 function pickStand(b) { const all = b.b.stands; all.forEach((s, i) => { s.gateName = String(i + 1); }); const free = all.filter(s => !s.used); return free[(free.length / 2) | 0] || all[(all.length / 2) | 0]; }
 function placeAtStand(b, st) {
-  const fr = b.b.frame; fdm.reset({ x: b.x + st.x - fr.nx * 2, y: b.elev + 3.4, z: b.z + st.z - fr.nz * 2, hdg: st.inHdg, speed: 0, gear: true, flaps: 0, tl: 0, onGround: true, parkBrake: true, spdSel: 150, altSel: 5000 });
-  st.used = true; W.stand = st; W.standB = b; if (!st.gateName) b.b.stands.forEach((s, i) => s.gateName = String(i + 1));
+  const fr = b.b.frame; fdm.reset({ x: b.x + st.x - fr.nx * 2, y: b.elev - DIM.wheelY - 0.22, z: b.z + st.z - fr.nz * 2, hdg: st.inHdg, speed: 0, gear: true, flaps: 0, tl: 0, onGround: true, parkBrake: true, spdSel: 150, altSel: 5000 });
+  st.used = true; W.stand = st; W.standB = b; if (st.jb) st.jb.userData.forPlayer = true; if (!st.gateName) b.b.stands.forEach((s, i) => s.gateName = String(i + 1));
 }
 const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
 function taxiOutRoute() {
@@ -493,7 +498,7 @@ const BRIEF_IDS = ['brief_belt', 'brief_exit', 'brief_oxy', 'brief_vest'];
 const BRIEF_SCREENS = ['belt', 'exit', 'oxy', 'vest'];
 const BRIEF_DUR = [20, 18, 19, 19]; // sim seconds per beat, sized to the spoken lines (~20 s each); the PA speech queue serialises behind them
 function briefCrew(c) { const crew = c?.crowd.p.filter(p => p.crew); return crew && crew.length ? crew[crew.length - 1] : null; } // the demonstrator: the second cabin crew member, the one live() walks
-function pinDemo(c, beat) { const p = briefCrew(c); if (!p) return; p.x = 0; p.z = -4.2; p.mode = 'stand'; p.act = 'demo'; p.demoBeat = beat; p.yaw = 0; p.walking = false; p.prop = null; }
+function pinDemo(c, beat) { const p = briefCrew(c); if (!p) return; p.x = c.demoX ?? 0; p.z = -4.2; p.mode = 'stand'; p.act = 'demo'; p.demoBeat = beat; p.yaw = 0; p.walking = false; p.prop = null; }
 function endBrief(c) { const B = W.brief; if (B) B.st = 'done'; const p = c && briefCrew(c); if (p) { p.demoBeat = null; if (p.act === 'demo') p.act = 'idle'; } if (c && c.setScreen) c.setScreen('map'); }
 function startBeat(c, b) { paSay(BRIEF_IDS[b]); if (c.setScreen) c.setScreen(BRIEF_SCREENS[b]); pinDemo(c, b); }
 function briefStep(dt) {
@@ -1521,7 +1526,7 @@ function updateShadows() {
   const setSize = n => { if (s.shadow.mapSize.x !== n) { s.shadow.mapSize.set(n, n); if (s.shadow.map) { s.shadow.map.dispose(); s.shadow.map = null; } } };
   if (!exteriorCasters) { exteriorCasters = []; aircraft.traverse(o => { if (o.isMesh && o.castShadow && !isInDeck(o)) exteriorCasters.push(o); }); }
   if (inDeck) {
-    setSize(settings.quality === 'medium' ? 1024 : 2048); const ctr = aircraft.localToWorld(_deckCtr.set(0, 1.1, -15.5));
+    setSize(settings.quality === 'medium' ? 1024 : 2048); const ctr = aircraft.localToWorld(_deckCtr.set(0, 1.1, -15.5 + TYPE.deckDz));
     c.left = c.bottom = -1.8; c.right = c.top = 1.8; c.near = 0.5; c.far = 40; c.updateProjectionMatrix(); s.shadow.bias = -0.0002; s.shadow.normalBias = 0.012;
     s.target.position.copy(ctr); s.position.copy(ctr).addScaledVector(dir, 18); exteriorCasters.forEach(o => o.castShadow = false);
   } else if (settings.quality === 'ultra') {
@@ -1750,6 +1755,15 @@ function setPlayerLivery(id) {
   const L = LIVERIES.find(l => l.id === id); const d = $('#livDesc'); if (d && L) d.textContent = L.name + ' — ' + L.desc + ' Saved on this device.';
   return id;
 }
+// [Aircraft types] type choice is a build-time choice like graphics quality: persist + reload.
+function setPlayerType(id) {
+  if (!TYPES.some(t => t.id === id)) return TYPE.id;
+  saveType(id);
+  $$('#typeSeg button').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.v === id)));
+  const T = TYPES.find(t => t.id === id); const d = $('#typeDesc'); if (d && T) d.textContent = T.name + ' — ' + T.desc;
+  if (id !== TYPE.id) { toast('Aircraft: ' + T.name + ' — applies on reload'); setTimeout(() => location.reload(), 600); }
+  return id;
+}
 function buildMenu() {
   $('#stA').textContent = World.stats.airports.toLocaleString(); $('#stR').textContent = World.stats.runways.toLocaleString(); $('#stN').textContent = World.stats.navaids.toLocaleString();
   const cards = $('#cards'); cards.innerHTML = '';
@@ -1801,6 +1815,10 @@ function buildMenu() {
         b.innerHTML = `<span style="display:inline-block;width:22px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px;background:linear-gradient(90deg,${L.sw[0]},${L.sw[1]},${L.sw[2]})"></span>${L.name}`;
         b.onclick = () => { setPlayerLivery(L.id); toast('Livery: ' + L.name); }; seg.appendChild(b); }
       const d = $('#livDesc'), CL = LIVERIES.find(l => l.id === cur); if (d && CL) d.textContent = CL.name + ' — ' + CL.desc + ' Saved on this device.'; } }
+  { const seg = $('#typeSeg'); if (seg) { seg.innerHTML = ''; const cur = TYPE.id;
+      for (const T of TYPES) { const b = document.createElement('button'); b.dataset.v = T.id; b.setAttribute('aria-pressed', String(T.id === cur));
+        b.textContent = T.name; b.onclick = () => setPlayerType(T.id); seg.appendChild(b); }
+      const d = $('#typeDesc'); if (d) d.textContent = TYPE.name + ' — ' + TYPE.desc; } }
   renderPadMap(); { const pr = $('#padRumble'); if (pr) { pr.checked = settings.padRumble !== false; pr.onchange = () => { settings.padRumble = pr.checked; pad.cfg.rumble = settings.padRumble; store.set('settings', settings); if (pad.cfg.rumble) pad.rumble(0.4, 0.4, 200); }; } }
   for (const [id, key] of [['mouseSens', 'mouseSens'], ['vol', 'vol'], ['musicVol', 'musicVol'], ['padSens', 'padSens'], ['padDz', 'padDz']]) { const el = $('#' + id); if (!el) continue; el.value = settings[key]; el.oninput = () => { settings[key] = +el.value; store.set('settings', settings); applySettings(key); }; }
   for (const [id, key] of [['voice', 'voice'], ['hudOn', 'hud'], ['music', 'music'], ['termMusic', 'termMusic']]) { const el = $('#' + id); if (!el) continue; el.checked = settings[key]; el.onchange = () => { settings[key] = el.checked; store.set('settings', settings); applySettings(key); }; }
@@ -1932,6 +1950,7 @@ window.__sim = {
   menu() { toMenu(); }, pause(p) { W.paused = p; }, setRes(v) { settings.res = String(v); applyRes(); }, orbitSet(y, p, d) { orbit.yaw = y; orbit.pitch = p; orbit.dist = d; }, chaseSet(y, p, d) { chase.yaw = y; chase.pitch = p; chase.dist = d; chasePos = null; }, lookSet(y, p, f) { look.yaw = y; look.pitch = p; look.fov = f; },
   score: () => lastScore, music, audio, musicWant: () => musicWant(), displays, terrain, city, sky, atc, foot,
   livery: () => (aircraft.userData.parts && aircraft.userData.parts.livery) || savedLivery(), setLivery: (id) => setPlayerLivery(id),
+  type: () => TYPE.id, types: () => TYPES.map(t => ({ id: t.id, name: t.name, seats: t.cabin.seatXs.length * t.cabin.rows, pax: t.cabin.pax })), setType: (id) => setPlayerType(id),
   stories: () => Stories.state(),
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
@@ -1985,8 +2004,8 @@ window.__sim = {
     if (FLY_ANYWHERE) try { const P = buildPlanet(); terrain.setPlanet(P); W.planetMs = P.ms; } catch (e) { errors.push('planet: ' + e.message); console.error(e); }
     try { await Promise.race([document.fonts.load('700 40px "Saira Condensed"'), new Promise(r => setTimeout(r, 1500))]); await document.fonts.load('16px "B612 Mono"'); } catch (e) { }
     $('#loadbar').style.width = '70%'; $('#loadmsg').textContent = 'Building the flight deck…'; await new Promise(r => setTimeout(r, 20));
-    try { try { await document.fonts.load('600 20px "B612"'); } catch (e) { } const deck = buildCockpit(displays, { quality: settings.quality }); aircraft.remove(cockpit); cockpit = deck; aircraft.add(cockpit); exteriorCasters = null; } catch (e) { errors.push('flight deck: ' + e.message); console.error(e); }
-    try { fo = buildCopilot({ quality: settings.quality }); fo.object3d.visible = false; aircraft.add(fo.object3d); } catch (e) { fo = null; errors.push('first officer: ' + e.message); console.error(e); }
+    try { try { await document.fonts.load('600 20px "B612"'); } catch (e) { } const deck = buildCockpit(displays, { quality: settings.quality }); aircraft.remove(cockpit); cockpit = deck; cockpit.position.z = TYPE.deckDz; aircraft.add(cockpit); exteriorCasters = null; } catch (e) { errors.push('flight deck: ' + e.message); console.error(e); }
+    try { fo = buildCopilot({ quality: settings.quality }); fo.object3d.visible = false; fo.object3d.position.z = TYPE.deckDz; aircraft.add(fo.object3d); } catch (e) { fo = null; errors.push('first officer: ' + e.message); console.error(e); }
     $('#loadbar').style.width = '75%'; $('#loadmsg').textContent = 'Building Tampa International…';
     try { buildMenu(); } catch (e) { errors.push('menu: ' + (e.stack || e.message)); console.error(e); }
     requestAnimationFrame(frame);

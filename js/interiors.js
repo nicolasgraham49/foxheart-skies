@@ -7,6 +7,8 @@ import { foxHeart } from './aircraft.js';
 import { SHORT } from './atc.js';
 import { People } from './people.js';
 import { buildHall } from './env-hall.js';
+import { currentType } from './ac-types.js';
+import { svcConfigure } from './ppl-service.js';
 
 const AT = 2048;
 export const ACCENTS = {
@@ -188,7 +190,7 @@ function frameFn(O, xAxis, zAxis) { return (x, y, z) => new THREE.Vector3(O.x + 
 // ---------------------------------------------------------------- terminal hall
 // opts: { icao, mode: 'dep'|'arr', gate, dest, O (world, façade point at the bridge door, y = apron level), n (unit toward apron/runway), depth, doorX }
 export function buildTerminal(opts, rnd) {
-  try { return buildHall(opts, rnd); } catch (e) { console.warn('env-hall failed, using the simple hall', e); }
+  try { return buildHall({ ...opts, flightN: currentType().cabin.pax }, rnd); } catch (e) { console.warn('env-hall failed, using the simple hall', e); }
   const { icao, mode, gate, dest } = opts;
   const at = buildAtlas(icao, gate, dest); const mat = atlasMaterial(at.tex); const A = at.accent;
   const F = 4.6, D = Math.max(46, opts.depth - 4), HW = 44; // floor height, depth, half width
@@ -546,7 +548,18 @@ export function buildBridge(pts, matSrc) {
 
 // ---------------------------------------------------------------- cabin (aircraft body frame)
 import { buildCabinShell } from './ac-cabin.js';
-export const CABIN = { floor: -0.55, door: new THREE.Vector3(-1.98, -0.55, -13.0), seatRows: 29, pitch: 0.79, z0: -10.6, ckFloor: -0.15 };
+// [Aircraft types] the cabin layout of the SELECTED type (fox values are the defaults below);
+// applyCabinType (main.js boot, after applyType) re-points it before any cabin builds.
+export const CABIN = { floor: -0.55, door: new THREE.Vector3(-1.98, -0.55, -13.0), seatRows: 29, pitch: 0.79, z0: -10.6, ckFloor: -0.15, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], paxN: 121, entryHx: 1.7, psuXs: [-1.17, 1.17], crewPostX: 0.62, ckSeatZ: -15.05, ckZoneZ: -15.35, ckDoorZ: -14.55, profile: { sx: 1, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false } };
+export function applyCabinType(cab) {
+  const T = currentType();
+  CABIN.seatRows = cab.rows; CABIN.pitch = cab.pitch; CABIN.z0 = cab.z0;
+  CABIN.seatXs = cab.seatXs.slice(); CABIN.aisleXs = cab.aisleXs.slice(); CABIN.paxN = cab.pax;
+  CABIN.entryHx = cab.entryHx; CABIN.psuXs = cab.psuXs.slice(); CABIN.crewPostX = cab.crewPostX;
+  CABIN.profile = cab.profile;
+  CABIN.door.set(-T.dim.R, CABIN.floor, cab.profile.door1);
+  CABIN.ckSeatZ = -15.05 + T.deckDz; CABIN.ckZoneZ = -15.35 + T.deckDz; CABIN.ckDoorZ = -14.55 + T.deckDz;
+}
 export function buildCabin(icao, rnd) {
   const group = new THREE.Group(); group.name = 'cabin';
   const fl = CABIN.floor;
@@ -558,9 +571,13 @@ export function buildCabin(icao, rnd) {
   // ~0.47 m (armrest) and ~0.54 m (seatback), matching a real narrowbody aisle, and the
   // window seat's outer edge (1.505 + 0.27 armrest = 1.775) still clears the sidewall
   // lining (1.79-1.84 at seat heights in ac-cabin.js). Seat count/map unchanged: 174.
-  const seats = []; for (let r = 0; r < CABIN.seatRows; r++) for (const x of [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505]) seats.push([x, CABIN.z0 + r * CABIN.pitch]);
+  const seats = []; for (let r = 0; r < CABIN.seatRows; r++) for (const x of CABIN.seatXs) seats.push([x, CABIN.z0 + r * CABIN.pitch]);
   // detailed shell + seats (ac-cabin.js); the simple box cabin below is only a fallback if that build throws
-  let shell = null; try { shell = buildCabinShell({ seats, rnd, floor: fl, rows: CABIN.seatRows, pitch: CABIN.pitch, z0: CABIN.z0 }); group.add(shell.group); } catch (e) { console.error('cabin: detailed interior failed, using the simple one', e); shell = null; }
+  let shell = null; try { shell = buildCabinShell({ seats, rnd, floor: fl, rows: CABIN.seatRows, pitch: CABIN.pitch, z0: CABIN.z0, profile: CABIN.profile }); group.add(shell.group); } catch (e) { console.error('cabin: detailed interior failed, using the simple one', e); shell = null; }
+  // cabin-service director (ppl-service.js) walks this layout during briefing + meal service
+  svcConfigure({ row0: CABIN.z0, pitch: CABIN.pitch, rows: CABIN.seatRows, doorX: CABIN.door.x, doorZ: CABIN.door.z, aisleL: CABIN.aisleXs[0], aisleR: CABIN.aisleXs[CABIN.aisleXs.length - 1], lastZ: CABIN.z0 + (CABIN.seatRows - 1) * CABIN.pitch });
+  const aisleOf = x => CABIN.aisleXs.reduce((b, a) => Math.abs(a - x) < Math.abs(b - x) ? a : b, CABIN.aisleXs[0]);
+  const WINX = CABIN.seatXs[CABIN.seatXs.length - 1] - 0.4; // |x| beyond this = a window seat (fox: 1.105 -> only the ±1.505 seats, as the old 1.3 test)
   let at = null, mat = shell ? shell.mat : null;
   if (!shell) { at = buildAtlas(icao, 7, ''); mat = atlasMaterial(at.tex);
   const B = new Builder((p, n) => 0.86 + Math.max(0, n.y) * 0.12 - (Math.abs(n.y) < 0.5 ? 0.1 * Math.exp(-(p.y - fl) / 0.4) : 0));
@@ -590,9 +607,9 @@ export function buildCabin(icao, rnd) {
   // gate lounge and boards in groups through the door (see the boarding session API below); each person
   // owns a seat (target), a boarding group and a place in that group's queue. Arrival builds place them
   // in their seats via `boarders` (onfoot.js), and seatAll() is the skip-ahead shortcut.
-  const N = 124; const crowd = new People(group, N, rnd); const free = seats.map((s, i) => i).sort(() => rnd() - 0.5);
+  const N = CABIN.paxN + 3; const crowd = new People(group, N, rnd); const free = seats.map((s, i) => i).sort(() => rnd() - 0.5);
   const boarders = []; let k = 0;
-  for (; k < N - 2; k++) { if (k === 96) continue; const [x, z] = seats[free[k]]; const p = crowd.p[k]; Object.assign(p, { x: -1.4, y: -100, z: -13.0, yaw: 0, mode: 'walk', hidden: true, target: { x, z }, seatIdx: free[k], state: 'lounge', suitcase: rnd() < 0.55, backpack: rnd() < 0.5, talkSide: rnd() < 0.5 ? 1 : -1 }); boarders.push(p); }
+  for (; k < N - 2; k++) { if (k === 96) continue; const [x, z] = seats[free[k]]; const p = crowd.p[k]; Object.assign(p, { x: CABIN.door.x + 0.58, y: -100, z: CABIN.door.z, yaw: 0, mode: 'walk', hidden: true, target: { x, z }, seatIdx: free[k], state: 'lounge', suitcase: rnd() < 0.55, backpack: rnd() < 0.5, talkSide: rnd() < 0.5 ? 1 : -1 }); boarders.push(p); }
   // a parent with a baby on the lap: the baby travels hidden and appears on the parent's lap once seated
   const parent = crowd.p[0]; parent.age = 'adult'; const baby = crowd.p[96];
   Object.assign(baby, { age: 'kid', scale: 0.33, x: parent.target.x, y: fl + 0.36, z: parent.target.z - 0.12, yaw: Math.PI, mode: 'sit', act: 'idle', backpack: false, suitcase: false, hidden: true, state: 'babywait' }); crowd.paint(baby); baby.baby = parent; parent.hasBaby = true;
@@ -603,24 +620,25 @@ export function buildCabin(icao, rnd) {
   // ---- boarding session state (driven by main.js; the lounge side is driven by onfoot.js)
   const PACE = 1.35; // seconds between passengers arriving at the cabin door (door feeder)
   const session = { on: false, group: 0, feeder: 'door' };
-  const crew = crowd.p[N - 2]; crowd.setCrew(N - 2); Object.assign(crew, { x: -0.7, y: fl, z: -12.6, yaw: -Math.PI / 2, mode: 'stand', act: 'idle' });
-  const crew2 = crowd.p[N - 1]; crowd.setCrew(N - 1); Object.assign(crew2, { x: 0, y: fl, z: 2.0, yaw: Math.PI, mode: 'stand', act: 'idle' });
+  const crew = crowd.p[N - 2]; crowd.setCrew(N - 2); Object.assign(crew, { x: CABIN.door.x + 1.28, y: fl, z: CABIN.door.z + 0.4, yaw: -Math.PI / 2, mode: 'stand', act: 'idle' });
+  const crew2 = crowd.p[N - 1]; crowd.setCrew(N - 1); Object.assign(crew2, { x: CABIN.aisleXs[CABIN.aisleXs.length - 1], y: fl, z: 2.0, yaw: Math.PI, mode: 'stand', act: 'idle' });
   // walk zones in body frame (converted when on foot)
+  const lastZ = CABIN.z0 + (CABIN.seatRows - 1) * CABIN.pitch;
   const zones = [
-    { x: 0, z: -13.1, hx: 1.7, hz: 0.95, y0: fl, y1: fl, tag: 'entry' },
-    { x: 0, z: -0.3, hx: 0.27, hz: 11.75, y0: fl, y1: fl, tag: 'aisle' },
-    { x: -2.25, z: -13.0, hx: 0.6, hz: 0.42, y0: fl, y1: fl, tag: 'door' },
-    { x: -0.2, z: -14.55, hx: 0.42, hz: 0.45, y0: fl, y1: CABIN.ckFloor, tag: 'ckdoor', alongZ: true },
-    { x: -0.05, z: -15.35, hx: 0.85, hz: 0.45, y0: CABIN.ckFloor, y1: CABIN.ckFloor, tag: 'cockpit' },
+    { x: 0, z: CABIN.door.z - 0.1, hx: CABIN.entryHx, hz: 0.95, y0: fl, y1: fl, tag: 'entry' },
+    ...CABIN.aisleXs.map(a => ({ x: a, z: (CABIN.door.z + 0.95 + lastZ - 0.07) / 2, hx: 0.27, hz: (lastZ - 0.07 - CABIN.door.z - 0.95) / 2, y0: fl, y1: fl, tag: 'aisle' })),
+    { x: CABIN.door.x - 0.27, z: CABIN.door.z, hx: 0.6, hz: 0.42, y0: fl, y1: fl, tag: 'door' },
+    { x: -0.2, z: CABIN.ckDoorZ, hx: 0.42, hz: 0.45, y0: fl, y1: CABIN.ckFloor, tag: 'ckdoor', alongZ: true },
+    { x: -0.05, z: CABIN.ckZoneZ, hx: 0.85, hz: 0.45, y0: CABIN.ckFloor, y1: CABIN.ckFloor, tag: 'cockpit' },
   ];
   // cabin signs: ceiling-hung boxes over the aisle (lit on both faces) + small PSU icons above every row
   const signMat = { belt: new THREE.MeshBasicMaterial({ map: signTexture('belt') }), smoke: new THREE.MeshBasicMaterial({ map: signTexture('smoke') }) };
   const houseMat = new THREE.MeshBasicMaterial({ color: 0x7d838b }); const sgeo = new THREE.PlaneGeometry(0.2, 0.1), hgeo = new THREE.BoxGeometry(0.46, 0.13, 0.055);
   for (let r = 2; r < CABIN.seatRows; r += 6) { const z = CABIN.z0 + r * CABIN.pitch - 0.38;
-    const hb = new THREE.Mesh(hgeo, houseMat); hb.position.set(0, 1.43, z); group.add(hb); const rod = new THREE.Mesh(new THREE.BoxGeometry(0.02, shell ? 0.24 : 0.06, 0.02), houseMat); rod.position.set(0, shell ? 1.58 : 1.5, z); group.add(rod);
-    for (const f of [-1, 1]) for (const [k, dx] of [['belt', -0.11], ['smoke', 0.11]]) { const pl = new THREE.Mesh(sgeo, signMat[k]); pl.position.set(dx * f, 1.43, z + f * 0.029); pl.rotation.y = f > 0 ? 0 : Math.PI; group.add(pl); } }
+    for (const a of CABIN.aisleXs) { const hb = new THREE.Mesh(hgeo, houseMat); hb.position.set(a, 1.43, z); group.add(hb); const rod = new THREE.Mesh(new THREE.BoxGeometry(0.02, shell ? 0.24 : 0.06, 0.02), houseMat); rod.position.set(a, shell ? 1.58 : 1.5, z); group.add(rod);
+      for (const f of [-1, 1]) for (const [k, dx] of [['belt', -0.11], ['smoke', 0.11]]) { const pl = new THREE.Mesh(sgeo, signMat[k]); pl.position.set(a + dx * f, 1.43, z + f * 0.029); pl.rotation.y = f > 0 ? 0 : Math.PI; group.add(pl); } } }
   const psuGeo = new THREE.PlaneGeometry(0.075, 0.038); const psu = {}; const Mp = new THREE.Matrix4(), Qp = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.93, 0, 0)), Sp = new THREE.Vector3(1, 1, 1);
-  for (const [k, dx] of [['belt', -0.045], ['smoke', 0.045]]) { const m = new THREE.InstancedMesh(psuGeo, signMat[k], CABIN.seatRows * 2); let i = 0; for (let r = 0; r < CABIN.seatRows; r++) for (const sd of [-1, 1]) { Mp.compose(new THREE.Vector3(sd * 1.17 + dx, 1.035, CABIN.z0 + r * CABIN.pitch - 0.12), Qp, Sp); m.setMatrixAt(i++, Mp); } m.frustumCulled = false; group.add(m); psu[k] = m; }
+  for (const [k, dx] of [['belt', -0.045], ['smoke', 0.045]]) { const m = new THREE.InstancedMesh(psuGeo, signMat[k], CABIN.seatRows * CABIN.psuXs.length); let i = 0; for (let r = 0; r < CABIN.seatRows; r++) for (const px of CABIN.psuXs) { Mp.compose(new THREE.Vector3(px + dx, 1.035, CABIN.z0 + r * CABIN.pitch - 0.12), Qp, Sp); m.setMatrixAt(i++, Mp); } m.frustumCulled = false; group.add(m); psu[k] = m; }
   const sign = { belt: true, smoke: true, k: 1 };
   const paintSigns = () => { signMat.belt.color.setScalar(sign.belt ? 1.9 * sign.k : 0.09); signMat.smoke.color.setScalar(sign.smoke ? 1.9 * sign.k : 0.09); houseMat.color.setHex(0x7d838b).multiplyScalar(sign.k); };
   paintSigns();
@@ -633,12 +651,12 @@ export function buildCabin(icao, rnd) {
         // PACE clock; in 'lounge' feeder mode onfoot.js admits each one as a lounge figure reaches the aircraft
         // door (with a long safety net so the chain can never deadlock)
         const due = session.feeder === 'door' ? p.qT >= p.delay : (p.admitted || p.qT > p.delay + 75);
-        if (due) { p.state = 'in'; p.hidden = false; p.x = -1.4; p.y = fl; p.z = -13.0; p.mode = 'walk'; } else { p.y = -100; continue; } }
-      if (p.state === 'in') { const tx = 0, tz = -12.4; const d = Math.hypot(tx - p.x, tz - p.z); if (d < 0.15) p.state = 'aisle'; else { p.x += (tx - p.x) / d * 1.0 * dt; p.z += (tz - p.z) / d * 1.0 * dt; p.yaw = Math.atan2(tx - p.x, tz - p.z); } }
+        if (due) { p.state = 'in'; p.hidden = false; p.x = CABIN.door.x + 0.58; p.y = fl; p.z = CABIN.door.z; p.mode = 'walk'; p.aisleX = aisleOf(p.target.x); } else { p.y = -100; continue; } }
+      if (p.state === 'in') { const tx = p.aisleX ?? 0, tz = CABIN.door.z + 0.6; const d = Math.hypot(tx - p.x, tz - p.z); if (d < 0.15) p.state = 'aisle'; else { p.x += (tx - p.x) / d * 1.0 * dt; p.z += (tz - p.z) / d * 1.0 * dt; p.yaw = Math.atan2(tx - p.x, tz - p.z); } }
       else if (p.state === 'aisle') { const dz = p.target.z + 0.45 - p.z; if (Math.abs(dz) < 0.05) { p.state = (p.suitcase || p.backpack) ? 'lift' : 'side'; p.actT = 0; p.mode = 'stand'; p.yaw = p.target.x < 0 ? -Math.PI / 2 : Math.PI / 2; } else { p.z += Math.sign(dz) * Math.min(Math.abs(dz), 0.95 * dt); p.yaw = 0; } }
       else if (p.state === 'lift') { p.act = 'lift'; p.actT += dt; if (p.actT > 1.6) { p.suitcase = false; p.backpack = false; p.state = 'side'; p.act = 'idle'; } }
       else if (p.state === 'side') { const dx = p.target.x - p.x; p.mode = 'walk'; if (Math.abs(dx) < 0.05) { p.state = 'buckle'; p.mode = 'sit'; p.act = 'buckle'; p.actT = 0; p.x = p.target.x; p.z = p.target.z + 0.1; p.yaw = Math.PI; p.windowSide = p.x < 0 ? 1 : -1; } else { p.x += Math.sign(dx) * Math.min(Math.abs(dx), 0.6 * dt); p.z += (p.target.z + 0.1 - p.z) * Math.min(1, dt * 2); p.yaw = Math.sign(dx) * Math.PI / 2; } }
-      else if (p.state === 'buckle') { p.actT += dt; if (p.actT > 2.2) { p.state = 'seated'; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > 1.3 ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; boarded++; if (p.hasBaby && baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } } }
+      else if (p.state === 'buckle') { p.actT += dt; if (p.actT > 2.2) { p.state = 'seated'; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > WINX ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; boarded++; if (p.hasBaby && baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } } }
     }
     const done = boarded >= boarders.length;
     // (the post-boarding safety demo used to be faked here for 40 s with no narration; the real
@@ -654,13 +672,14 @@ export function buildCabin(icao, rnd) {
   const deplane = () => { let i = 0; for (const p of crowd.p.slice(0, N - 2)) { if (p.baby) { p.hidden = true; continue; } p.state = 'out'; p.mode = 'stand'; p.act = 'idle'; p.y = fl; p.delay = 1 + (i++) * 0.85; } };
   const updateOut = (dt, t, cam) => {
     for (const p of crowd.p.slice(0, N - 2)) { if (p.state !== 'out') continue; p.delay -= dt; if (p.delay > 0) continue; p.mode = 'walk';
-      if (Math.abs(p.x) > 0.05 && p.z > -12.3) { p.x -= Math.sign(p.x) * Math.min(Math.abs(p.x), 0.8 * dt); p.yaw = -Math.sign(p.x) * Math.PI / 2; }
-      else if (p.z > -12.8) { p.z -= 1.05 * dt; p.yaw = Math.PI; } else { p.x -= 1.0 * dt; p.yaw = -Math.PI / 2; if (p.x < -2.4) { p.state = 'gone'; p.hidden = true; } } }
+      const ax = p.aisleX ?? aisleOf(p.target.x);
+      if (Math.abs(p.x - ax) > 0.05 && p.z > CABIN.door.z + 0.7) { p.x -= Math.sign(p.x - ax) * Math.min(Math.abs(p.x - ax), 0.8 * dt); p.yaw = -Math.sign(p.x - ax) * Math.PI / 2; }
+      else if (p.z > CABIN.door.z + 0.2) { p.z -= 1.05 * dt; p.yaw = Math.PI; } else { p.x -= 1.0 * dt; p.yaw = -Math.PI / 2; if (p.x < CABIN.door.x - 0.42) { p.state = 'gone'; p.hidden = true; } } }
     if (group.visible) crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null); // [Perf] same hidden-cabin gate as update()
   };
   // in-flight life: reactions to the PA, signs and the ride; a few passengers get up when the belt sign is off
   const pax = crowd.p.slice(0, N - 2).filter(p => !p.baby);
-  const seatAll = () => { for (const p of boarders) if (p.state !== 'seated') { p.hidden = false; p.state = 'seated'; p.mode = 'sit'; p.suitcase = p.backpack = false; p.x = p.target.x; p.z = p.target.z + 0.1; p.y = fl; p.yaw = Math.PI; p.windowSide = p.x < 0 ? 1 : -1; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > 1.3 ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; } if (baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } boarded = boarders.length; crew2.act = 'idle'; };
+  const seatAll = () => { for (const p of boarders) if (p.state !== 'seated') { p.hidden = false; p.state = 'seated'; p.mode = 'sit'; p.suitcase = p.backpack = false; p.x = p.target.x; p.z = p.target.z + 0.1; p.y = fl; p.yaw = Math.PI; p.windowSide = p.x < 0 ? 1 : -1; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > WINX ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; } if (baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } boarded = boarders.length; crew2.act = 'idle'; };
   // ---- boarding session API (main.js conducts; onfoot.js feeds the lounge side in 'lounge' feeder mode)
   const beginBoarding = () => { session.on = true; };
   const callGroup = g => { session.group = g; for (const p of boarders) if (p.group === g && p.state === 'lounge') { p.state = 'wait'; p.qT = 0; p.delay = p.gOrder * PACE; p.admitted = false; } };
@@ -669,7 +688,7 @@ export function buildCabin(icao, rnd) {
   const boardingInfo = () => { let seated = 0, entered = 0, gEntered = 0; for (const p of boarders) { if (p.state === 'seated') seated++; if (p.state !== 'lounge' && p.state !== 'wait') { entered++; if (p.group === session.group) gEntered++; } } return { on: session.on, group: session.group, seated, entered, gEntered, total: boarders.length, done: boarded >= boarders.length, groups }; };
   const LV = { react: null, reactT: 0, walkers: [], crewT: 0, crewDir: 1 };
   const react = (kind, secs = 7) => { LV.react = kind; LV.reactT = secs; };
-  const pickWalkers = () => { if (LV.walkers.length) return; const cand = pax.filter(p => p.act !== 'baby' && p.act !== 'sleep' && Math.abs(p.x) < 1.0); for (let i = 0; i < 4 && cand.length; i++) { const p = cand.splice((rnd() * cand.length) | 0, 1)[0]; LV.walkers.push({ p, st: 'sit', t: 6 + i * 9 + rnd() * 10, hx: p.x, hz: p.z, gx: (rnd() - 0.5) * 0.9, gz: 11.2 + rnd() * 0.6 }); } };
+  const pickWalkers = () => { if (LV.walkers.length) return; const cand = pax.filter(p => p.act !== 'baby' && p.act !== 'sleep' && CABIN.aisleXs.some(a => Math.abs(p.x - a) < 0.6)); for (let i = 0; i < 4 && cand.length; i++) { const p = cand.splice((rnd() * cand.length) | 0, 1)[0]; p.aisleX = aisleOf(p.x); LV.walkers.push({ p, st: 'sit', t: 6 + i * 9 + rnd() * 10, hx: p.x, hz: p.z, gx: p.aisleX + (rnd() - 0.5) * (CABIN.aisleXs.length > 1 ? 0.3 : 0.9), gz: CABIN.z0 + CABIN.seatRows * CABIN.pitch - 1.1 + rnd() * 0.6 }); } };
   const walkTo = (p, x, z, sp, dt) => { const dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz); if (d < 0.04) return true; const st = Math.min(d, sp * dt); p.x += dx / d * st; p.z += dz / d * st; p.yaw = Math.atan2(dx, dz); return false; };
   const live = (dt, t, cam, st) => { // st: { belt, airborne, comfort, nervous }
     shell?.mood(st.airborne, dt, st.lights); shell?.setFlight(true);
@@ -686,22 +705,22 @@ export function buildCabin(icao, rnd) {
     for (const w of LV.walkers) { const p = w.p; w.t -= dt;
       if (st.belt && w.st !== 'sit' && w.st !== 'back' && w.st !== 'side') w.st = 'back';
       if (w.st === 'sit') { if (!st.belt && st.airborne && w.t < 0) { w.st = 'out'; p.walking = true; p.mode = 'walk'; p.act = 'idle'; } }
-      else if (w.st === 'out') { p.mode = 'walk'; if (walkTo(p, 0, p.z, 0.6, dt)) w.st = 'go'; }
+      else if (w.st === 'out') { p.mode = 'walk'; if (walkTo(p, p.aisleX ?? 0, p.z, 0.6, dt)) w.st = 'go'; }
       else if (w.st === 'go') { if (walkTo(p, w.gx, w.gz, 0.8, dt)) { w.st = 'stay'; w.t = 25 + rnd() * 40; p.mode = 'stand'; p.act = rnd() < 0.5 ? 'phone' : 'idle'; p.yaw = -Math.PI / 2 * Math.sign(w.gx || 1); } }
       else if (w.st === 'stay') { if (w.t < 0) w.st = 'back'; }
-      else if (w.st === 'back') { p.mode = 'walk'; p.act = 'idle'; if (walkTo(p, 0, w.hz, st.belt ? 1.1 : 0.8, dt)) w.st = 'side'; }
+      else if (w.st === 'back') { p.mode = 'walk'; p.act = 'idle'; if (walkTo(p, p.aisleX ?? 0, w.hz, st.belt ? 1.1 : 0.8, dt)) w.st = 'side'; }
       else if (w.st === 'side') { if (walkTo(p, w.hx, w.hz, 0.6, dt)) { w.st = 'sit'; w.t = 40 + rnd() * 60; p.walking = false; p.mode = 'sit'; p.yaw = Math.PI; p.act = st.belt ? 'buckle' : p.baseAct; } } }
     // cabin crew: compliance walk when the belt sign comes on, a slow service walk in cruise, seated-ish at the front otherwise
     LV.crewT -= dt; crew2.mode = 'walk';
-    if (st.airborne && (LV.crewT > 0 || !st.belt)) { const zt = LV.crewDir > 0 ? 10.8 : -11.2; crew2.act = st.belt ? 'idle' : 'carry'; if (walkTo(crew2, 0, zt, st.belt ? 0.75 : 0.45, dt)) { LV.crewDir *= -1; if (st.belt && LV.crewDir > 0) LV.crewT = 0; } }
-    else { crew2.act = 'idle'; if (walkTo(crew2, 0.62, -10.9, 0.8, dt)) { crew2.mode = 'stand'; crew2.yaw = 0; } } // front-right post beside row 1, facing the cabin — clear of the cabin camera (was 0.47 m dead ahead of it, filling the frame)
+    if (st.airborne && (LV.crewT > 0 || !st.belt)) { const zt = LV.crewDir > 0 ? CABIN.z0 + CABIN.seatRows * CABIN.pitch - 1.5 : CABIN.z0 - 0.6; crew2.act = st.belt ? 'idle' : 'carry'; if (walkTo(crew2, CABIN.aisleXs[CABIN.aisleXs.length - 1], zt, st.belt ? 0.75 : 0.45, dt)) { LV.crewDir *= -1; if (st.belt && LV.crewDir > 0) LV.crewT = 0; } }
+    else { crew2.act = 'idle'; if (walkTo(crew2, CABIN.crewPostX, CABIN.z0 - 0.3, 0.8, dt)) { crew2.mode = 'stand'; crew2.yaw = 0; } } // front-right post beside row 1, facing the cabin — clear of the cabin camera (was 0.47 m dead ahead of it, filling the frame)
     for (const p of crowd.p) if (p.baby) { p.x = p.baby.x; p.z = p.baby.z - 0.22; }
     if (st.visible !== false) crowd.commit(t, cam ? group.worldToLocal(cam.clone()) : null);
   };
   const setSigns = (belt, smoke) => { if (belt && !sign.belt) { react('buckle', 4); LV.crewT = 60; LV.crewDir = 1; } sign.belt = belt; sign.smoke = smoke; paintSigns(); };
   const light = k => { sign.k = k; paintSigns(); shell?.setK(k); };
   crowd.commit(0);
-  return { group, zones, update, updateOut, deplane, crowd, mat, boarders, baby, seatsTotal: seats.length, seatAll, live, react, setSigns, light, sign, setScreen: shell?.setScreen || null, beginBoarding, callGroup, admitNext, setFeeder, boardingInfo, dispose() { group.traverse(o => { if (o.geometry && true) o.geometry.dispose(); }); at?.tex.dispose(); shell?.dispose(); } };
+  return { group, zones, update, updateOut, deplane, crowd, mat, boarders, baby, seatsTotal: seats.length, seatAll, live, react, setSigns, light, sign, setScreen: shell?.setScreen || null, beginBoarding, callGroup, admitNext, setFeeder, boardingInfo, demoX: CABIN.aisleXs[0], aisleXs: CABIN.aisleXs.slice(), dispose() { group.traverse(o => { if (o.geometry && true) o.geometry.dispose(); }); at?.tex.dispose(); shell?.dispose(); } };
 }
 function signTexture(kind) {
   const c = document.createElement('canvas'); c.width = 128; c.height = 64; const x = c.getContext('2d');

@@ -101,9 +101,9 @@ export class OnFoot {
     if (o.stand.jb) o.stand.jb.visible = false;
     // route used by auto-walk (tests, and the J shortcut)
     const W = term.world; const toWorldBody = (x, y, z) => this.aircraft.localToWorld(new THREE.Vector3(x, y, z));
-    this.routeToCockpit = [W(13, 4.6, term.D * 0.75), W(0, 4.6, term.D * 0.68), W(0, 4.6, 22), W(doorX, 4.6, 16), W(doorX, 4.6, 6), Fp.clone().addScaledVector(n, -1.5), Fp.clone().addScaledVector(n, 1.0), Rr.clone(), D.clone(), toWorldBody(-1.2, CABIN.floor, -13.0), toWorldBody(0, CABIN.floor, -13.3), toWorldBody(-0.2, CABIN.floor, -14.3), toWorldBody(-0.45, CABIN.ckFloor, -15.25)];
+    this.routeToCockpit = [W(13, 4.6, term.D * 0.75), W(0, 4.6, term.D * 0.68), W(0, 4.6, 22), W(doorX, 4.6, 16), W(doorX, 4.6, 6), Fp.clone().addScaledVector(n, -1.5), Fp.clone().addScaledVector(n, 1.0), Rr.clone(), D.clone(), toWorldBody(CABIN.door.x + 0.78, CABIN.floor, CABIN.door.z), toWorldBody(CABIN.aisleXs[0], CABIN.floor, CABIN.door.z - 0.3), toWorldBody(-0.2, CABIN.floor, CABIN.ckSeatZ + 0.75), toWorldBody(-0.45, CABIN.ckFloor, CABIN.ckSeatZ - 0.2)];
     this.routeOut = this.routeToCockpit.slice(4).reverse().concat([W(doorX, 4.6, 16), W(0, 4.6, 22), W(0, 4.6, term.D * 0.75), term.exitPos.clone()]);
-    this.seat = toWorldBody(-0.52, CABIN.ckFloor, -15.05);
+    this.seat = toWorldBody(-0.52, CABIN.ckFloor, CABIN.ckSeatZ);
     this.exitPos = term.exitPos;
     this.boardingDone = false; this.announced = false; this.greeted = false;
     // terminal flow state (Terminal rebuild): crew sign-in -> tray -> arch -> collect.

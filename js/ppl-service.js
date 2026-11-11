@@ -4,10 +4,19 @@
 // Service plan (set by main.js from the scheduled flight time): 'full' = meal pass + collect pass on
 // longer flights; 'drinks' = a drinks-only trolley pass (cups in hand, no meal trays) + a collect pass
 // on short hops; 'none' = no service at all on the shortest sectors.
-const ROW0 = -10.6, PITCH = 0.79, ROWS = 29, FL = -0.55;
+// [Aircraft types] the cabin layout is CONFIGURED per build (interiors.buildCabin -> svcConfigure);
+// the defaults below are the fox layout, so an unconfigured director behaves exactly as before.
+let ROW0 = -10.6, PITCH = 0.79, ROWS = 29, FL = -0.55;
+let AISLE = { L: 0, R: 0 }, DOOR = { x: -1.98, z: -13.0 }, AFT = 10.8, LASTZ = 11.52;
 export const SVC = { autoAfter: 120, eatTime: 150, drinkTime: 60, serveT: 1.25, walk: 0.45 }; // autoAfter 180 -> 120 (cabin fix): on short sectors the old 3-minute wait plus the pass durations left no room for drinks + collect before descent in owner-style play
-const JUMP = [[-1.43, -13.82], [-0.97, -13.82]]; // forward jump seats on the lav wall, facing aft
-const GALLEY = [0.55, -13.25];
+let JUMP = [[-1.43, -13.82], [-0.97, -13.82]]; // forward jump seats on the lav wall, facing aft
+let GALLEY = [0.55, -13.25];
+export function svcConfigure(o) {
+  ROW0 = o.row0; PITCH = o.pitch; ROWS = o.rows; LASTZ = o.lastZ; AFT = o.row0 + o.rows * o.pitch - 1.5;
+  DOOR = { x: o.doorX, z: o.doorZ }; AISLE = { L: o.aisleL, R: o.aisleR };
+  JUMP = [[o.doorX + 0.55, o.doorZ - 0.82], [o.doorX + 1.01, o.doorZ - 0.82]];
+  GALLEY = [0.55, o.doorZ - 0.25];
+}
 const rowOf = z => Math.round((z - 0.1 - ROW0) / PITCH), rowZ = r => ROW0 + r * PITCH + 0.1;
 export class CabinDirector {
   constructor(crowd) { this.c = crowd; this.phase = 'boarding'; this.phT = 0; this.svc = null; this.t = null; this.done = { meal: false }; this.home = new Map(); this.auto = true; this.crewSt = new Map(); this.plan = 'full'; }
@@ -45,20 +54,22 @@ export class CabinDirector {
     // free: leave jump seats and walk home, then hand control back to the cabin logic
     crew.forEach((p, k) => { const st = this.crewSt.get(p.i); if (!st || st === 'free') return;
       if (st === 'seat') { p.mode = 'stand'; p.act = 'idle'; p.prop2 = null; p.x = JUMP[k][0]; p.z = JUMP[k][1] + 0.35; this.crewSt.set(p.i, this.phase === 'arrived' ? 'door' : 'home'); return; }
-      if (st === 'door') { p.mode = 'stand'; p.act = 'idle'; if (walk(p, -1.35 + k * 0.5, -12.75 + k * 0.1, 0.6, dt)) { p.yaw = Math.PI * 0.5 * (k ? -0.3 : 1); this.crewSt.set(p.i, 'free'); } return; }
-      const h = this.home.get(p.i); if (path(p, [[0.0, Math.max(-12.4, Math.min(p.z, 10.8))], [h[0], h[1]]], 0.7, dt)) { p.mode = 'stand'; this.crewSt.set(p.i, 'free'); } });
+      if (st === 'door') { p.mode = 'stand'; p.act = 'idle'; if (walk(p, DOOR.x + 0.63 + k * 0.5, DOOR.z + 0.25 + k * 0.1, 0.6, dt)) { p.yaw = Math.PI * 0.5 * (k ? -0.3 : 1); this.crewSt.set(p.i, 'free'); } return; }
+      const ak = k === 0 ? AISLE.L : AISLE.R;
+      const h = this.home.get(p.i); if (path(p, [[ak, Math.max(DOOR.z + 0.6, Math.min(p.z, AFT))], [h[0], h[1]]], 0.7, dt)) { p.mode = 'stand'; this.crewSt.set(p.i, 'free'); } });
   }
   _toJump(p, k, dt) { const st = this.crewSt.get(p.i); const [jx, jz] = JUMP[k];
     if (st === 'seat') { p.mode = 'sit'; p.x = jx; p.z = jz - 0.1 + 0.2; p.yaw = 0; p.prop2 = 'jumpseat'; p.seatT = (p.seatT || 0) + dt; p.act = p.seatT < 2.2 ? 'buckle' : 'idle'; p.prop = null; return; }
     this.crewSt.set(p.i, 'tojump'); p.prop = null; if (p.prop2 === 'trolley') p.prop2 = null;
-    if (path(p, [[0, Math.max(-12.4, Math.min(p.z, 10.8))], [0, -12.4], [jx, jz + 0.42]], 0.9, dt)) { this.crewSt.set(p.i, 'seat'); p.seatT = 0; } }
+    const ak = k === 0 ? AISLE.L : AISLE.R;
+    if (path(p, [[ak, Math.max(DOOR.z + 0.6, Math.min(p.z, AFT))], [ak, DOOR.z + 0.6], [jx, jz + 0.42]], 0.9, dt)) { this.crewSt.set(p.i, 'seat'); p.seatT = 0; } }
   _service(dt, t, crew) {
     const s = this.svc, [A, Bp] = crew; s.t += dt; for (const p of crew) this.crewSt.set(p.i, 'service');
     const tz = () => A.z + 0.62;
     if (s.st === 'prep') { // both to the galley, take the trolley out
-      const a = path(A, [[0, Math.min(A.z, -12.0)], [GALLEY[0] - 0.4, GALLEY[1]]], 0.8, dt), b = path(Bp, [[0, Math.min(Bp.z, -11.8)], [GALLEY[0] - 0.4, GALLEY[1] + 0.5]], 0.8, dt);
-      if (a && b) { A.yaw = Math.PI / 2; Bp.yaw = Math.PI / 2; A.mode = Bp.mode = 'stand'; A.act = Bp.act = 'idle'; s.pt = (s.pt || 0) + dt; if (s.pt > 3) { s.st = 'out'; A.prop2 = 'trolley'; A.x = 0; A.z = -12.6; } } return; }
-    if (s.st === 'out') { A.act = 'push'; Bp.act = 'idle'; Bp.prop = null; A.yaw = 0; const zt = rowZ(s.row) - 0.62; const a = walk(A, 0, zt, SVC.walk, dt); const b = walk(Bp, 0, zt + 1.3, SVC.walk + 0.1, dt); A.yaw = 0; Bp.yaw = 0; if (!a) A.mode = 'walk';
+      const a = path(A, [[AISLE.L, Math.min(A.z, DOOR.z + 1.0)], [GALLEY[0] - 0.4, GALLEY[1]]], 0.8, dt), b = path(Bp, [[AISLE.R, Math.min(Bp.z, DOOR.z + 1.2)], [GALLEY[0] - 0.4, GALLEY[1] + 0.5]], 0.8, dt);
+      if (a && b) { A.yaw = Math.PI / 2; Bp.yaw = Math.PI / 2; A.mode = Bp.mode = 'stand'; A.act = Bp.act = 'idle'; s.pt = (s.pt || 0) + dt; if (s.pt > 3) { s.st = 'out'; A.prop2 = 'trolley'; A.x = AISLE.L; A.z = DOOR.z + 0.4; } } return; }
+    if (s.st === 'out') { A.act = 'push'; Bp.act = 'idle'; Bp.prop = null; A.yaw = 0; const zt = rowZ(s.row) - 0.62; const a = walk(A, AISLE.L, zt, SVC.walk, dt); const b = walk(Bp, AISLE.R, zt + 1.3, SVC.walk + 0.1, dt); A.yaw = 0; Bp.yaw = 0; if (!a) A.mode = 'walk';
       if (a && b) { A.mode = Bp.mode = 'stand'; s.st = 'serve'; s.q = this._queue(s.row, A, 'L', s.kind).concat(this._queue(s.row + 1, Bp, 'R', s.kind)); s.cur = null; } return; }
     if (s.st === 'serve') { A.mode = Bp.mode = 'stand';
       for (const who of [A, Bp]) { const job = who._job; if (!job) { const k = s.q.findIndex(j => j.by === who); if (k < 0) { who.act = who === A ? 'push' : 'idle'; who.yaw = 0; who.prop = null; continue; } who._job = s.q.splice(k, 1)[0]; who._job.t = 0; continue; }
@@ -67,13 +78,14 @@ export class CabinDirector {
         if (job.t > SVC.serveT) { if (s.kind === 'meal') { P.prop2 = 'meal'; P.eatT = 0; P.svcAct = 'eat'; } else if (s.kind === 'drinks') { P.svcDrink = true; P.drinkT = 0; P.svcAct = 'drink'; } else { P.prop2 = null; P.svcDrink = false; P.svcAct = null; P.eatT = 0; } who._job = null; who.prop = null; } }
       if (!s.q.length && !A._job && !Bp._job) { s.row += 2; if (s.row >= ROWS) { s.st = 'return'; } else s.st = 'out'; } return; }
     if (s.st === 'return') { A._job = Bp._job = null; A.prop = Bp.prop = null; for (const p of this.c.p) if (p.svcAct === 'take' || p.svcAct === 'give') p.svcAct = p.prop2 === 'meal' ? 'eat' : p.svcDrink ? 'drink' : null;
-      const a = walk(A, 0, -12.6, 0.6, dt), b = walk(Bp, 0, -11.9, 0.6, dt); if (A.prop2 === 'trolley') A.yaw = Math.PI; if (a && b) { A.prop2 = null; if (s.kind === 'collect') { this.done.collect = true;
+      const a = walk(A, AISLE.L, DOOR.z + 0.4, 0.6, dt), b = walk(Bp, AISLE.R, DOOR.z + 1.1, 0.6, dt); if (A.prop2 === 'trolley') A.yaw = Math.PI; if (a && b) { A.prop2 = null; if (s.kind === 'collect') { this.done.collect = true;
         // final sweep: anyone the pass skipped (up walking, asleep) is collected on the crew's last walk-through
         for (const p of this.c.p) { if (p.svcDrink) { p.svcDrink = false; if (p.prop === 'cup') p.prop = null; if (p.svcAct === 'drink') p.svcAct = null; } if (p.prop2 === 'meal') { p.prop2 = null; if (p.svcAct) p.svcAct = null; } }
       } else this.done.meal = true; this.svc = null; for (const p of crew) this.crewSt.set(p.i, 'home'); } }
   }
   _queue(r, who, side, kind) { if (r < 0 || r >= ROWS) return []; const z = rowZ(r), out = [];
-    for (const P of this.pax()) { if (Math.abs(P.z - z) > 0.2) continue; if (P.act === 'sleep' && kind !== 'collect') continue; if (kind === 'collect' ? !(P.prop2 === 'meal' || P.svcDrink) : P.prop2 === 'meal' || P.svcDrink) continue; out.push({ p: P, by: who }); }
+    const twin = AISLE.L !== AISLE.R; // twin-aisle: each crew member serves their own side (centre block rides with the left)
+    for (const P of this.pax()) { if (Math.abs(P.z - z) > 0.2) continue; if (twin && ((side === 'L' && P.x > 0) || (side === 'R' && P.x <= 0))) continue; if (P.act === 'sleep' && kind !== 'collect') continue; if (kind === 'collect' ? !(P.prop2 === 'meal' || P.svcDrink) : P.prop2 === 'meal' || P.svcDrink) continue; out.push({ p: P, by: who }); }
     out.sort((a, b) => Math.abs(a.p.x) - Math.abs(b.p.x)); return out; }
 }
 function walk(p, x, z, sp, dt) { const dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz); if (d < 0.03) { p.x = x; p.z = z; return true; } const st = Math.min(d, sp * dt); p.x += dx / d * st; p.z += dz / d * st; p.yaw = Math.atan2(dx, dz); p.mode = 'walk'; p.speed = sp; return false; }

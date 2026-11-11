@@ -9,6 +9,7 @@ import { atmos } from './sky.js';
 import { DIM } from './aircraft.js';
 import { RampCrew, pushTug, gpuUnit, coneGeometry, chockGeometry, gseMats, hoseMesh } from './env-gse.js';
 import { Turnaround } from './env-turnaround.js';
+import { currentType } from './ac-types.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const _zeroM = new THREE.Matrix4().makeScale(0, 0, 0); // [Perf] shared hide-instance matrix for commit()
@@ -104,12 +105,13 @@ export class GroundCrew {
     this.state = arriving ? 'arrive' : 'parked'; this.t = 0; this.g.visible = true; this.ground = ground;
     const nz = DIM.noseGearZ, mz = DIM.mainZ, mx = DIM.mainX; const ch = [[0.0, nz - 0.75], [0.0, nz + 0.75], [-mx, mz - 0.85], [-mx, mz + 0.85], [mx, mz - 0.85], [mx, mz + 0.85]];
     this.chockPos = ch; this.chocks.forEach((c, i) => { this.place(c, ac, ch[i][0], ch[i][1], ground, Math.PI / 2); c.visible = !arriving; });
-    this.conePos = [[0, DIM.noseZ - 2.5], [-DIM.span / 2 - 0.6, 4], [DIM.span / 2 + 0.6, 4], [0, DIM.tailZ + 2], [-6.5, -4], [6.5, -4]];
+    const ez = currentType().vis.eng.z0 + 2.95; // engine cones sit just ahead of the nacelles (fox: -4.0)
+    this.conePos = [[0, DIM.noseZ - 2.5], [-DIM.span / 2 - 0.6, 4], [DIM.span / 2 + 0.6, 4], [0, DIM.tailZ + 2], [-(DIM.engX + 0.75), ez], [DIM.engX + 0.75, ez]];
     this.cones.forEach((c, i) => { this.place(c, ac, this.conePos[i][0], this.conePos[i][1], ground); c.visible = !arriving; });
     // GPU on the right of the nose, cable to the external-power receptacle behind the nose gear
     const gh = ground(ac.position.x, ac.position.z).h, hAC = ac.position.y - gh, W = (x, y, z) => { const p = ac.localToWorld(V(x, 0, z)); return [p.x, gh + y, p.z]; };
-    this.place(this.gpu, ac, 4.2, -16.8, ground, 0.4); this.gpu.visible = !arriving;
-    this.cable.traverse(o => o.geometry && o.geometry.dispose()); this.cable.clear(); this.cable.add(hoseMesh([W(4.65, 1.0, -15.73), W(3.6, 0.12, -15.45), W(1.7, 0.1, -15.1), W(0.8, hAC - 2.25, -15.0), W(0.6, hAC - 1.75, -15.0)], 0.035)); this.cable.visible = !arriving;
+    this.place(this.gpu, ac, 4.2, nz - 3.9, ground, 0.4); this.gpu.visible = !arriving;
+    this.cable.traverse(o => o.geometry && o.geometry.dispose()); this.cable.clear(); this.cable.add(hoseMesh([W(4.65, 1.0, nz - 2.83), W(3.6, 0.12, nz - 2.55), W(1.7, 0.1, nz - 2.2), W(0.8, hAC + DIM.wheelY + 1.37, nz - 2.1), W(0.6, hAC + DIM.wheelY + 1.87, nz - 2.1)], 0.035)); this.cable.visible = !arriving;
     if (arriving) this.turn.clear(); else this.turn.start(ac, gh, this.acYaw(ac), svcMode, this.autoServices);
     this.tug.visible = false; this.bar.visible = false;
     this.place(this.headset, ac, -1.8, nz - 0.6, ground, Math.PI / 2); this.place(this.wing, ac, -DIM.span / 2 + 1, 3, ground, Math.PI); this.place(this.marsh, ac, 0, nz - 16, ground, 0);

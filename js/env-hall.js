@@ -146,6 +146,7 @@ function fidsCanvas(o, title) {
 // opts: { icao, mode: 'dep'|'arr', gate, dest, O (world façade point, y = apron), n (unit toward the apron), depth, doorX, board }
 export function buildHall(opts, rnd) {
   const { icao, mode, gate, dest } = opts, dep = mode === 'dep';
+  const FLIGHT_N = opts.flightN || 121; // [Aircraft types] the selected type's passenger count (interiors.js buildCabin load)
   const at = buildAtlas(icao, gate, dest), A = at.accent; const mat = atlasMat(at.tex), floorMat = atlasMat(at.tex, { transparent: true, opacity: 0.9, depthWrite: true });
   const F = 4.6, rawD = Math.max(40, (opts.depth || 40) - 4), big = rawD >= 60;
   const D = Math.max(46, rawD) + (big ? 6 : 4), HW = big ? 58 : 46, HC = 11, dx = opts.doorX;
@@ -332,7 +333,7 @@ export function buildHall(opts, rnd) {
   const boards = dep ? [[-8, F + 4.2, D - 0.3, Math.PI, 1], [8, F + 4.2, D - 0.3, Math.PI, 1], [-22, F + 3.2, 18 - 0.4, 0, 0.45], [22, F + 3.2, 18 - 0.4, 0, 0.45], [0, F + 3.4, zS - 1.0, 0, 0.5]] : [[0, F + 3.6, z0sec + 3, Math.PI, 0.7], [-22, F + 3.2, 18 - 0.4, 0, 0.45]];
   for (const [x, y, z, ry, s] of boards) { const bm = new THREE.Mesh(new THREE.PlaneGeometry(12 * s, 3.75 * s), fm); bm.position.set(x, y, z); bm.rotation.y = ry; group.add(bm); const rf = bm.clone(); rf.position.y = 2 * F - y; rf.scale.y = -1; rf.material = new THREE.MeshBasicMaterial({ map: board, toneMapped: false, side: THREE.DoubleSide, color: 0x666666 }); group.add(rf); }
   // ---- people: seated at the gate, check-in queues, security staff + passengers, shoppers, walkers
-  const NP = dep ? 212 : 96; const crowd = new People(group, NP, rnd); let k = 0; const walkers = [];
+  const NP = dep ? 91 + FLIGHT_N : 96; const crowd = new People(group, NP, rnd); let k = 0; const walkers = [];
   const ACTS = ['idle', 'phone', 'read', 'talk', 'sleep', 'idle', 'phone'];
   const usedBench = new Set(); // bench seats already taken (ambient sitters first, then the flight's load)
   for (const [x, z] of benchPos) for (let sI = 0; sI < 6; sI++) if (rnd() < 0.3 && k < 26) { const p = crowd.p[k++]; usedBench.add(x + ':' + sI); Object.assign(p, { x: x + sI * 0.62 - 1.55, y: F, z: z + 0.06, yaw: Math.PI, mode: 'sit', act: ACTS[(rnd() * ACTS.length) | 0], talkSide: rnd() < 0.5 ? 1 : -1, windowSide: 0 }); }
@@ -356,10 +357,9 @@ export function buildHall(opts, rnd) {
   // bags in hand. onfoot.js walks them to the podium and down the bridge as their group is called.
   const flightPax = [];
   if (dep) {
-    const FLIGHT_N = 121; // matches the cabin load in interiors.js buildCabin (124 people − 2 crew − 1 lap baby)
     const benchesByGate = benchPos.slice().sort((a, b) => Math.abs(a[0] - dx) - Math.abs(b[0] - dx));
-    outer: for (const [bx, bz] of benchesByGate) for (let sI = 0; sI < 6 && flightPax.length < 92; sI++) { if (k >= NP - 12) break outer; const bk = bx + ':' + sI; if (usedBench.has(bk) || rnd() < 0.14) continue; usedBench.add(bk); const p = crowd.p[k++]; Object.assign(p, { x: bx + sI * 0.62 - 1.55, y: F, z: bz + 0.06, yaw: Math.PI, mode: 'sit', act: ACTS[(rnd() * ACTS.length) | 0], talkSide: rnd() < 0.5 ? 1 : -1, windowSide: 0, flight: true }); flightPax.push(p); }
-    while (flightPax.length < FLIGHT_N && k < NP - 12) { const p = crowd.p[k++]; const nearDesk = flightPax.length > 106; Object.assign(p, { x: nearDesk ? dx + 7 + (rnd() - 0.5) * 7 : dx + (rnd() - 0.5) * 22, y: F, z: nearDesk ? 5.4 + rnd() * 2.2 : 2.4 + rnd() * 0.9, yaw: Math.PI + (rnd() - 0.5) * 0.8, mode: 'stand', act: rnd() < 0.45 ? 'phone' : 'idle', talkSide: rnd() < 0.5 ? 1 : -1, suitcase: rnd() < 0.65, backpack: rnd() < 0.4, flight: true }); flightPax.push(p); }
+    outer: for (const [bx, bz] of benchesByGate) for (let sI = 0; sI < 6 && flightPax.length < Math.min(92, Math.round(FLIGHT_N * 0.76)); sI++) { if (k >= NP - 12) break outer; const bk = bx + ':' + sI; if (usedBench.has(bk) || rnd() < 0.14) continue; usedBench.add(bk); const p = crowd.p[k++]; Object.assign(p, { x: bx + sI * 0.62 - 1.55, y: F, z: bz + 0.06, yaw: Math.PI, mode: 'sit', act: ACTS[(rnd() * ACTS.length) | 0], talkSide: rnd() < 0.5 ? 1 : -1, windowSide: 0, flight: true }); flightPax.push(p); }
+    while (flightPax.length < FLIGHT_N && k < NP - 12) { const p = crowd.p[k++]; const nearDesk = flightPax.length > FLIGHT_N - 15; Object.assign(p, { x: nearDesk ? dx + 7 + (rnd() - 0.5) * 7 : dx + (rnd() - 0.5) * 22, y: F, z: nearDesk ? 5.4 + rnd() * 2.2 : 2.4 + rnd() * 0.9, yaw: Math.PI + (rnd() - 0.5) * 0.8, mode: 'stand', act: rnd() < 0.45 ? 'phone' : 'idle', talkSide: rnd() < 0.5 ? 1 : -1, suitcase: rnd() < 0.65, backpack: rnd() < 0.4, flight: true }); flightPax.push(p); }
   }
   const famPath = [[-30, 19], [30, 19], [30, 16.5], [-30, 16.5]];
   for (let f = 0; f < 3 && k < NP - 2; f++) { const p = crowd.p[k++]; if (f > 0) { p.age = 'kid'; p.scale = 0.58 + rnd() * 0.12; p.backpack = true; crowd.paint(p); } Object.assign(p, { x: famPath[0][0] - f * 0.9, y: F, z: famPath[0][1] + f * 0.6, mode: 'walk', path: famPath, seg: 1, speed: 0.95, family: f, suitcase: f === 0 }); walkers.push(p); }
