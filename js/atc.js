@@ -92,6 +92,70 @@ export function facility(apt, kind) {
 const fmtF = f => fstr(f.mhz) + (f.real ? '' : '*');
 const freqS = f => digits(fstr(f.mhz).replace(/0$/, ''), f.apt.cc === 'US' ? 'point' : 'decimal');
 
+// ---------------------------------------------------------------- the FO's interphone callouts, localized.
+// The first officer's checklist / ECAM / flight-phase callouts live in failures.js (+ one line in main.js)
+// as English strings and reach the speech manager through main.js's foSay(). This table renders each one in
+// the language the captain is currently flying with (ATC.foCall / pilotLangNow — the same pilotLangFor
+// resolution the radio speech uses), one-for-one in meaning and trigger. An entry is a string (display =
+// spoken) or a [display, spoken] pair, mirroring the M() shape: displays keep the Latin ECAM / APU / PTU
+// legends the flight deck itself shows, spoken forms read the acronyms out in-language. A line with no
+// entry here is spoken in English exactly as before — a callout is never silenced by a missing translation.
+const FO_CALLS = {
+  'E C A M actions complete.': { es: 'Acciones ECAM completas.', ko: ['ECAM 조치 완료.', '이캠 조치 완료.'], ja: ['ECAMアクション完了。', 'イーカム アクション完了。'] },
+  'E C A M actions.': { es: 'Acciones ECAM.', ko: ['ECAM 조치.', '이캠 조치.'], ja: ['ECAMアクション。', 'イーカム アクション。'] },
+  'I have the rudder trimmed. E C A M actions when you are ready.': { es: 'Tengo el timón compensado. Acciones ECAM cuando esté listo.', ko: ['러더 트림을 맞췄습니다. 준비되시면 ECAM 조치를 하겠습니다.', '러더 트림을 맞췄습니다. 준비되시면 이캠 조치를 하겠습니다.'], ja: ['ラダーはトリムしました。準備ができたらECAMアクションを行います。', 'ラダーはトリムしました。準備ができたらイーカム アクションを行います。'] },
+  'Bird strike!': { es: '¡Impacto de aves!', ko: '조류 충돌!', ja: 'バードストライク！' },
+  'The gear is not coming down.': { es: 'El tren de aterrizaje no baja.', ko: '랜딩기어가 내려가지 않습니다.', ja: 'ギアが下りません。' },
+  'E C A M: gravity extension.': { es: 'ECAM: extensión por gravedad.', ko: ['ECAM: 중력 전개.', '이캠, 중력 전개.'], ja: ['ECAM：グラビティ展開。', 'イーカム、グラビティ展開。'] },
+  'Green hydraulic system, low pressure.': { es: 'Sistema hidráulico verde, baja presión.', ko: '그린 유압 계통, 압력이 낮습니다.', ja: 'グリーン油圧系統、圧力低下。' },
+  'Cabin altitude! We have lost pressurisation.': { es: '¡Altitud de cabina! Hemos perdido la presurización.', ko: '객실 고도! 여압을 상실했습니다.', ja: 'キャビン高度！与圧を失いました。' },
+  'Masks on. Emergency descent.': { es: 'Máscaras puestas. Descenso de emergencia.', ko: '마스크 착용. 긴급 강하.', ja: 'マスク装着。緊急降下。' },
+  'Electrical emergency configuration. Both generators lost, the RAT is out.': { es: 'Configuración eléctrica de emergencia. Ambos generadores perdidos, la RAT está fuera.', ko: ['전기 비상 구성. 발전기 두 대 모두 상실, RAT가 전개됐습니다.', '전기 비상 구성. 발전기 두 대 모두 상실, 랫이 전개됐습니다.'], ja: ['電気緊急構成。発電機両方喪失、RATが出ています。', '電気緊急構成。発電機両方喪失、ラットが出ています。'] },
+  'Flaps are locked.': { es: 'Los flaps están bloqueados.', ko: '플랩이 잠겼습니다.', ja: 'フラップが固着しています。' },
+  'A P U, start.': { es: ['APU, arranque.', 'A P U, arranque.'], ko: ['APU, 시동.', '에이피유, 시동.'], ja: ['APU、スタート。', 'エーピーユー、スタート。'] },
+  'Land as soon as possible. Single-engine approach, flaps three.': { es: 'Aterrice lo antes posible. Aproximación con un solo motor, flaps tres.', ko: '가능한 한 빨리 착륙합니다. 엔진 하나로 접근, 플랩 3.', ja: 'できるだけ早く着陸します。片エンジン進入、フラップ3。' },
+  'Land as soon as possible.': { es: 'Aterrice lo antes posible.', ko: '가능한 한 빨리 착륙합니다.', ja: 'できるだけ早く着陸します。' },
+  'Agent one, discharge.': { es: 'Agente uno, descarga.', ko: ['소화제 1, 방출.', '소화제 일번, 방출.'], ja: ['消火剤1、放出。', '消火剤イチ、放出。'] },
+  'Fire still on. Agent two, discharge.': { es: 'El fuego continúa. Agente dos, descarga.', ko: ['불이 아직 안 꺼졌습니다. 소화제 2, 방출.', '불이 아직 안 꺼졌습니다. 소화제 이번, 방출.'], ja: ['火はまだ消えていません。消火剤2、放出。', '火はまだ消えていません。消火剤ニ、放出。'] },
+  'Gear lever, down.': { es: 'Palanca del tren, abajo.', ko: '기어 레버, 내림.', ja: 'ギアレバー、ダウン。' },
+  'Gravity extension, cranking now.': { es: 'Extensión por gravedad, girando la manivela.', ko: '중력 전개, 크랭크를 돌리는 중입니다.', ja: 'グラビティ展開、クランクを回しています。' },
+  'The gear is still up. We will land on the belly. Prepare the cabin and brief the brace.': { es: 'El tren sigue arriba. Aterrizaremos de panza. Prepare la cabina y la posición de brace.', ko: '기어는 여전히 올라가 있습니다. 동체 착륙을 하겠습니다. 객실을 준비하고 충격 대비 자세를 안내하십시오.', ja: 'ギアはまだ上がったままです。胴体着陸を行います。客室の準備とブレースの案内をお願いします。' },
+  'P T U, checked, no pressure.': { es: ['PTU, verificada, sin presión.', 'P T U, verificada, sin presión.'], ko: ['PTU, 확인, 압력 없음.', '피티유, 확인, 압력 없음.'], ja: ['PTU、チェック、圧力なし。', 'ピーティーユー、チェック、圧力なし。'] },
+  'For the approach: flaps three, approach speed plus ten.': { es: 'Para la aproximación: flaps tres, velocidad de aproximación más diez.', ko: '접근 시: 플랩 3, 접근 속도 플러스 10.', ja: '進入では、フラップ3、進入速度プラス10。' },
+  'Gear by gravity extension, landing distance times one point five.': { es: 'Tren por extensión por gravedad, distancia de aterrizaje por uno punto cinco.', ko: ['중력 전개로 기어를 내립니다. 착륙 거리는 1.5배입니다.', '중력 전개로 기어를 내립니다. 착륙 거리는 일 점 오배입니다.'], ja: ['グラビティでギアを展開、着陸距離は1.5倍。', 'グラビティでギアを展開、着陸距離はイチ テン ゴ倍。'] },
+  'Oxygen masks on, crew communication established.': { es: 'Máscaras de oxígeno puestas, comunicación de tripulación establecida.', ko: '산소 마스크 착용, 승무원 통신 확립.', ja: '酸素マスク装着、クルーの通信確立。' },
+  'Emergency descent. Altitude ten thousand, speed maximum, speed brakes.': { es: 'Descenso de emergencia. Altitud diez mil pies, velocidad máxima, aerofrenos.', ko: ['긴급 강하. 고도 10,000피트, 최대 속도, 스피드 브레이크.', '긴급 강하. 고도 만 피트, 최대 속도, 스피드 브레이크.'], ja: ['緊急降下。高度10,000フィート、最大速度、スピードブレーキ。', '緊急降下。高度イチマンフィート、最大速度、スピードブレーキ。'] },
+  'Passenger oxygen masks, on.': { es: 'Máscaras de oxígeno de pasajeros, puestas.', ko: '승객 산소 마스크, 전개.', ja: '乗客用酸素マスク、オン。' },
+  'Generators off, then on. No reset.': { es: 'Generadores apagados y luego encendidos. No hubo reinicio.', ko: '발전기를 껐다가 켰습니다. 리셋되지 않았습니다.', ja: '発電機をオフ、次にオン。リセットなし。' },
+  'A P U, start. Its generator will take the load.': { es: ['APU, arranque. Su generador tomará la carga.', 'A P U, arranque. Su generador tomará la carga.'], ko: ['APU 시동. APU 발전기가 부하를 맡습니다.', '에이피유 시동. 에이피유 발전기가 부하를 맡습니다.'], ja: ['APU、スタート。その発電機が負荷を受けます。', 'エーピーユー、スタート。その発電機が負荷を受けます。'] },
+  'Flaps lever recycled. No movement.': { es: 'Palanca de flaps reciclada. Sin movimiento.', ko: '플랩 레버를 재조작했습니다. 움직임이 없습니다.', ja: 'フラップレバーをリサイクル。動きなし。' },
+  'Engine failure!': { es: '¡Falla de motor!', ko: '엔진 고장!', ja: 'エンジン故障！' },
+  'V one.': { es: ['V1.', 'V uno.'], ko: ['V1.', '브이 원.'], ja: ['V1。', 'ブイワン。'] },
+  'Rotate.': { es: 'Rotación.', ko: '로테이트.', ja: 'ローテート。' },
+  'Positive climb. Keep it straight, rudder.': { es: 'Ascenso positivo. Manténgalo recto, timón.', ko: '양의 상승. 러더로 똑바로 유지하십시오.', ja: 'ポジティブクライム。ラダーでまっすぐに保ってください。' },
+  'Gravity extension failed. Three red, the gear is still up.': { es: 'La extensión por gravedad falló. Tres rojas, el tren sigue arriba.', ko: '중력 전개 실패. 빨간불 3개, 기어는 여전히 올라가 있습니다.', ja: 'グラビティ展開失敗。赤ランプ3つ、ギアはまだ上がっています。' },
+  'Gear down by gravity. Three green.': { es: 'Tren abajo por gravedad. Tres verdes.', ko: '중력으로 기어 내림. 녹색불 3개.', ja: 'グラビティでギアダウン。緑ランプ3つ。' },
+  'Ten thousand feet. Cabin altitude is safe, masks can come off.': { es: 'Diez mil pies. La altitud de cabina es segura, pueden quitarse las máscaras.', ko: ['10,000피트. 객실 고도가 안전합니다, 마스크를 벗어도 됩니다.', '만 피트. 객실 고도가 안전합니다, 마스크를 벗어도 됩니다.'], ja: ['10,000フィート。キャビン高度は安全です、マスクを外せます。', 'イチマンフィート。キャビン高度は安全です、マスクを外せます。'] },
+  'We are low enough, the cabin altitude is safe.': { es: 'Estamos lo suficientemente bajos, la altitud de cabina es segura.', ko: '충분히 낮아졌습니다, 객실 고도가 안전합니다.', ja: '十分に下がりました、キャビン高度は安全です。' },
+  'A P U generator is on line. We have the autopilot back.': { es: ['El generador de la APU está en línea. Tenemos el piloto automático de vuelta.', 'El generador de la A P U está en línea. Tenemos el piloto automático de vuelta.'], ko: ['APU 발전기가 연결됐습니다. 자동조종이 돌아왔습니다.', '에이피유 발전기가 연결됐습니다. 자동조종이 돌아왔습니다.'], ja: ['APU発電機がオンライン。オートパイロットが戻りました。', 'エーピーユー発電機がオンライン。オートパイロットが戻りました。'] },
+  'We are down. Stop, stop!': { es: 'Estamos en tierra. ¡Alto, alto!', ko: '착륙했습니다. 정지, 정지!', ja: '接地しました。ストップ、ストップ！' },
+  'We have stopped. Engines are off. Evacuate the aircraft?': { es: 'Nos hemos detenido. Motores apagados. ¿Evacuamos la aeronave?', ko: '정지했습니다. 엔진은 꺼졌습니다. 항공기에서 대피할까요?', ja: '停止しました。エンジンはオフです。機体から避難しますか？' },
+};
+// the parameterized callouts: engine one/two (display digit vs spoken word per language) and the flap
+// line's approach speed (display digits, spoken number words — the module's own numEsW / numKoW / numJaW)
+const FO_NUM = { es: ['uno', 'dos'], ko: [['1', '일'], ['2', '이']], ja: [['1', 'イチ'], ['2', 'ニ']] };
+const FO_CALLS_RE = [
+  [/^Engine failure, engine (one|two)!$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: '¡Falla de motor, motor ' + FO_NUM.es[i] + '!', ko: ['엔진 고장, 엔진 ' + FO_NUM.ko[i][0] + '번!', '엔진 고장, 엔진 ' + FO_NUM.ko[i][1] + '번!'], ja: ['エンジン故障、エンジン' + FO_NUM.ja[i][0] + '！', 'エンジン故障、エンジン' + FO_NUM.ja[i][1] + '！'] }; }],
+  [/^Engine (one|two) fire!$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: '¡Fuego en el motor ' + FO_NUM.es[i] + '!', ko: ['엔진 ' + FO_NUM.ko[i][0] + '번 화재!', '엔진 ' + FO_NUM.ko[i][1] + '번 화재!'], ja: ['エンジン' + FO_NUM.ja[i][0] + '火災！', 'エンジン' + FO_NUM.ja[i][1] + '火災！'] }; }],
+  [/^Engine (one|two) has stalled, heavy vibrations\. E C A M actions\.$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: 'El motor ' + FO_NUM.es[i] + ' se ha plantado, vibraciones fuertes. Acciones ECAM.', ko: ['엔진 ' + FO_NUM.ko[i][0] + '번이 실속했습니다, 진동이 심합니다. ECAM 조치.', '엔진 ' + FO_NUM.ko[i][1] + '번이 실속했습니다, 진동이 심합니다. 이캠 조치.'], ja: ['エンジン' + FO_NUM.ja[i][0] + 'が失速、強い振動。ECAMアクション。', 'エンジン' + FO_NUM.ja[i][1] + 'が失速、強い振動。イーカム アクション。'] }; }],
+  [/^Thrust lever (one|two), idle\.$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: 'Palanca de empuje ' + FO_NUM.es[i] + ', ralentí.', ko: ['추력 레버 ' + FO_NUM.ko[i][0] + ', 아이들.', '추력 레버 ' + FO_NUM.ko[i][1] + '번, 아이들.'], ja: ['スラストレバー' + FO_NUM.ja[i][0] + '、アイドル。', 'スラストレバー' + FO_NUM.ja[i][1] + '、アイドル。'] }; }],
+  [/^Engine master (one|two), off\.$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: 'Master del motor ' + FO_NUM.es[i] + ', apagado.', ko: ['엔진 마스터 ' + FO_NUM.ko[i][0] + ', 오프.', '엔진 마스터 ' + FO_NUM.ko[i][1] + '번, 오프.'], ja: ['エンジンマスター' + FO_NUM.ja[i][0] + '、オフ。', 'エンジンマスター' + FO_NUM.ja[i][1] + '、オフ。'] }; }],
+  [/^Engine (one|two) fire pushbutton, push\.$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: 'Pulsador de incendio del motor ' + FO_NUM.es[i] + ', pulsado.', ko: ['엔진 ' + FO_NUM.ko[i][0] + '번 화재 버튼, 누름.', '엔진 ' + FO_NUM.ko[i][1] + '번 화재 버튼, 누름.'], ja: ['エンジン' + FO_NUM.ja[i][0] + '火災ボタン、プッシュ。', 'エンジン' + FO_NUM.ja[i][1] + '火災ボタン、プッシュ。'] }; }],
+  [/^Fire is out, engine (one|two)\.$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: 'Fuego extinguido, motor ' + FO_NUM.es[i] + '.', ko: ['불이 꺼졌습니다, 엔진 ' + FO_NUM.ko[i][0] + '번.', '불이 꺼졌습니다, 엔진 ' + FO_NUM.ko[i][1] + '번.'], ja: ['火は消えました、エンジン' + FO_NUM.ja[i][0] + '。', '火は消えました、エンジン' + FO_NUM.ja[i][1] + '。'] }; }],
+  [/^Four hundred feet\. Engine (one|two) is out, rudder trimmed\. E C A M actions\.$/, m => { const i = m[1] === 'two' ? 1 : 0; return { es: 'Cuatrocientos pies. El motor ' + FO_NUM.es[i] + ' está fuera, timón compensado. Acciones ECAM.', ko: ['400피트. 엔진 ' + FO_NUM.ko[i][0] + '번 정지, 러더 트림 완료. ECAM 조치.', '사백 피트. 엔진 ' + FO_NUM.ko[i][1] + '번 정지, 러더 트림 완료. 이캠 조치.'], ja: ['400フィート。エンジン' + FO_NUM.ja[i][0] + '停止、ラダートリム済み。ECAMアクション。', 'ヨンヒャクフィート。エンジン' + FO_NUM.ja[i][1] + '停止、ラダートリム済み。イーカム アクション。'] }; }],
+  [/^Approach speed (\d+) knots, landing distance increased\.$/, m => { const n = +m[1]; return { es: ['Velocidad de aproximación ' + n + ' nudos, distancia de aterrizaje aumentada.', 'Velocidad de aproximación ' + numEsW(n) + ' nudos, distancia de aterrizaje aumentada.'], ko: ['접근 속도 ' + n + '노트, 착륙 거리가 늘어났습니다.', '접근 속도 ' + numKoW(n) + ' 노트, 착륙 거리가 늘어났습니다.'], ja: ['進入速度' + n + 'ノット、着陸距離が増えています。', '進入速度' + numJaW(n) + 'ノット、着陸距離が増えています。'] }; }],
+];
+
 export class ATC {
   constructor(audio) {
     this.audio = audio; this.log = []; this.queue = []; this.auto = false; this.speakMe = true; this.voices = [];
@@ -260,6 +324,33 @@ export class ATC {
   setPilotSpanish(on) { this.setPilotLang(on ? 'es' : 'en'); }
   tagL(m, lg) { if (lg && lg !== 'en') m.lang = lg; return m; } // stamp a pilot message with its composed language so say()/voiceFor voice it from the right pool
   CPL(lg) { return this.csM2(lg); } // our callsign as WE say it, in the language we are speaking ("Foxheart cuatro uno dos" / 폭스하트 사 일 이 / フォックスハート ヨン イチ ニ)
+  // the language the captain is flying with RIGHT NOW: the pilotLangFor resolution applied to the facility
+  // currently on the radio box (its airport — departure side early, the Center's airspace airport enroute,
+  // the destination on arrival), falling back to the phase airport. The FO's interphone callouts and the
+  // Settings test sample resolve through this, so the whole cockpit speaks one language at a time.
+  pilotLangNow() { return this.pilotLangFor((this.tuned && this.tuned.apt) || this.apt()); }
+  // render one of the FO's English interphone callouts (failures.js / main.js foSay) in the current pilot
+  // language: { d, s, lg } — display + spoken + the resolved language. English (or a line with no entry in
+  // FO_CALLS / FO_CALLS_RE) returns the original text with the subtitle's long-standing acronym un-spacing,
+  // so the callout still speaks exactly as it did before this pass — never silence.
+  foCall(text) {
+    const t = String(text == null ? '' : text), lg = this.pilotLangNow();
+    const en = { d: t.replace(/E C A M/g, 'ECAM').replace(/A P U/g, 'APU').replace(/P T U/g, 'PTU'), s: t, lg: 'en' };
+    if (lg === 'en') return en;
+    let hit = FO_CALLS[t];
+    if (!hit) for (const [re, f] of FO_CALLS_RE) { const m = re.exec(t); if (m) { hit = f(m); break; } }
+    const p = hit && hit[lg];
+    if (!p) return en;
+    return { d: Array.isArray(p) ? p[0] : p, s: Array.isArray(p) ? (p[1] || p[0]) : p, lg };
+  }
+  // the Settings "test pilot voice" sample: the takeoff-clearance readback in the language the crew
+  // resolves to at this airport (or the pinned preference) — composed at click time, so it follows the
+  // preference live. The English pair is byte-identical to the sample the button has always spoken.
+  pilotTestLine(apt) { const lg = this.pilotLangFor(apt);
+    return this.tagL(lg === 'es' ? M('Autorizado a despegar, pista ', this.rwyL('19R', 'es'), ', ', this.csM2('es'), '.')
+      : lg === 'ko' ? M('이륙을 허가합니다, 활주로 ', this.rwyL('19R', 'ko'), ', ', this.csM2('ko'), '.')
+      : lg === 'ja' ? M('離陸を許可します、滑走路 ', this.rwyL('19R', 'ja'), '、', this.csM2('ja'), '。')
+      : M('Cleared for takeoff ', this.rwyM('19R'), ', ', this.csM2('en'), '.'), lg); }
   holdLocRb() { const lg = aptLang(this.dep); return lg === 'ko' ? M('위치를 유지합니다, ', this.CPL('ko'), '.') : lg === 'ja' ? M('位置を保持します、', this.CPL('ja'), '。') : null; } // the FO's "holding position" readback in the departure facility's language (used by the taxi / incursion nags, whose rb objects are built inline)
   altRepL(s, tgt, A, lg) { if (lg === 'es') return this.altRepEs(s, tgt, A); if (lg === 'en') return this.altRep(s, tgt, A); const a = r100(s.altFt);
     if (tgt == null && Math.abs(s.vsFpm) >= 250) return M(this.AmL(a, A, lg), lg === 'ko' ? (s.vsFpm > 0 ? ' 상승 중' : ' 강하 중') : (s.vsFpm > 0 ? ' 上昇中' : ' 降下中'));
