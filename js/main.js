@@ -695,7 +695,8 @@ const atcCtx = {
     return { onGround: fdm.onGround, gsKt: gs / KT, altFt: fdm.pos.y / FT, aglFt: fdm.ra / FT, vsFpm: fdm.vel.y / FT * 60, distArrNm: arr ? haversine(ll.lat, ll.lon, arr.lat, arr.lon) / NM : 999, thrNm: d && d.valid ? d.thrDist / NM : 99, locCaptured: fdm.ap.lat === 'LOC',
       lat: ll.lat, lon: ll.lon, ias: fdm.ias, trk: gs > 15 ? (Math.atan2(fdm.vel.x, -fdm.vel.z) * R2D + 360) % 360 : fdm.euler().hdg, tl: fdm.tl, gearDown: fdm.gearDown, flaps: fdm.flapIdx, apOn: fdm.ap.on,
       locDots: d && d.valid ? d.locDots : 0, gsDots: d && d.valid ? d.gsDots : 0, onDepRwy: onRunwayOf(W.depIls), onArrRwy: onRunwayOf(arrIls) }; },
-  assist: () => fdm.assist, pushing: () => !!W.push, onRoute: () => !!(W.route && fdm.ap.lat === 'NAV'),
+  assist: () => fdm.assist, pushing: () => !!W.push, boardingDone: () => !W.boarding || W.boarding.phase === 'done', // [Departure rush fix] ATC offers/executes pushback only once boarding is complete; starts with no boarding session (runway/final/air) have W.boarding null and are unaffected
+  onRoute: () => !!(W.route && fdm.ap.lat === 'NAV'),
   fcu(o) { // the first officer sets what ATC assigned (not in Realistic assist)
     if (fdm.assist === 'realistic') return false; const ap = fdm.ap, parts = [];
     if (o.alt != null && !['G/S', 'FLARE', 'ROLL OUT'].includes(ap.vert)) { ap.alt = o.alt; parts.push('ALT ' + o.alt.toLocaleString('en-US')); }

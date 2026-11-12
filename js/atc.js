@@ -78,6 +78,14 @@ const TA = { US: 18000, CA: 18000, MX: 18500, KR: 14000, JP: 14000, AU: 10000, N
 const VOICE = { ATIS: { rate: 1.0, pitch: 0.9 }, DEL: { rate: 1.06, pitch: 1.16 }, GND: { rate: 1.1, pitch: 0.8 }, TWR: { rate: 1.16, pitch: 1.22 }, DEP: { rate: 1.12, pitch: 0.74 }, APP: { rate: 1.08, pitch: 1.02 }, CTR: { rate: 1.04, pitch: 0.88 }, ME: { rate: 1.08, pitch: 0.9 } };
 const VORD = { DEL: 3, GND: 2, TWR: 0, DEP: 4, APP: 1, CTR: 5, ATIS: 6 };
 const DEP_PH = new Set(['gate', 'clr_ok', 'pushing', 'pushed', 'taxiing', 'to_twr', 'twr_hold', 'lineup', 'takeoff_clr', 'rwy_start', 'to_dep', 'dep']);
+// [Departure rush fix] the movement steps: the captain's requests that set the aircraft in motion
+// (pushback, taxi, ready-for-departure). Owner rule (11 Nov): no automatic system may ever move
+// the aircraft, on any type, any start — these happen only on a deliberate captain action (radio
+// click / number key / next-step button / K key). They are therefore never flagged auto, the
+// auto loop in update() refuses them as a backstop, and the easy FO assist never makes the
+// departure tower check-in (checkIn routes it to reqDeparture). Auto help remains for paperwork:
+// the clearance request, readbacks, and non-departure check-ins.
+const MOVE_OPTS = new Set(['push', 'taxi', 'ready']);
 const ARR_TWR = new Set(['to_twr_arr', 'land_clr', 'twr_continue', 'go_around']);
 
 export function facility(apt, kind) {
@@ -507,13 +515,16 @@ export class ATC {
     this.t += dt; if (!this.o) return;
     try { this.pumpTx(dt); if (!this.hold) { this.fT = (this.fT || 0) + dt; if (this.fT >= 0.25) { const d = this.fT; this.fT = 0; this.follow(d); this.chatter(d); this.assistStep(); } } } // the controller looks at the scope 4x a second (never while held — see setHold)
     catch (e) { if (this.errors.length < 20) this.errors.push(String(e && e.stack || e)); }
-    if (!this.hold && this.auto && !this.queue.length && !this.tx) { this.autoT += dt; if (this.autoT > 2.5) { this.autoT = 0; const o = this.options().find(o => o.auto); if (o) this.choose(o.id); } } else this.autoT = 0;
+    if (!this.hold && this.auto && !this.queue.length && !this.tx) { this.autoT += dt; if (this.autoT > 2.5) { this.autoT = 0; const o = this.options().find(o => o.auto && !MOVE_OPTS.has(o.id)); if (o) this.choose(o.id); } } else this.autoT = 0; // [Departure rush fix] backstop: a movement option is never auto-chosen, even if one is ever mis-flagged
   }
   // Easy assist: the first officer reads back and checks in if you have not after a while
   assistStep() {
     if (this.auto || this.queue.length || this.tx || !this.easy()) return;
     if (this.rb && this.t - this.rb.t > 9) { this.note('First officer: read back “' + this.rb.label + '”'); this.choose('rb'); return; }
-    if (this.ho && !this.rb && this.t - this.ho.t > 40) { this.note('First officer: switched to ' + this.fac(this.ho.to, this.ho.apt).name); this.choose('ho'); }
+    // [Departure rush fix] readbacks are paperwork (the only movement `then` — pushback — can exist
+    // solely downstream of a deliberate captain 'push' choice), but the Ground→Tower handoff on a
+    // departure IS the ready-for-departure call: the FO never makes that one; the captain does.
+    if (this.ho && !this.rb && this.t - this.ho.t > 40 && !(this.ho.to === 'TWR' && DEP_PH.has(this.phase))) { this.note('First officer: switched to ' + this.fac(this.ho.to, this.ho.apt).name); this.choose('ho'); }
   }
   // ---------------------------------------------------------------- the living frequency: other aircraft
   chatter(dt) {
@@ -552,13 +563,13 @@ export class ATC {
     const c = this.o?.ctx; if (!c) return []; const s = c.state(); const p = this.phase; const out = []; const E = this.o.depEnd;
     const add = (id, kind, label, auto = true, pri = true, apt) => out.push({ id, kind, label, auto, pri, freq: fmtF(this.fac(kind, apt)) });
     if (this.rb) add('rb', this.rb.kind, 'Read back: ' + this.rb.label);
-    else if (this.ho) { const F = this.fac(this.ho.to, this.ho.apt); add('ho', this.ho.to, `${this.ho.skipBye ? 'Call' : 'Switch to'} ${F.name} ${fstr(F.mhz)}${this.ho.to === 'GND' ? ': request taxi to the gate' : this.ho.to === 'TWR' && DEP_PH.has(p) ? ': ready for departure' : ''}`, true, true, this.ho.apt); }
+    else if (this.ho) { const F = this.fac(this.ho.to, this.ho.apt); const depReady = this.ho.to === 'TWR' && DEP_PH.has(p); add('ho', this.ho.to, `${this.ho.skipBye ? 'Call' : 'Switch to'} ${F.name} ${fstr(F.mhz)}${this.ho.to === 'GND' ? ': request taxi to the gate' : depReady ? ': ready for departure' : ''}`, !depReady, true, this.ho.apt); } // [Departure rush fix] a departure's tower check-in is the ready call — offered, never auto
     else if (!this.waiting()) switch (p) {
       case 'gate': add('clr', 'DEL', `Request IFR clearance to ${this.city(this.arr)}`); break;
-      case 'clr_ok': add('push', 'GND', 'Request pushback and start'); break;
-      case 'pushed': add('taxi', 'GND', 'Request taxi'); break;
-      case 'taxiing': if (c.nearHold() || s.onDepRwy) add('ready', 'TWR', `Tower: holding short ${E.ident}, ready for departure`); break;
-      case 'rwy_start': add('ready', 'TWR', `Ready for departure, runway ${E.ident}`); break;
+      case 'clr_ok': if (!c.boardingDone || c.boardingDone()) add('push', 'GND', 'Request pushback and start', false); break; // [Departure rush fix] never auto — and not even offered until boarding is complete (starts with no boarding session are unaffected: ctx reports done)
+      case 'pushed': add('taxi', 'GND', 'Request taxi', false); break; // [Departure rush fix] never auto
+      case 'taxiing': if (c.nearHold() || s.onDepRwy) add('ready', 'TWR', `Tower: holding short ${E.ident}, ready for departure`, false); break; // [Departure rush fix] never auto
+      case 'rwy_start': add('ready', 'TWR', `Ready for departure, runway ${E.ident}`, false); break; // [Departure rush fix] never auto
       case 'ctr': if (!this.flags.desc && s.distArrNm < this.todNm(s) + 40) add('descent', 'CTR', 'Request descent', s.distArrNm < this.todNm(s) + 5); break;
       case 'app': if (!this.flags.appClr && s.distArrNm < 40) add('ils', 'APP', `Request the ILS runway ${c.arrEnd().ident}`, false, false); break;
     }
@@ -595,7 +606,7 @@ export class ATC {
       case 'rb': return this.readback();
       case 'ho': return this.checkIn();
       case 'clr': return this.reqClearance();
-      case 'push': return this.reqPush();
+      case 'push': if (c.boardingDone && !c.boardingDone()) { this.note('Boarding is not complete yet — pushback waits for the last passenger.'); return; } return this.reqPush(); // [Departure rush fix] the executable gate, not just the menu: no caller gets a pushback mid-boarding
       case 'taxi': return this.reqTaxi();
       case 'ready': return this.reqDeparture();
       case 'descent': return this.reqDescent();
