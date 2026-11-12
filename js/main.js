@@ -343,7 +343,8 @@ function setTimeOfDay(min) {
 function setWeather(kind, dirFrom, kt, gust) {
   W.wx = kind; W.windFrom = dirFrom ?? W.windFrom; W.windKt = kt ?? W.windKt; sky.setWeather(kind, { from: W.windFrom, kt: W.windKt }); W.gust = gust ? Math.max(2, W.windKt * KT * 0.35) : (kind === 'rain' ? 2 : 0);
   const a = W.windFrom * D2R; W.wind.set(-Math.sin(a), 0, Math.cos(a)).multiplyScalar(W.windKt * KT);
-  W.wet.value = kind === 'rain' ? 1 : kind === 'fog' ? 0.35 : 0; terrain.uniforms.uWet.value = W.wet.value;
+  W.wet.value = kind === 'rain' ? 1 : kind === 'fog' ? 0.35 : kind === 'snow' ? 0.3 : 0; terrain.uniforms.uWet.value = W.wet.value;
+  terrain.uniforms.uSnow.value = kind === 'snow' ? 1 : 0; // [Snow weather] settled cover on the terrain shader; aprons read merely damp (shared uWet 0.3 — ploughed/treated)
 }
 function activeRunwayEnd(b) { // into the wind, longest
   let best = null, bs = -1e9;
@@ -1321,7 +1322,7 @@ function warnings(e, dev) {
   if (dev && dev.valid && fdm.ap.vert === 'G/S' && Math.abs(dev.gsDots) > 1) m.push({ t: 'GLIDESLOPE', c: 'a' });
   if (f.ap.on) m.push({ t: 'AP1 ' + (f.ap.lat === 'LOC' ? 'LAND' : f.ap.lat), c: 'g' }); else m.push({ t: 'SEAT BELTS', c: 'g' });
   if (f.spoilersArmed) m.push({ t: 'GND SPLRS ARMED', c: 'g' }); if (f.autobrake) m.push({ t: 'AUTO BRK ' + (f.autobrake === 1 ? 'LO' : 'MED'), c: 'g' });
-  if (W.wx === 'rain' || W.wx === 'fog') m.push({ t: 'WX: ' + W.wx.toUpperCase(), c: 'g' });
+  if (W.wx === 'rain' || W.wx === 'fog' || W.wx === 'snow') m.push({ t: 'WX: ' + W.wx.toUpperCase(), c: 'g' });
   for (let i = 0; i < 2; i++) if (sys.eng[i].st === 'start') m.unshift({ t: `ENG ${i + 1} START · ${sys.eng[i].msg}`, c: 'g' }); for (const t of sys.memo) m.unshift({ t, c: 'a' }); if (sys.cold && sys.sw.apuStart && !sys.apuAvail) m.unshift({ t: `APU START ${Math.round(sys.apuN)}%`, c: 'g' }); else if (sys.apuAvail) m.push({ t: 'APU AVAIL', c: 'g' });
   return m;
 }

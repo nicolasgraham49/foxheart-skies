@@ -167,7 +167,7 @@ const TERRAIN_FS = /* glsl */`
 ${TERRAIN_COMMON}
 ${ATM_GLSL}
 ${HOOD_GLSL}
-uniform vec3 uSunCol; uniform vec3 uAmbCol; uniform float uNight; uniform float uTime; uniform float uWet;
+uniform vec3 uSunCol; uniform vec3 uAmbCol; uniform float uNight; uniform float uTime; uniform float uWet; uniform float uSnow;
 uniform vec3 cGrass; uniform vec3 cDry; uniform vec3 cDark; uniform vec3 cSoil; uniform vec3 cShallow; uniform float uFields;
 varying vec3 vW; varying vec3 vN; varying float vFlat; varying float vFlatO;
 vec4 masksF(vec2 p){
@@ -219,6 +219,12 @@ void main(){
   else col = mix(col, urbanC, urb); // cities outside the neighbourhood list keep the simple fabric
   col = mix(col, mix(cDark * 0.7, vec3(0.05, 0.09, 0.08), n2), marsh);
   col *= 1.0 - uWet * 0.35;
+  // [Snow weather] settled snow cover: whiten up-facing ground (fields, grass, airport
+  // turf and the urban fabric's roofs), patchy on the existing noises; ploughed streets
+  // keep most of their asphalt. The water block below replaces lit where water > 0, so
+  // open water never whitens. uSnow is 0 in every other weather kind (colour unchanged).
+  float snowW = uSnow * smoothstep(0.70, 0.92, N.y) * (0.5 + 0.5 * n2) * (1.0 - street * urb * 0.75);
+  col = mix(col, vec3(0.84, 0.88, 0.93), clamp(snowW, 0.0, 0.9));
   // ---- lighting ----
   float ndl = max(dot(N, uSunDir), 0.0);
   vec3 lit = col * (uSunCol * ndl * 0.95 + uAmbCol * (0.55 + 0.45*N.y) * 1.1);
@@ -276,7 +282,7 @@ export class Terrain {
     this.uniforms = {
       ...ATM, uNear: { value: null }, uWide: { value: null }, uNearR: { value: new THREE.Vector4() }, uWideR: { value: new THREE.Vector4() },
       uBase: { value: 0 }, uNoiseAmp: { value: 30 }, uApt: { value: Array.from({ length: NAPT }, () => new THREE.Vector4(0, 0, 0, 0)) }, uAptElev: { value: new Array(NAPT).fill(0) },
-      uCenter: { value: new THREE.Vector2() }, uWet: { value: 0 },
+      uCenter: { value: new THREE.Vector2() }, uWet: { value: 0 }, uSnow: { value: 0 },
       ...hoodUniformDefs(),
       uPlanet: { value: null }, uPBase: { value: null }, uGeo: { value: new THREE.Vector4(0, 0, 111000, 111000) }, uPlanetOn: { value: 0 }, uWorld: { value: new THREE.Vector2() },
       cGrass: { value: new THREE.Color() }, cDry: { value: new THREE.Color() }, cDark: { value: new THREE.Color() }, cSoil: { value: new THREE.Color() }, cShallow: { value: new THREE.Color() }, uFields: { value: 0.5 },

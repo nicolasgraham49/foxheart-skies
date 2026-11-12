@@ -150,7 +150,7 @@ void main(){
 const RAIN_VS = /* glsl */`
 #include <common>
 #include <logdepthbuf_pars_vertex>
-attribute float aEnd; attribute float aRnd; uniform float uT; uniform vec3 uCam; uniform vec3 uVel; uniform float uBox; uniform float uLen;
+attribute float aEnd; attribute float aRnd; uniform float uT; uniform vec3 uCam; uniform vec3 uVel; uniform float uBox; uniform float uLen; uniform float uSnowM;
 uniform mat4 uInMat[3]; uniform vec3 uInMin[3]; uniform vec3 uInMax[3]; uniform int uInCount;
 varying float vA;
 // [Weather] interior occlusion: a streak whose world position falls inside any registered
@@ -160,10 +160,12 @@ varying float vA;
 float inVol(vec3 w){ for (int i = 0; i < 3; i++) { if (i >= uInCount) break; vec3 q = (uInMat[i] * vec4(w, 1.0)).xyz; if (all(greaterThanEqual(q, uInMin[i])) && all(lessThanEqual(q, uInMax[i]))) return 1.0; } return 0.0; }
 void main(){
   vec3 p = position; float box = uBox;
-  p.y = mod(p.y - uT * 10.5, box) - box*0.5;
+  float fall = mix(10.5, 2.4, uSnowM); // [Snow weather] rain falls at 10.5 m/s; flakes drift down at ~2.4 m/s
+  p.y = mod(p.y - uT * fall, box) - box*0.5;
   p.xz = mod(p.xz - uCam.xz + box*0.5, box) - box*0.5;
   vec3 w = uCam + p;
-  vec3 streak = (vec3(0.0, -10.5, 0.0) - uVel) * uLen * (0.55 + 0.95 * aRnd);
+  w.xz += uSnowM * vec2(sin(uT * 1.4 + aRnd * 43.7), cos(uT * 1.05 + aRnd * 31.3)) * (0.3 + 0.55 * aRnd); // [Snow weather] flake flutter; rain (uSnowM 0) is untouched
+  vec3 streak = (vec3(0.0, -fall, 0.0) - uVel) * uLen * (0.55 + 0.95 * aRnd);
   w += streak * aEnd;
   vA = (1.0 - aEnd*0.7) * (1.0 - smoothstep(box*0.18, box*0.5, length(p))) * (0.5 + 0.7 * aRnd) * (1.0 - inVol(w));
   gl_Position = projectionMatrix * viewMatrix * vec4(w, 1.0);
@@ -226,6 +228,10 @@ export class Sky {
     // rain: one LineSegments draw at every tier; the tier only changes how many drops are
     // drawn (draw range), the size of the rain volume around the camera and streak length.
     this.rainTier = { low: { n: 3000, box: 48, len: 0.030 }, medium: { n: 7000, box: 56, len: 0.036 }, high: { n: 11000, box: 64, len: 0.042 }, ultra: { n: 16000, box: 72, len: 0.048 } }[quality] || { n: 11000, box: 64, len: 0.042 };
+    // [Snow weather] the SAME precipitation mesh/shader wears the snow tier in snow kind: more,
+    // softer flakes (shorter streak length), same wrap boxes, capped by the same 16k allocation.
+    this.snowTier = { low: { n: 4000, box: 48, len: 0.016 }, medium: { n: 9000, box: 56, len: 0.019 }, high: { n: 14000, box: 64, len: 0.022 }, ultra: { n: 16000, box: 72, len: 0.025 } }[quality] || { n: 14000, box: 64, len: 0.022 };
+    this.precipMode = 'rain'; // which tier table the shared precipitation mesh is currently wearing
     const RN = 16000, rp = new Float32Array(RN * 6), re = new Float32Array(RN * 2), rr = new Float32Array(RN * 2);
     for (let i = 0; i < RN; i++) { const x = (Math.random() - .5) * 72, y = (Math.random() - .5) * 72, z = (Math.random() - .5) * 72; rp.set([x, y, z, x, y, z], i * 6); re[i * 2] = 0; re[i * 2 + 1] = 1; const r = Math.random(); rr[i * 2] = r; rr[i * 2 + 1] = r; }
     const rg = new THREE.BufferGeometry(); rg.setAttribute('position', new THREE.BufferAttribute(rp, 3)); rg.setAttribute('aEnd', new THREE.BufferAttribute(re, 1)); rg.setAttribute('aRnd', new THREE.BufferAttribute(rr, 1));
@@ -233,7 +239,7 @@ export class Sky {
     this.interiorVolumes = []; // [{name, m: Matrix4 world->local, min, max}] — see setInteriorVolumes
     this.rainSuppress = true; // harness can disable for before/after proof (setRainSuppression)
     this.rainMat = new THREE.ShaderMaterial({ vertexShader: RAIN_VS, fragmentShader: RAIN_FS, transparent: true, depthWrite: false, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
-      uniforms: { uT: { value: 0 }, uCam: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3() }, uCol: { value: new THREE.Color(0.55, 0.6, 0.68) }, uAlpha: { value: 0.35 }, uBox: { value: this.rainTier.box }, uLen: { value: this.rainTier.len },
+      uniforms: { uT: { value: 0 }, uCam: { value: new THREE.Vector3() }, uVel: { value: new THREE.Vector3() }, uCol: { value: new THREE.Color(0.55, 0.6, 0.68) }, uAlpha: { value: 0.35 }, uBox: { value: this.rainTier.box }, uLen: { value: this.rainTier.len }, uSnowM: { value: 0 },
         uInMat: { value: [new THREE.Matrix4(), new THREE.Matrix4(), new THREE.Matrix4()] }, uInMin: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] }, uInMax: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] }, uInCount: { value: 0 } } });
     this.rain = new THREE.LineSegments(rg, this.rainMat); this.rain.frustumCulled = false; this.rain.visible = false; this.rain.renderOrder = 8; scene.add(this.rain);
 
@@ -245,7 +251,7 @@ export class Sky {
     this.envRT = null;
 
     this.sunDir = new THREE.Vector3(0, 1, 0); this.moonDir = new THREE.Vector3(0, 1, 0);
-    this.sunElev = 45; this.weather = { cover: 0, base: 1500, thick: 900, overcast: 0, rain: 0, vis: 60000, haze: 1, fog: 0 };
+    this.sunElev = 45; this.weather = { cover: 0, base: 1500, thick: 900, overcast: 0, rain: 0, snow: 0, vis: 60000, haze: 1, fog: 0 };
     this.lutAlt = -1e9; this.lutDirty = true; this.envAge = 1e9; this.exposure = 0.6; this.inCloud = 0;
   }
 
@@ -266,9 +272,10 @@ export class Sky {
       scattered: { cover: 0.46, base: 1500, thick: 900, overcast: 0, rain: 0, vis: 75000, haze: 1.3, dark: 0.1 },
       overcast: { cover: 0.97, base: 900, thick: 1200, overcast: 0.88, rain: 0, vis: 22000, haze: 1.8, dark: 0.45 },
       rain: { cover: 0.99, base: 500, thick: 2200, overcast: 0.96, rain: 1, vis: 5500, haze: 2.5, dark: 0.7 },
+      snow: { cover: 0.99, base: 600, thick: 1800, overcast: 0.93, rain: 0, snow: 1, vis: 2200, haze: 2.3, dark: 0.55 },
       fog: { cover: 0.9, base: 120, thick: 300, overcast: 0.7, rain: 0, vis: 700, haze: 2.5, dark: 0.3, fog: 1 },
     }[kind] || {};
-    this.weather = { kind, ...W, fog: W.fog || 0, windKt: (wind && wind.kt) || 0, windFrom: (wind && wind.from) ?? 270 };
+    this.weather = { kind, ...W, fog: W.fog || 0, snow: W.snow || 0, windKt: (wind && wind.kt) || 0, windFrom: (wind && wind.from) ?? 270 };
     this.lutDirty = true; this.envAge = 1e9;
   }
 
@@ -291,14 +298,15 @@ export class Sky {
   // inside each interior volume, and how many of those would still render (suppression off,
   // or the volume not registered). Screenshots carry the visual proof; this carries the count.
   rainProbe(camPos, time) {
-    const pos = this.rain.geometry.attributes.position, box = this.rainTier.box, n = this.rainTier.n;
+    const snowM = this.weather.snow > 0, tier = snowM ? this.snowTier : this.rainTier, fall = snowM ? 2.4 : 10.5; // [Snow weather] probe mirrors the ACTIVE tier + fall speed
+    const pos = this.rain.geometry.attributes.position, box = tier.box, n = tier.n;
     const mod = (x, y) => x - y * Math.floor(x / y);
     const inside = {}, rendered = {}; for (const v of this.interiorVolumes) { inside[v.name] = 0; rendered[v.name] = 0; }
     const q = new THREE.Vector3(), w = new THREE.Vector3();
     for (let i = 0; i < n; i++) {
       const bx = pos.getX(i * 2), by = pos.getY(i * 2), bz = pos.getZ(i * 2);
       w.set(camPos.x + (mod(bx - camPos.x + box * 0.5, box) - box * 0.5),
-            camPos.y + (mod(by - time * 10.5, box) - box * 0.5),
+            camPos.y + (mod(by - time * fall, box) - box * 0.5),
             camPos.z + (mod(bz - camPos.z + box * 0.5, box) - box * 0.5));
       this.interiorVolumes.forEach((v, vi) => {
         q.copy(w).applyMatrix4(v.m);
@@ -308,7 +316,7 @@ export class Sky {
         }
       });
     }
-    return { drops: n, box, suppression: this.rainSuppress, inside, renderedInside: rendered };
+    return { drops: n, box, suppression: this.rainSuppress, mode: snowM ? 'snow' : 'rain', inside, renderedInside: rendered };
   }
 
   // visibility in metres → haze extinction at sea level
@@ -377,10 +385,15 @@ export class Sky {
       const u = c.material.uniforms; u.uCover.value = i === 0 ? w.cover : w.cover * (i === 1 ? 0.85 : 0.7); u.uScale.value = scale * (i === 1 ? 1.3 : i === 2 ? 1.8 : 1);
       u.uOff.value.x += dt * drift * (i ? 1.2 : 1); u.uDark.value = w.dark || 0; u.uFade.value = w.vis < 8000 ? 30000 : 75000; u.uDetail.value = detail;
     });
-    // rain
-    this.rain.visible = w.rain > 0 && this.quality !== 'off';
+    // precipitation: ONE mesh + ONE shader wears either the rain or the snow tier — kind
+    // switches fall speed (uSnowM), flake count/box/streak (tier tables), colour and alpha.
+    const snowM = w.snow > 0, pMode = snowM ? 'snow' : 'rain';
+    this.rain.visible = (w.rain > 0 || snowM) && this.quality !== 'off';
+    if (pMode !== this.precipMode) { this.precipMode = pMode; const t = snowM ? this.snowTier : this.rainTier;
+      this.rain.geometry.setDrawRange(0, t.n * 2); this.rainMat.uniforms.uBox.value = t.box; this.rainMat.uniforms.uLen.value = t.len; this.rainMat.uniforms.uSnowM.value = snowM ? 1 : 0; }
     this.rainMat.uniforms.uT.value = simTime; this.rainMat.uniforms.uCam.value.copy(camera.position);
-    this.rainMat.uniforms.uAlpha.value = 0.12 + 0.3 * sunUp; this.rainMat.uniforms.uCol.value.setRGB(0.55, 0.6, 0.68).multiplyScalar(0.12 + 0.88 * sunUp);
+    if (snowM) { this.rainMat.uniforms.uAlpha.value = 0.30 + 0.45 * sunUp; this.rainMat.uniforms.uCol.value.setRGB(0.88, 0.92, 1.0).multiplyScalar(0.38 + 0.62 * sunUp); } // [Snow weather] bright flakes, still visible at night
+    else { this.rainMat.uniforms.uAlpha.value = 0.12 + 0.3 * sunUp; this.rainMat.uniforms.uCol.value.setRGB(0.55, 0.6, 0.68).multiplyScalar(0.12 + 0.88 * sunUp); }
 
     // environment map (reflections/ambient for PBR materials)
     this.envAge += dt;
