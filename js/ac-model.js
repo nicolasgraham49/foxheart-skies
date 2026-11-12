@@ -210,7 +210,17 @@ let WG = { b0: 1.2, bK: 6.2, bT: 16.95, sweep: Math.tan(27 * D), dih: Math.tan(5
 export function wingSec(b) {
   const le = WG.zRef + (b - WG.bRef) * WG.sweep, y = WG.yRef + (b - WG.bRef) * WG.dih, kin = b <= WG.bK;
   const f = kin ? (b - WG.b0) / (WG.bK - WG.b0) : (b - WG.bK) / (WG.bT - WG.bK);
-  const te = kin ? lerp(2.5, 2.8, f) : lerp(2.8, 5.0, f), t = kin ? lerp(0.152, 0.124, f) : lerp(0.124, 0.102, f);
+  // [A350 exterior fallback fix] The trailing edge is planform data and comes
+  // from the type spec (vis.wg.te = [root, kink, tip] absolute z). It used to be
+  // hardcoded to the fox's values on this line; the a350's 31.9° sweep carries
+  // its leading edge past the fox tip TE (z 5.0) at b ≈ 18.3, so the outboard
+  // chord went negative — the wing foil built inside-out there and the flap
+  // canoe's front segment came out empty, which threw inside
+  // buildPlayerAircraft and silently dropped every a350 session to the legacy
+  // fallback exterior. fox/b737/a320 carry the original literals in their
+  // specs, so their builds stay bit-identical.
+  const TE = WG.te || [2.5, 2.8, 5.0];
+  const te = kin ? lerp(TE[0], TE[1], f) : lerp(TE[1], TE[2], f), t = kin ? lerp(0.152, 0.124, f) : lerp(0.124, 0.102, f);
   const inc = lerp(2.0, -1.0, (b - WG.b0) / (WG.bT - WG.b0)) * D;
   return { le: V3(b, y, le), chord: te - le, cdir: V3(0, -Math.sin(inc), Math.cos(inc)), tdir: V3(0, Math.cos(inc), Math.sin(inc)), t, cam: 0.022 };
 }
