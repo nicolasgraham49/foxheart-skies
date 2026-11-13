@@ -333,7 +333,7 @@ export function buildHall(opts, rnd) {
   const boards = dep ? [[-8, F + 4.2, D - 0.3, Math.PI, 1], [8, F + 4.2, D - 0.3, Math.PI, 1], [-22, F + 3.2, 18 - 0.4, 0, 0.45], [22, F + 3.2, 18 - 0.4, 0, 0.45], [0, F + 3.4, zS - 1.0, 0, 0.5]] : [[0, F + 3.6, z0sec + 3, Math.PI, 0.7], [-22, F + 3.2, 18 - 0.4, 0, 0.45]];
   for (const [x, y, z, ry, s] of boards) { const bm = new THREE.Mesh(new THREE.PlaneGeometry(12 * s, 3.75 * s), fm); bm.position.set(x, y, z); bm.rotation.y = ry; group.add(bm); const rf = bm.clone(); rf.position.y = 2 * F - y; rf.scale.y = -1; rf.material = new THREE.MeshBasicMaterial({ map: board, toneMapped: false, side: THREE.DoubleSide, color: 0x666666 }); group.add(rf); }
   // ---- people: seated at the gate, check-in queues, security staff + passengers, shoppers, walkers
-  const NP = dep ? 91 + FLIGHT_N : 96; const crowd = new People(group, NP, rnd); let k = 0; const walkers = [];
+  const NP = dep ? Math.max(91 + FLIGHT_N, 140) : 96; const crowd = new People(group, NP, rnd); let k = 0; const walkers = []; // [Private charter] floor: the ambient fills reserve down to NP-12, which would starve a 2-8-guest flight's lounge party entirely; airline loads (NP >= 208) are untouched
   const ACTS = ['idle', 'phone', 'read', 'talk', 'sleep', 'idle', 'phone'];
   const usedBench = new Set(); // bench seats already taken (ambient sitters first, then the flight's load)
   for (const [x, z] of benchPos) for (let sI = 0; sI < 6; sI++) if (rnd() < 0.3 && k < 26) { const p = crowd.p[k++]; usedBench.add(x + ':' + sI); Object.assign(p, { x: x + sI * 0.62 - 1.55, y: F, z: z + 0.06, yaw: Math.PI, mode: 'sit', act: ACTS[(rnd() * ACTS.length) | 0], talkSide: rnd() < 0.5 ? 1 : -1, windowSide: 0 }); }

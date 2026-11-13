@@ -141,6 +141,7 @@ export class OnFoot {
     // Auto-walk / J-skip is the crew path and is exempt; the flow gates free walking only.
     this.flow = { crew: null, tray: false, trayLane: -1, arch: false, done: false };
     this.storyFig = null; this.storyName = ''; this.storyMet = false; // [Stories era] set by Stories.arm() via main.js
+    this.charterFig = null; this.charterName = ''; this.charterMet = false; // [Private charter] set by Charter.arm() via main.js
     this._ckAt = 0; this._alarmAt = -9; this._plz = null; this._destName = destName;
     return this;
   }
@@ -271,6 +272,15 @@ export class OnFoot {
       if (!bp || bp.state === 'wait') {
         const lp = this.parts.term.group.worldToLocal(this.pos.clone());
         if (Math.hypot(lp.x - this.storyFig.x, lp.z - this.storyFig.z) < 2.4) this.prompt = 'E  Say hello to ' + (this.storyName || 'a passenger');
+      }
+    }
+    // [Private charter] standing by the lead client on a charter departure: the meet
+    // prompt, same shape as the story hello but for the person who booked the jet.
+    if (this.o.mode === 'dep' && this.charterFig && !this.charterMet && this.parts && this.parts.term) {
+      const bp = this.charterFig.bp;
+      if (!bp || bp.state === 'wait') {
+        const lp = this.parts.term.group.worldToLocal(this.pos.clone());
+        if (Math.hypot(lp.x - this.charterFig.x, lp.z - this.charterFig.z) < 2.4) this.prompt = 'E  Meet ' + (this.charterName || 'your client');
       }
     }
     // [Crew conversations] standing by a working crew member (apron): the talk prompt,

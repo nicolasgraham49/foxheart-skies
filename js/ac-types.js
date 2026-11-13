@@ -69,6 +69,31 @@ export const TYPES = [
     cabin: { rows: 33, pitch: 0.84, z0: -21.5, seatXs: [-2.5, -1.97, -1.44, -0.5, 0, 0.5, 1.44, 1.97, 2.5], aisleXs: [-0.97, 0.97], pax: 252, psuXs: [-2.05, 0, 2.05], entryHx: 2.7, crewPostX: 0.97, profile: { sx: 2.98 / 1.98, door1: -24.8, door2: 9.0, aisles: [-0.97, 0.97], centrePSU: true } },
     gse: { belt1z: -20.2, belt2z: 6.6, contz: 3.3, fuelX: 23, fuelz: -3.0, fuelPanelX: 20, fuelPanelZ: 3.4, lavz: 24.5, waterz: 23.0, vanz: -48.9, trainz: -20.4, doorR1z: -24.8, doorR2z: 9.0, catX: 7.7, contX: 7.1, beltX: null, lavX: 4.3, waterX: 8.2 },
   },
+  {
+    // [Private charter] the little jet: half the airliner's size, a T-tail (ht root sits on
+    // the fin top: b0 ~ 0, y0 at the fin's top LE), underwing pods (the parametric pylon is
+    // wing-keyed — rear-mounting would need a new pylon path), one front door pair, twelve
+    // club seats in a 2-2 cabin. In Free Flight she boards her standard 8 guests; a charter
+    // flight narrows the manifest to the contract's party (see setFlightPax below).
+    // door1 sits 5.55 behind the nose, like every other type, so the flight deck lands in
+    // its proven place (ckSeatZ = door1 - 2.0 by construction of deckDz = noseZ + 18.6).
+    id: 'pjet', name: 'Foxheart PJ-1', maker: 'Foxheart private jet', seatsNote: '12 club seats · up to 8 guests',
+    desc: 'The little Foxheart jet: twelve club seats, a T-tail and a short-field heart. In Private Charter she flies whoever booked you; in Free Flight she boards 8 guests.',
+    shape: {
+      noseZ: -10.8, tailZ: 10.4, noseScale: 0.75, tailScale: 0.55, wScale: 1.32 / 1.98, vScale: 1.32 / 2.06, noseTopDrop: 0.06, noseBotRise: 0.04, winPitch: 0.62, winDoors: [-5.25, 5.4],
+      doors: [{ id: 'L1', z: -5.25, side: -1 }, { id: 'R1', z: -5.25, side: 1 }],
+      door: { w: 0.78, h: 1.72, r: 0.15, y0: -0.55, y1: 1.17 },
+      gear: { mainX: 1.9, mainZ: 1.3, hingeY: -0.7, wheelR: 0.42, wheelW: 0.30, track: 0.30, retract: 86 * Math.PI / 180, noseZ: -8.3, noseHingeY: -0.8, noseR: 0.30, noseW: 0.22, wheelY: -2.5, bogie: 0 },
+    },
+    dim: { length: 21.2, span: 20.4, noseZ: -10.8, tailZ: 10.4, R: 1.32, wheelY: -2.5, mainZ: 1.3, mainX: 1.9, noseGearZ: -8.3, engX: 3.1 },
+    deckDz: 7.8,
+    // wing: LE root -1.64 / tip 1.92, chords 3.39 / 2.26 / 1.33 (root/kink/tip) — the
+    // leading edge never crosses the trailing edge at any station (the a350 lesson).
+    vis: { wg: { b0: 0.9, bK: 4.4, bT: 9.3, sweep: Math.tan(23 * Math.PI / 180), dih: Math.tan(4 * Math.PI / 180), zRef: -1.6, bRef: 1.0, yRef: -0.92, te: [1.75, 2.1, 3.25] }, ht: { b0: 0.05, bT: 2.6, z0: 8.45, y0: 3.88, sweep: Math.tan(30 * Math.PI / 180), dih: Math.tan(3 * Math.PI / 180), cr: 2.15, ct: 0.85 }, vt: { y0: 0.85, h: 3.2, z0: 6.3, sweep: Math.tan(38 * Math.PI / 180), cr: 3.6, ct: 1.15 }, eng: { x: 3.1, y: -1.55, z0: -2.7, scale: 0.62 }, wingletScale: 0.8, mask: false, flatFan: false, fair: { yc: -0.63, a: 1.45, b: 0.82 } },
+    fdm: { mass: 17500, I: { pitch: 5.2e5, roll: 2.6e5, yaw: 7.4e5 }, S: 46, CBAR: 2.4, B: 20.4, thrust: 67000, engX: 3.1, probes: [[0, -1.15, -9.9], [0, -0.62, 7.6], [3.1, -1.75, -2.2], [-3.1, -1.75, -2.2], [9.1, -0.1, 2.2], [-9.1, -0.1, 2.2], [0, -1.25, 0]], belly: [[3.1, -1.75, -2.2], [-3.1, -1.75, -2.2], [0, -1.25, 0], [0, -1.15, -8.2], [0, -0.62, 7.6]] },
+    cabin: { rows: 3, pitch: 1.02, z0: -4.35, seatXs: [-0.78, -0.30, 0.30, 0.78], aisleXs: [0], pax: 8, psuXs: [-0.55, 0.55], entryHx: 1.15, crewPostX: 0.45, profile: { sx: 1.32 / 1.98, door1: -5.25, door2: 3.2, aisles: [0], centrePSU: false } },
+    gse: { belt1z: 5.2, belt2z: 7.6, contz: 4.4, fuelX: 9, fuelz: 0.4, fuelPanelX: 7.4, fuelPanelZ: 2.2, lavz: 10.6, waterz: 9.8, vanz: -22, trainz: -5.5, doorR1z: -5.25, doorR2z: 3.2, catX: 4.6, contX: 4.2, beltX: null, lavX: 2.4, waterX: 4.8 },
+  },
 ];
 
 export const TYPE_KEY = 'fox.type';
@@ -79,3 +104,12 @@ export function savedType() { try { return typeById(localStorage.getItem(TYPE_KE
 export function saveType(id) { try { localStorage.setItem(TYPE_KEY, id); } catch (e) { } }
 // Boot entry (main.js, before any build): installs the type's hull shape and returns the spec.
 export function applyType(id) { cur = typeById(id); applyShape(cur.shape); return cur; }
+
+// [Private charter] a charter flight's manifest is the contract's client count, not the
+// type's standard load. main.js sets this at flight start (a number for a charter flight,
+// null for everything else); the terminal builder reads flightPax() when it sizes the
+// departure lounge's flight crowd. With no override set — every airline flight, always —
+// flightPax() returns exactly the selected type's cabin.pax, so nothing else can change.
+let paxOverride = null;
+export function setFlightPax(n) { paxOverride = (n == null ? null : n); }
+export function flightPax() { return paxOverride != null ? paxOverride : cur.cabin.pax; }

@@ -33,11 +33,12 @@ import { NavPlan, fmtEte, fmtClock } from './navmap.js';
 import { Music, moodFor } from './music.js';
 import * as Stories from './stories.js';
 import * as CrewTalk from './crewtalk.js';
+import * as Charter from './charter.js';
 import { GFX, setMsaaActive } from './gfx.js';
 import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
 import { buildCabin, applyCabinType } from './interiors.js';
-import { TYPES, currentType, savedType, saveType, applyType } from './ac-types.js';
+import { TYPES, currentType, savedType, saveType, applyType, setFlightPax } from './ac-types.js';
 import { rng } from './terrain.js';
 import { buildCopilot } from './ppl-crew.js';
 import { buildPlanet, drawWorldMap } from './wld-planet.js';
@@ -354,6 +355,7 @@ function activeRunwayEnd(b) { // into the wind, longest
 
 // ---------------------------------------------------------------- flights
 const PHASE = { gate: 'gate', runway: 'takeoff', final: 'approach' };
+let _paxKey = 'std'; // [Private charter] which manifest the cabin/terminal builders currently carry ('std' = the type's own)
 async function startFlight(cfg) {
   W.cfg = cfg; W.mode = cfg.mode || 'free'; W.menuMode = !!cfg.menu;
   const A = cfg.apt; const g = airportGeometry(A);
@@ -406,11 +408,22 @@ async function startFlight(cfg) {
   W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); W.signedIn = cfg.start !== 'terminal'; // [Nothing starts until sign-in] only a terminal (on-foot) departure waits for its captain — every other start is live from the first frame, as before
   Stories.reset(); // [Stories era] a new flight starts with no story armed
   CrewTalk.reset(); // [Crew conversations] and no crew conversation or interphone state carried over
+  Charter.reset(); // [Private charter] and no charter encounter or card carried over
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
   const atGate = cfg.start === 'gate' || cfg.start === 'terminal', cold = !!cfg.cold && atGate;
-  sys.reset(cold ? 'cold' : atGate && !cfg.menu ? 'gate' : 'run'); fails.reset(); fails.random = cfg.menu ? 'off' : settings.failRand || 'off'; if (cfg.fail && !cfg.menu) fails.trigger(cfg.fail, { eng: 0 }); rescue.clear(); Object.assign(W, { evac: false, emerStop: false, rescueT: 0, foam: false, braced: false, emergPA: false, bellyT: 0, souls: TYPE.id === 'fox' ? 120 + ((Math.random() * 50) | 0) + 6 : TYPE.cabin.pax + 5 + ((Math.random() * 10) | 0) }); W.ndRange = null; lights._auto = undefined; W.coldDone = !cold; W.coldT = 0; W.autoStart = null;
+  sys.reset(cold ? 'cold' : atGate && !cfg.menu ? 'gate' : 'run'); fails.reset(); fails.random = cfg.menu ? 'off' : settings.failRand || 'off'; if (cfg.fail && !cfg.menu) fails.trigger(cfg.fail, { eng: 0 }); rescue.clear(); Object.assign(W, { evac: false, emerStop: false, rescueT: 0, foam: false, braced: false, emergPA: false, bellyT: 0, souls: TYPE.id === 'fox' ? 120 + ((Math.random() * 50) | 0) + 6 : TYPE.cabin.pax + 5 + ((Math.random() * 10) | 0) }); W.ndRange = null;
+  // [Private charter] a charter flight flies the PJ-1 for one contract's party: narrow the
+  // flight's manifest to the client count (terminal crowd via ac-types.setFlightPax, cabin
+  // crowd via a per-flight applyCabinType) and count souls as the party + crew. The pax
+  // state is re-applied only when it changes, and every non-charter flight restores the
+  // type's own values — airline flights run with exactly the boot state, as always.
+  W.charter = null;
+  if (cfg.mode === 'charter' && cfg.contract && TYPE.id === 'pjet') { const C = Charter.byId(cfg.contract); if (C) { W.charter = { id: C.id, n: C.party, name: C.name }; Charter.setContract(C.id); } }
+  const paxKey = W.charter ? 'charter' + W.charter.n : 'std';
+  if (paxKey !== _paxKey) { _paxKey = paxKey; if (W.charter) { setFlightPax(W.charter.n); applyCabinType({ ...TYPE.cabin, pax: W.charter.n }); } else { setFlightPax(null); applyCabinType(TYPE.cabin); } }
+  if (W.charter) W.souls = W.charter.n + 4; lights._auto = undefined; W.coldDone = !cold; W.coldT = 0; W.autoStart = null;
   if (atGate && !cfg.menu) { fdm.engRun = [false, false]; fdm.n1 = [0, 0]; fdm.n2 = [0, 0]; fdm.egt = [24, 24]; fdm.tl = 0; fdm.ap.on = false; fdm.ap.athr = false; }
   if (cfg.start === 'route' || any) { W.ils = fdm.ap.ils = null; } W.simTime = 0; W.crashShown = false;
   // AI traffic on the runway in use (avoid the player's runway when on it)
@@ -515,7 +528,7 @@ function enterFoot(mode) {
   disposeFlightCabin(); if (!foot.parts) foot.build({ mode, apt: b.apt, b, stand: st, dest: mode === 'dep' ? W.dest : W.cfg.apt, featured: featured() });
   foot.enter(mode === 'dep' ? 'hall' : 'cockpit'); foot.hideInteriors(true); W.onFoot = true; W.footMode = mode;
   $('#flight').hidden = true; $('#foot').hidden = false; $('#radio').hidden = true; setView('cockpit');
-  if (mode === 'dep') Stories.arm(foot); // [Stories era] one of the 121 waiting in the lounge has a story today
+  if (mode === 'dep') { if (W.charter) Charter.arm(foot, Charter.byId(W.charter.id)); else Stories.arm(foot); } // [Stories era] one of the 121 waiting in the lounge has a story today — [Private charter] on a charter flight the lounge holds only the clients, and the lead client is the encounter
   foot.onEvent = ev => {
     if (ev === 'checkedin') captainSignedIn(); // [Nothing starts until sign-in] the crew sign-in is the flight's true start
     if (ev === 'boarding') { if (!beginBoarding()) toast('Boarding has started. Passengers are taking their seats.', 4000); }
@@ -525,6 +538,10 @@ function enterFoot(mode) {
 }
 function announce() {
   const dest = W.dest ? (SHORT[W.dest.icao] || W.dest.city) : 'our destination';
+  if (W.charter) { // [Private charter] no flight number, no crowd — the cabin is theirs
+    const txt = `Welcome aboard, everyone. This is your Foxheart Charter flight to ${dest}. Boarding is complete, the door is closed, and the cabin is yours. Please fasten your seat belts — we'll take care of everything else.`;
+    toast('Cabin announcement: welcome aboard your charter to ' + dest + '.', 6000); paSpeak(txt, 'PURSER'); return;
+  }
   const txt = `Ladies and gentlemen, welcome aboard Nicofoxheart Air flight four one two to ${dest}. Boarding is complete. Please make sure your seat belt is fastened and your bags are stowed. We wish you a pleasant flight.`;
   toast('Cabin announcement: welcome aboard flight 412 to ' + dest + '.', 6000); paSpeak(txt, 'PURSER');
 }
@@ -607,16 +624,17 @@ function beginBoarding() {
   S.phase = 'boarding'; S.group = 0; S.callT = 0;
   c.beginBoarding(); if (foot.parts && foot.parts.cabin === c) foot.boarding = true;
   const dest = W.dest ? (SHORT[W.dest.icao] || W.dest.city) : 'our destination';
-  audio.chime(); paSpeak(`Ladies and gentlemen, Nicofoxheart Air flight four one two to ${dest} is now boarding at gate ${S.gate}. Please have your boarding pass ready, and listen for your group number.`, 'GATE');
-  toast('Boarding has begun at gate ' + S.gate + ' — the cabin fills group by group.', 4500);
+  audio.chime(); paSpeak(W.charter ? `Ladies and gentlemen, the Foxheart Charter flight to ${dest} is now boarding at gate ${S.gate}. Would our charter guests please make their way to the aircraft.` : `Ladies and gentlemen, Nicofoxheart Air flight four one two to ${dest} is now boarding at gate ${S.gate}. Please have your boarding pass ready, and listen for your group number.`, 'GATE');
+  toast(W.charter ? 'Your clients are boarding at gate ' + S.gate + ' — all ' + W.charter.n + ' of them.' : 'Boarding has begun at gate ' + S.gate + ' — the cabin fills group by group.', 4500);
   return true;
 }
 function callBoardingGroup(g) {
   const S = W.boarding, c = cabinObj(); if (!S || !c) return;
   S.group = g; S.callT = 0; c.callGroup(g);
-  const info = c.boardingInfo(), G = info.groups[g - 1]; if (!G) return;
+  const info = c.boardingInfo(), G = info.groups[g - 1]; if (!G || G.size === 0) return; // [Private charter] an empty group (only possible on the jet's tiny manifests) is never announced — boardingStep moves past it on its own rule
   audio.chime();
-  paSpeak(g === info.groups.length ? `Group ${g}, all remaining passengers, now boarding at gate ${S.gate}. This is the final call for flight four one two.` : `Group ${g}, passengers seated in rows ${G.rLo} to ${G.rHi}, now boarding at gate ${S.gate}.`, 'GATE');
+  const isFinal = !info.groups.slice(g).some(x => x.size > 0); // the last group WITH anyone in it gets the final call (for airline loads that is simply the last group, as before)
+  paSpeak(isFinal ? (W.charter ? `Group ${g}, our remaining charter guests, now boarding at gate ${S.gate}. This is the final call for the Foxheart Charter flight.` : `Group ${g}, all remaining passengers, now boarding at gate ${S.gate}. This is the final call for flight four one two.`) : `Group ${g}, passengers seated in rows ${G.rLo} to ${G.rHi}, now boarding at gate ${S.gate}.`, 'GATE');
 }
 function boardingStep(dt) { // dt is sim seconds; called from cabinStep every frame
   const S = W.boarding; if (!S || W.menuMode || !W.started) return;
@@ -661,9 +679,10 @@ function parkAtGate(st) {
 function finishTrip() {
   if (W.tripDone) return; W.tripDone = true; try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { }
   const s = lastScore; const from = W.cfg.apt, to = W.primary.apt;
-  const log = store.get('log', []); log.unshift({ date: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: 'trip', apt: from.icao + '→' + to.icao, rwy: s?.rwy || '-', fpm: s?.fpm ?? '-', score: s?.score ?? '-', grade: s?.grade || '-', wx: W.wx, tod: fmtTime(W.tod) }); store.set('log', log.slice(0, 200));
+  const log = store.get('log', []); log.unshift({ date: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: W.charter ? 'charter' : 'trip', apt: from.icao + '→' + to.icao, rwy: s?.rwy || '-', fpm: s?.fpm ?? '-', score: s?.score ?? '-', grade: s?.grade || '-', wx: W.wx, tod: fmtTime(W.tod) }); store.set('log', log.slice(0, 200));
   const storyLetter = Stories.completeTrip({ from: from.icao, to: to.icao }); // [Stories era] their letter lands with the trip (route as actually flown — a divert writes the divert field)
-  $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">Flight 412 is in the logbook${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. Thanks for flying Nicofoxheart Air.</p>${storyLetter ? '<p style="color:var(--fox2);margin:8px 0 0">✉ A letter is waiting in your logbook.</p>' : ''}<div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
+  const charterNote = W.charter ? Charter.completeTrip({ from: from.icao, to: to.icao, score: s?.score ?? null, grade: s?.grade || null, fpm: s?.fpm ?? null }) : null; // [Private charter] the clients' note lands with the trip, the landing recorded as their satisfaction
+  $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">${W.charter ? 'Your charter is in the logbook' : 'Flight 412 is in the logbook'}${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. ${W.charter ? 'Thank you for looking after them, captain.' : 'Thanks for flying Nicofoxheart Air.'}</p>${storyLetter ? '<p style="color:var(--fox2);margin:8px 0 0">✉ A letter is waiting in your logbook.</p>' : ''}${charterNote ? '<p style="color:var(--fox2);margin:8px 0 0">✦ Your clients left a note in the Charter Book.</p>' : ''}<div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
   $('#result').hidden = false; $('#rMenu').onclick = () => { $('#result').hidden = true; toMenu(); }; $('#rCont').onclick = () => { $('#result').hidden = true; W.tripDone = false; };
 }
 function nearestFreeStand(maxD) { const b = W.primary; if (!b || !b.full) return null; let best = null, bd = maxD; for (const st of b.b.stands) { if (st.used && st !== W.arrStand) continue; const d = Math.hypot(b.x + st.x - fdm.pos.x, b.z + st.z - fdm.pos.z); if (d < bd) { bd = d; best = st; } } return best; }
@@ -1549,6 +1568,7 @@ function renderRest(dt, night) {
   audio.update({ fdm, apuN: sys.apuN, paused: W.paused || W.menuMode, ground: fdm.onGround, camDist: camera.position.distanceTo(aircraft.position), rain: W.wx === 'rain', nearAirport: true, groundH: gh, flapTarget: FLAPS[fdm.flapIdx].flap }, dt, W.view);
   music.update(dt, musicWant()); musicNowUI(); if (svcPanel.open) svcPanel.update(dt);
   Stories.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Stories era] marker bob + the one cruise beat
+  Charter.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Private charter] client marker bob + the one cruise beat (inert unless a charter is armed)
   CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot, hold: !W.signedIn }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats; [Nothing starts until sign-in] hold: the interphone beats wait for the captain (on-foot crew talk is not held)
   if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
   if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
@@ -1673,6 +1693,7 @@ function footInput(dt) {
 function footInteract() {
   if (foot.interactFlow && foot.interactFlow()) return; // terminal flow (check-in / security) uses E first
   if (Stories.tryMeet(foot)) return; // [Stories era] saying hello to the story passenger uses E next
+  if (Charter.tryMeet(foot)) return; // [Private charter] meeting your client uses E next (never armed on the same flight as a story)
   if (CrewTalk.tryTalk(foot)) return; // [Crew conversations] talking to a ground crew member uses E next
   if (W.footMode === 'dep' && foot.pos.distanceTo(foot.seat) < 1.3) takeSeat();
   else if (W.footMode === 'arr' && foot.pos.distanceTo(foot.exitPos) < 6.5) finishTrip();
@@ -1857,7 +1878,7 @@ function buildMenu() {
   }
   const q = $('#q'); q.addEventListener('input', () => { const r = search(q.value); const box = $('#results'); box.hidden = !q.value.trim(); box.innerHTML = r.length ? '' : '<div class="empty">No airport matches. Try an ICAO (KTPA), IATA (TPA) or a city name.</div>';
     for (const A of r) { const el = document.createElement('button'); el.innerHTML = `<span class="ic">${A.icao}</span><span class="ia">${A.iata || '—'}</span><span class="nm">${A.name}<small>${A.city ? A.city + ', ' : ''}${A.country}</small></span><span class="rw">${A.runways.length} RWY</span>`; el.onclick = () => { selectAirport(A); }; box.appendChild(el); } });
-  $$('#nav button').forEach(b => b.onclick = () => { $$('#nav button').forEach(x => x.setAttribute('aria-current', x === b)); $$('#sheet .sec').forEach(s => s.hidden = s.dataset.sec !== b.dataset.sec); if (b.dataset.sec === 'logbook') renderLog(); });
+  $$('#nav button').forEach(b => b.onclick = () => { $$('#nav button').forEach(x => x.setAttribute('aria-current', x === b)); $$('#sheet .sec').forEach(s => s.hidden = s.dataset.sec !== b.dataset.sec); if (b.dataset.sec === 'logbook') renderLog(); if (b.dataset.sec === 'charter') renderContracts(); });
   const seg = (id, fn) => $$(`#${id} button`).forEach(b => b.onclick = () => { $$(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', x === b)); fn(b.dataset.v); });
   seg('startSeg', v => sel.start = v); seg('wxSeg', v => sel.wx = v);
   { const dq = $('#destQ'), dr = $('#destRes'); // destination picker (empty = automatic)
@@ -1880,6 +1901,25 @@ function buildMenu() {
     $$('#anyPicks button').forEach(b => b.onclick = () => { const [la, lo, alt, h] = b.dataset.p.split(',').map(Number); num('anyAlt').value = alt; num('anyHdg').value = h; upd(); setLL(la, lo); });
     $('#anyFly').onclick = () => { audio.start(); go({ apt: nearestAnywhere(any.lat, any.lon), start: 'anywhere', lat: any.lat, lon: any.lon, altFt: +num('anyAlt').value, hdg: +num('anyHdg').value, kt: +num('anySpd').value, tod: +num('anyTod').value, wx, windFrom: 270, windKt: 12, mode: 'free' }); };
     upd(); redraw(); }
+  // [Private charter] the contract board: named clients who booked the captain and the
+  // PJ-1. Picking a contract flies it — if another type is installed, the jet is applied
+  // first (the fleet's persist + reload idiom) and the booking is stashed for the boot to
+  // pick up, so the click still lands in the same flight. Flown contracts stay on the
+  // board, marked, until the whole roster has flown and the cycle restarts.
+  let chtrStart = 'terminal';
+  seg('chtrStartSeg', v => chtrStart = v);
+  function renderContracts() {
+    const list = $('#chtrList'); if (!list) return; const used = Charter.usedIds(); list.innerHTML = '';
+    for (const C of Charter.CONTRACTS) { const A = World.byIcao.get(C.from), B = World.byIcao.get(C.to); if (!A || !B) continue; const done = used.includes(C.id); const el = document.createElement('button'); el.className = 'item'; el.dataset.contract = C.id;
+      el.innerHTML = `<div><h3>${C.title}</h3><p>${A.iata} → ${B.iata} · ${C.party} guests · ${C.occasion}</p></div><div class="best">${done ? 'Flown' : 'Guests'}<b>${done ? '✓' : C.party}</b></div>`;
+      el.onclick = () => flyCharter(C); list.appendChild(el); }
+  }
+  function flyCharter(C) {
+    audio.start(); const A = World.byIcao.get(C.from); if (!A) return;
+    if (TYPE.id !== 'pjet') { try { localStorage.setItem('fox.charterStart', JSON.stringify({ id: C.id, start: chtrStart })); } catch (e) { } setPlayerType('pjet'); return; }
+    go({ apt: A, start: chtrStart, dest: C.to, tod: C.tod, wx: C.wx, windFrom: 240, windKt: 7, mode: 'charter', contract: C.id });
+  }
+  renderContracts();
   // challenges
   const chl = $('#chList'); const best = store.get('best', {});
   for (const ch of CHALLENGES) { const A = World.byIcao.get(ch.icao); if (!A) continue; const el = document.createElement('button'); el.className = 'item';
@@ -1967,8 +2007,9 @@ function selectAirport(A, quiet) {
 function renderLog() {
   const log = store.get('log', []); const body = $('#logBody');
   const letters = Stories.lettersHtml(); // [Stories era] the Letters section lives under the flights table
-  if (!log.length && !letters) { body.innerHTML = '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>'; return; }
-  body.innerHTML = (!log.length ? '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' : '') + (log.length ? `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>`).join('')}</tbody></table></div>` : '') + letters;
+  const charterBook = Charter.charterBookHtml(); // [Private charter] and the Charter Book under that (its own storage — Clear logbook never touches it, like the Letters)
+  if (!log.length && !letters && !charterBook) { body.innerHTML = '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>'; return; }
+  body.innerHTML = (!log.length ? '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' : '') + (log.length ? `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>`).join('')}</tbody></table></div>` : '') + letters + charterBook;
 }
 async function go(cfg) {
   $('#menu').hidden = true; $('#flight').hidden = false; W.menuMode = false; W.paused = false;
@@ -2041,6 +2082,7 @@ window.__sim = {
   livery: () => (aircraft.userData.parts && aircraft.userData.parts.livery) || savedLivery(), setLivery: (id) => setPlayerLivery(id),
   type: () => TYPE.id, types: () => TYPES.map(t => ({ id: t.id, name: t.name, seats: t.cabin.seatXs.length * t.cabin.rows, pax: t.cabin.pax })), setType: (id) => setPlayerType(id),
   stories: () => Stories.state(),
+  charter: () => Charter.state(), // [Private charter] armed contract, meeting state, notes + rotation
   crewTalk: () => CrewTalk.state(), // [Crew conversations] roster positions/phases, open card, interphone beats
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
@@ -2100,6 +2142,10 @@ window.__sim = {
     try { buildMenu(); } catch (e) { errors.push('menu: ' + (e.stack || e.message)); console.error(e); }
     requestAnimationFrame(frame);
     try { await startMenuScene(); } catch (e) { errors.push('menuscene: ' + (e.stack || e.message)); console.error(e); }
+    // [Private charter] a contract picked while another type was installed stashed itself
+    // before the type reload — with the PJ-1 now built, fly it straight away.
+    try { const p = JSON.parse(localStorage.getItem('fox.charterStart') || 'null'); if (p) { localStorage.removeItem('fox.charterStart'); const C = Charter.byId(p.id); const A = C && World.byIcao.get(C.from);
+      if (C && A && TYPE.id === 'pjet') { $('#menu').hidden = true; $('#flight').hidden = false; W.menuMode = false; W.paused = false; await startFlight({ apt: A, start: p.start === 'gate' ? 'gate' : 'terminal', dest: C.to, tod: C.tod, wx: C.wx, windFrom: 240, windKt: 7, mode: 'charter', contract: C.id }); canvas.focus(); } } } catch (e) { }
     $('#loadbar').style.width = '100%';
     showLoad(false);
     window.__sim.ready = true;

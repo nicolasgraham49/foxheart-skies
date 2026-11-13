@@ -7,7 +7,7 @@ import { foxHeart } from './aircraft.js';
 import { SHORT } from './atc.js';
 import { People } from './people.js';
 import { buildHall } from './env-hall.js';
-import { currentType } from './ac-types.js';
+import { currentType, flightPax } from './ac-types.js';
 import { svcConfigure } from './ppl-service.js';
 
 const AT = 2048;
@@ -190,7 +190,7 @@ function frameFn(O, xAxis, zAxis) { return (x, y, z) => new THREE.Vector3(O.x + 
 // ---------------------------------------------------------------- terminal hall
 // opts: { icao, mode: 'dep'|'arr', gate, dest, O (world, façade point at the bridge door, y = apron level), n (unit toward apron/runway), depth, doorX }
 export function buildTerminal(opts, rnd) {
-  try { return buildHall({ ...opts, flightN: currentType().cabin.pax }, rnd); } catch (e) { console.warn('env-hall failed, using the simple hall', e); }
+  try { return buildHall({ ...opts, flightN: flightPax() }, rnd); } catch (e) { console.warn('env-hall failed, using the simple hall', e); }
   const { icao, mode, gate, dest } = opts;
   const at = buildAtlas(icao, gate, dest); const mat = atlasMaterial(at.tex); const A = at.accent;
   const F = 4.6, D = Math.max(46, opts.depth - 4), HW = 44; // floor height, depth, half width
@@ -607,16 +607,24 @@ export function buildCabin(icao, rnd) {
   // gate lounge and boards in groups through the door (see the boarding session API below); each person
   // owns a seat (target), a boarding group and a place in that group's queue. Arrival builds place them
   // in their seats via `boarders` (onfoot.js), and seatAll() is the skip-ahead shortcut.
-  const N = CABIN.paxN + 3; const crowd = new People(group, N, rnd); const free = seats.map((s, i) => i).sort(() => rnd() - 0.5);
+  // [Private charter] the lap baby belongs to the airline cabin — a big crowd with index 96
+  // to spare. The little jet's handful of guests never includes one, and its tiny crowd is
+  // built without the baby slot (boarders + 2 crew exactly). Every airline type (117+
+  // aboard) takes the original path, value for value.
+  const hasBaby = CABIN.paxN >= 60;
+  const N = CABIN.paxN + (hasBaby ? 3 : 2); const crowd = new People(group, N, rnd); const free = seats.map((s, i) => i).sort(() => rnd() - 0.5);
   const boarders = []; let k = 0;
-  for (; k < N - 2; k++) { if (k === 96) continue; const [x, z] = seats[free[k]]; const p = crowd.p[k]; Object.assign(p, { x: CABIN.door.x + 0.58, y: -100, z: CABIN.door.z, yaw: 0, mode: 'walk', hidden: true, target: { x, z }, seatIdx: free[k], state: 'lounge', suitcase: rnd() < 0.55, backpack: rnd() < 0.5, talkSide: rnd() < 0.5 ? 1 : -1 }); boarders.push(p); }
+  for (; k < N - 2; k++) { if (hasBaby && k === 96) continue; const [x, z] = seats[free[k]]; const p = crowd.p[k]; Object.assign(p, { x: CABIN.door.x + 0.58, y: -100, z: CABIN.door.z, yaw: 0, mode: 'walk', hidden: true, target: { x, z }, seatIdx: free[k], state: 'lounge', suitcase: rnd() < 0.55, backpack: rnd() < 0.5, talkSide: rnd() < 0.5 ? 1 : -1 }); boarders.push(p); }
   // a parent with a baby on the lap: the baby travels hidden and appears on the parent's lap once seated
-  const parent = crowd.p[0]; parent.age = 'adult'; const baby = crowd.p[96];
-  Object.assign(baby, { age: 'kid', scale: 0.33, x: parent.target.x, y: fl + 0.36, z: parent.target.z - 0.12, yaw: Math.PI, mode: 'sit', act: 'idle', backpack: false, suitcase: false, hidden: true, state: 'babywait' }); crowd.paint(baby); baby.baby = parent; parent.hasBaby = true;
+  const parent = crowd.p[0]; parent.age = 'adult'; const baby = hasBaby ? crowd.p[96] : null;
+  if (baby) { Object.assign(baby, { age: 'kid', scale: 0.33, x: parent.target.x, y: fl + 0.36, z: parent.target.z - 0.12, yaw: Math.PI, mode: 'sit', act: 'idle', backpack: false, suitcase: false, hidden: true, state: 'babywait' }); crowd.paint(baby); baby.baby = parent; parent.hasBaby = true; }
   // boarding groups, rear rows first like a real airline: sort the load by seat row (desc) and chunk it
+  // [Private charter] a tiny manifest can leave the trailing groups EMPTY (2 guests over 5
+  // groups) — their row labels fall back to the last boarder instead of reading an empty
+  // chunk. Airline loads (>= 117) fill every chunk, so their labels are unchanged.
   const rowOfZ = z => Math.round((z - CABIN.z0) / CABIN.pitch);
   const groups = []; { const byRow = boarders.slice().sort((a, b) => rowOfZ(b.target.z) - rowOfZ(a.target.z)); const base = Math.floor(byRow.length / 5), rem = byRow.length % 5; let i = 0;
-    for (let g = 0; g < 5; g++) { const n = base + (g < rem ? 1 : 0), chunk = byRow.slice(i, i + n); i += n; chunk.forEach((p, j) => { p.group = g + 1; p.gOrder = j; }); groups.push({ n: g + 1, size: n, rHi: rowOfZ(chunk[0].target.z) + 1, rLo: rowOfZ(chunk[chunk.length - 1].target.z) + 1 }); } }
+    for (let g = 0; g < 5; g++) { const n = base + (g < rem ? 1 : 0), chunk = byRow.slice(i, i + n); i += n; chunk.forEach((p, j) => { p.group = g + 1; p.gOrder = j; }); const ref = chunk[0] || byRow[byRow.length - 1], refL = chunk[chunk.length - 1] || ref; groups.push({ n: g + 1, size: n, rHi: rowOfZ(ref.target.z) + 1, rLo: rowOfZ(refL.target.z) + 1 }); } }
   // ---- boarding session state (driven by main.js; the lounge side is driven by onfoot.js)
   const PACE = 1.35; // seconds between passengers arriving at the cabin door (door feeder)
   const session = { on: false, group: 0, feeder: 'door' };
@@ -679,7 +687,7 @@ export function buildCabin(icao, rnd) {
   };
   // in-flight life: reactions to the PA, signs and the ride; a few passengers get up when the belt sign is off
   const pax = crowd.p.slice(0, N - 2).filter(p => !p.baby);
-  const seatAll = () => { for (const p of boarders) if (p.state !== 'seated') { p.hidden = false; p.state = 'seated'; p.mode = 'sit'; p.suitcase = p.backpack = false; p.x = p.target.x; p.z = p.target.z + 0.1; p.y = fl; p.yaw = Math.PI; p.windowSide = p.x < 0 ? 1 : -1; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > WINX ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; } if (baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } boarded = boarders.length; crew2.act = 'idle'; };
+  const seatAll = () => { for (const p of boarders) if (p.state !== 'seated') { p.hidden = false; p.state = 'seated'; p.mode = 'sit'; p.suitcase = p.backpack = false; p.x = p.target.x; p.z = p.target.z + 0.1; p.y = fl; p.yaw = Math.PI; p.windowSide = p.x < 0 ? 1 : -1; p.act = p.hasBaby ? 'baby' : Math.abs(p.x) > WINX ? 'window' : ['idle', 'phone', 'read', 'talk'][p.i % 4]; } if (baby && baby.state === 'babywait') { baby.state = 'seated'; baby.hidden = false; } boarded = boarders.length; crew2.act = 'idle'; };
   // ---- boarding session API (main.js conducts; onfoot.js feeds the lounge side in 'lounge' feeder mode)
   const beginBoarding = () => { session.on = true; };
   const callGroup = g => { session.group = g; for (const p of boarders) if (p.group === g && p.state === 'lounge') { p.state = 'wait'; p.qT = 0; p.delay = p.gOrder * PACE; p.admitted = false; } };
