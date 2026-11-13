@@ -559,6 +559,7 @@ export function applyCabinType(cab) {
   CABIN.profile = cab.profile;
   CABIN.door.set(-T.dim.R, CABIN.floor, cab.profile.door1);
   CABIN.ckSeatZ = -15.05 + T.deckDz; CABIN.ckZoneZ = -15.35 + T.deckDz; CABIN.ckDoorZ = -14.55 + T.deckDz;
+  CABIN.ckFloor = -0.15 + (T.deckDy || 0); // [PJ-1 cockpit fix] the seated captain + deck walk zones ride the deck's vertical fit
 }
 export function buildCabin(icao, rnd) {
   const group = new THREE.Group(); group.name = 'cabin';

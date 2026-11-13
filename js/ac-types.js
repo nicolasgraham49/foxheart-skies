@@ -16,7 +16,7 @@ export const TYPES = [
     desc: 'The original Foxheart twin-jet. 174 seats, 121 passengers board.',
     shape: { foxTables: true, noseZ: -18.6, tailZ: 19.0 },
     dim: { length: 37.6, span: 35.8, noseZ: -18.6, tailZ: 19.0, R: 1.98, wheelY: -3.62, mainZ: 1.25, mainX: 3.8, noseGearZ: -12.9, engX: 5.75 },
-    deckDz: 0,
+    deckDz: 0, deckDy: 0,
     vis: { wg: { b0: 1.2, bK: 6.2, bT: 16.95, sweep: Math.tan(27 * Math.PI / 180), dih: Math.tan(5.5 * Math.PI / 180), zRef: -4.3, bRef: 1.7, yRef: -1.05, te: [2.5, 2.8, 5.0] }, ht: { b0: 0.35, bT: 6.3, z0: 13.7, y0: 1.0, sweep: Math.tan(32 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), cr: 3.75, ct: 1.3 }, vt: { y0: 1.4, h: 6.45, z0: 11.55, sweep: Math.tan(37 * Math.PI / 180), cr: 6.05, ct: 2.05 }, eng: { x: 5.75, y: -1.95, z0: -6.95, scale: 1 }, wingletScale: 1, mask: false, flatFan: false, fair: { yc: -0.95, a: 2.2, b: 1.24 } },
     fdm: { mass: 64000, I: { pitch: 3.4e6, roll: 1.5e6, yaw: 4.4e6 }, S: 122.6, CBAR: 4.19, B: 34.1, thrust: 120000, engX: 5.75, probes: FOX_PROBES, belly: FOX_BELLY },
     cabin: { rows: 29, pitch: 0.79, z0: -10.6, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], pax: 121, psuXs: [-1.17, 1.17], entryHx: 1.7, crewPostX: 0.62, profile: { sx: 1, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false } },
@@ -31,7 +31,7 @@ export const TYPES = [
       gear: { mainX: 3.66, mainZ: 1.4, hingeY: -0.95, wheelR: 0.57, wheelW: 0.40, track: 0.39, retract: 86 * Math.PI / 180, noseZ: -14.0, noseHingeY: -1.25, noseR: 0.35, noseW: 0.26, wheelY: -3.55, bogie: 0 },
     },
     dim: { length: 39.5, span: 35.8, noseZ: -19.75, tailZ: 19.75, R: 1.88, wheelY: -3.55, mainZ: 1.4, mainX: 3.66, noseGearZ: -14.0, engX: 5.6 },
-    deckDz: -1.15,
+    deckDz: -1.15, deckDy: 0,
     vis: { wg: { b0: 1.15, bK: 6.0, bT: 16.95, sweep: Math.tan(25 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), zRef: -4.0, bRef: 1.7, yRef: -1.08, te: [2.5, 2.8, 5.0] }, ht: { b0: 0.35, bT: 6.9, z0: 14.6, y0: 1.05, sweep: Math.tan(32 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), cr: 3.6, ct: 1.25 }, vt: { y0: 1.35, h: 6.1, z0: 12.3, sweep: Math.tan(38 * Math.PI / 180), cr: 6.4, ct: 1.9 }, eng: { x: 5.6, y: -1.90, z0: -6.6, scale: 0.94 }, wingletScale: 1.25, mask: false, flatFan: true, fair: { yc: -0.90, a: 2.1, b: 1.18 } },
     fdm: { mass: 66000, I: { pitch: 3.9e6, roll: 1.7e6, yaw: 5.0e6 }, S: 124.6, CBAR: 4.05, B: 35.8, thrust: 121000, engX: 5.6, probes: [[0, -2.0, -18.6], [0, -1.08, 12.6], [5.6, -2.9, -5], [-5.6, -2.9, -5], [16.8, -0.2, 3.8], [-16.8, -0.2, 3.8], [0, -2.1, 0]], belly: [[5.6, -2.9, -5], [-5.6, -2.9, -5], [0, -2.1, 0], [0, -2.0, -15.1], [0, -1.08, 12.6]] },
     cabin: { rows: 28, pitch: 0.79, z0: -11.6, seatXs: [-1.43, -0.955, -0.48, 0.48, 0.955, 1.43], aisleXs: [0], pax: 117, psuXs: [-1.11, 1.11], entryHx: 1.65, crewPostX: 0.59, profile: { sx: 1.88 / 1.98, door1: -14.2, door2: 12.8, aisles: [0], centrePSU: false } },
@@ -46,7 +46,7 @@ export const TYPES = [
       gear: { mainX: 3.75, mainZ: 1.3, hingeY: -0.95, wheelR: 0.60, wheelW: 0.43, track: 0.39, retract: 86 * Math.PI / 180, noseZ: -13.2, noseHingeY: -1.25, noseR: 0.38, noseW: 0.28, wheelY: -3.70, bogie: 0 },
     },
     dim: { length: 37.57, span: 34.1, noseZ: -18.79, tailZ: 18.78, R: 1.98, wheelY: -3.70, mainZ: 1.3, mainX: 3.75, noseGearZ: -13.2, engX: 5.9 },
-    deckDz: -0.19,
+    deckDz: -0.19, deckDy: 0,
     vis: { wg: { b0: 1.2, bK: 6.0, bT: 15.9, sweep: Math.tan(25 * Math.PI / 180), dih: Math.tan(5.7 * Math.PI / 180), zRef: -4.2, bRef: 1.7, yRef: -1.02, te: [2.5, 2.8, 5.0] }, ht: { b0: 0.35, bT: 6.1, z0: 13.2, y0: 1.0, sweep: Math.tan(28 * Math.PI / 180), dih: Math.tan(5 * Math.PI / 180), cr: 3.5, ct: 1.2 }, vt: { y0: 1.4, h: 5.9, z0: 11.2, sweep: Math.tan(33 * Math.PI / 180), cr: 5.6, ct: 1.95 }, eng: { x: 5.9, y: -1.92, z0: -6.8, scale: 1.0 }, wingletScale: 1.3, mask: true, flatFan: false, fair: { yc: -0.95, a: 2.2, b: 1.24 } },
     fdm: { mass: 64000, I: { pitch: 3.4e6, roll: 1.5e6, yaw: 4.4e6 }, S: 122.6, CBAR: 4.19, B: 34.1, thrust: 120000, engX: 5.9, probes: [[0, -2.0, -17.7], [0, -1.08, 11.8], [5.9, -3.0, -5], [-5.9, -3.0, -5], [16.15, -0.2, 3.8], [-16.15, -0.2, 3.8], [0, -2.1, 0]], belly: [[5.9, -3.0, -5], [-5.9, -3.0, -5], [0, -2.1, 0], [0, -2.0, -14.2], [0, -1.08, 11.8]] },
     cabin: { rows: 30, pitch: 0.79, z0: -10.8, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], pax: 125, psuXs: [-1.17, 1.17], entryHx: 1.7, crewPostX: 0.62, profile: { sx: 1, door1: -13.4, door2: 12.6, aisles: [0], centrePSU: false } },
@@ -61,7 +61,7 @@ export const TYPES = [
       gear: { mainX: 5.1, mainZ: 1.6, hingeY: -1.1, wheelR: 0.63, wheelW: 0.46, track: 0.42, retract: 86 * Math.PI / 180, noseZ: -24.2, noseHingeY: -1.5, noseR: 0.42, noseW: 0.31, wheelY: -4.95, bogie: 0.78 },
     },
     dim: { length: 61.0, span: 61.0, noseZ: -30.5, tailZ: 30.5, R: 2.98, wheelY: -4.95, mainZ: 1.6, mainX: 5.1, noseGearZ: -24.2, engX: 9.6 },
-    deckDz: -11.9,
+    deckDz: -11.9, deckDy: 0,
     // a350 te = trailing-edge z at [root, kink, tip] -> chords 10.7 / 6.8 / 2.9 m,
     // the widebody's own planform (the fox te values break this wing; see ac-model wingSec).
     vis: { wg: { b0: 1.9, bK: 9.0, bT: 29.9, sweep: Math.tan(31.9 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), zRef: -6.0, bRef: 2.6, yRef: -1.5, te: [4.3, 4.8, 13.9] }, ht: { b0: 0.5, bT: 11.2, z0: 24.6, y0: 1.6, sweep: Math.tan(33.5 * Math.PI / 180), dih: Math.tan(5 * Math.PI / 180), cr: 5.6, ct: 1.9 }, vt: { y0: 2.0, h: 8.6, z0: 21.5, sweep: Math.tan(38 * Math.PI / 180), cr: 8.6, ct: 2.9 }, eng: { x: 9.6, y: -2.9, z0: -10.5, scale: 1.45 }, wingletScale: 1.5, mask: true, flatFan: false, fair: { yc: -1.5, a: 3.3, b: 1.75 } },
@@ -77,6 +77,13 @@ export const TYPES = [
     // flight narrows the manifest to the contract's party (see setFlightPax below).
     // door1 sits 5.55 behind the nose, like every other type, so the flight deck lands in
     // its proven place (ckSeatZ = door1 - 2.0 by construction of deckDz = noseZ + 18.6).
+    // [PJ-1 cockpit fix] deckDy is the deck's VERTICAL fit, the counterpart of deckDz: the
+    // deck interior + eye are fox-proportioned and were only ever shifted in z, which left
+    // the captain's eye at 94% of this little hull's section height — outside the crown
+    // skin (measured ellipse norm 1.05), so the nose skin filled the windshield. -0.36
+    // restores the fox's eye fraction (0.66 of section height at the eye station, norm
+    // 0.61, in line with the airliners' 0.42-0.66); every other type's hull is fox-tall
+    // (eye norm <= 0.66 at deckDy 0) and keeps 0.
     id: 'pjet', name: 'Foxheart PJ-1', maker: 'Foxheart private jet', seatsNote: '12 club seats · up to 8 guests',
     desc: 'The little Foxheart jet: twelve club seats, a T-tail and a short-field heart. In Private Charter she flies whoever booked you; in Free Flight she boards 8 guests.',
     shape: {
@@ -86,7 +93,7 @@ export const TYPES = [
       gear: { mainX: 1.9, mainZ: 1.3, hingeY: -0.7, wheelR: 0.42, wheelW: 0.30, track: 0.30, retract: 86 * Math.PI / 180, noseZ: -8.3, noseHingeY: -0.8, noseR: 0.30, noseW: 0.22, wheelY: -2.5, bogie: 0 },
     },
     dim: { length: 21.2, span: 20.4, noseZ: -10.8, tailZ: 10.4, R: 1.32, wheelY: -2.5, mainZ: 1.3, mainX: 1.9, noseGearZ: -8.3, engX: 3.1 },
-    deckDz: 7.8,
+    deckDz: 7.8, deckDy: -0.36,
     // wing: LE root -1.64 / tip 1.92, chords 3.39 / 2.26 / 1.33 (root/kink/tip) — the
     // leading edge never crosses the trailing edge at any station (the a350 lesson).
     vis: { wg: { b0: 0.9, bK: 4.4, bT: 9.3, sweep: Math.tan(23 * Math.PI / 180), dih: Math.tan(4 * Math.PI / 180), zRef: -1.6, bRef: 1.0, yRef: -0.92, te: [1.75, 2.1, 3.25] }, ht: { b0: 0.05, bT: 2.6, z0: 8.45, y0: 3.88, sweep: Math.tan(30 * Math.PI / 180), dih: Math.tan(3 * Math.PI / 180), cr: 2.15, ct: 0.85 }, vt: { y0: 0.85, h: 3.2, z0: 6.3, sweep: Math.tan(38 * Math.PI / 180), cr: 3.6, ct: 1.15 }, eng: { x: 3.1, y: -1.55, z0: -2.7, scale: 0.62 }, wingletScale: 0.8, mask: false, flatFan: false, fair: { yc: -0.63, a: 1.45, b: 0.82 } },

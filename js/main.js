@@ -148,7 +148,7 @@ const roads = new Roads(scene, settings.quality); // highway, interchange, acces
 // [Aircraft types] install the selected type BEFORE anything builds from the shape state:
 // hull curves/doors/gear (ac-shape), DIM, the cabin seat map and the flight-deck offset.
 const TYPE = applyType(savedType().id); Object.assign(DIM, TYPE.dim); applyCabinType(TYPE.cabin);
-COCKPIT_EYE.z += TYPE.deckDz;
+COCKPIT_EYE.z += TYPE.deckDz; COCKPIT_EYE.y += (TYPE.deckDy || 0); // [PJ-1 cockpit fix] vertical deck fit (see ac-types pjet note)
 const aircraft = buildAircraft(settings.quality); scene.add(aircraft);
 const displays = new Displays();
 let cockpit = new THREE.Group(); cockpit.userData = { screens: [] }; cockpit.visible = false; aircraft.add(cockpit); // the real flight deck is built at boot, once fonts are in
@@ -301,7 +301,7 @@ function shiftOriginNow(ll) {
   if (W.route) { W.route.forEach(w => { w.x = ng.x(w.lon); w.z = ng.z(w.lat); }); fdm.ap.route = W.route; }
   W.navs = navsAround(ll.lat, ll.lon);
   const reIls = il => il && il.apt ? ilsFor(il.apt, il.end, aptPos(il.apt)) : il; const ni = reIls(W.ils); if (W.depIls === W.ils) W.depIls = ni; else W.depIls = reIls(W.depIls); if (fdm.ap.ils === W.ils) fdm.ap.ils = ni; else fdm.ap.ils = reIls(fdm.ap.ils); W.ils = ni;
-  for (const a of traffic.list) { traffic.scene.remove(a.obj); } traffic.list = []; if (traffic.aptPos && traffic.apt) traffic.aptPos = aptPos(traffic.apt);
+  traffic.clear(); if (traffic.aptPos && traffic.apt) traffic.aptPos = aptPos(traffic.apt);
   terrain.uniforms.uWorld.value.x -= d.x; terrain.uniforms.uWorld.value.y -= d.z; sky.shiftWorld(d.x, d.z);
   terrainAround(ll.lat, ll.lon, true);
   city.job = null; if (W.cityLL) city.group.position.set(ng.x(W.cityLL.lon), 0, ng.z(W.cityLL.lat)); STREAM.cityDue = true; // a half-built city was in the old frame: start again
@@ -325,7 +325,7 @@ function streamStep(dt) {
   else { const up = W.built.find(e => !e.full && haversine(ll.lat, ll.lon, e.apt.lat, e.apt.lon) < STREAM.fullR); if (up) { const i = W.built.indexOf(up), wasP = W.primary === up; dropAirport(up, true); W.built[i] = builtEntry(up.apt, true); if (wasP) W.primary = W.built[i]; STREAM.zonesDue = true; } }
   if (STREAM.zonesDue) { STREAM.zonesDue = false; terrain.setZones(aptZones()); terrain.aptObjs = W.built.map(b => b.apt); }
   // the destination becomes the primary airport once close (ground, gates, AI traffic, tower view)
-  const de = W.dest && W.built.find(b => b.apt === W.dest); if (de && de !== W.primary && dDest < 45000) { W.primary = de; const act = activeRunwayEnd(de); traffic.setup(de.apt, V3(de.x, de.elev, de.z), de.geom.ends, act); }
+  const de = W.dest && W.built.find(b => b.apt === W.dest); if (de && de !== W.primary && dDest < 45000) { W.primary = de; const act = activeRunwayEnd(de); traffic.setup(de.apt, V3(de.x, de.elev, de.z), de.geom.ends, act, de); }
   // city blocks around the aircraft when low (time-sliced, the old ones stay until the new set is ready)
   const cd = city.at ? Math.hypot(fdm.pos.x - city.at.x - city.group.position.x, fdm.pos.z - city.at.z - city.group.position.z) : 1e9;
   if (!city.job && agl < 4500 && (STREAM.cityDue || cd > 7000)) { STREAM.cityDue = false; city.start(terrain, W.geo, fdm.pos.x, fdm.pos.z, aptZones()); }
@@ -428,7 +428,7 @@ async function startFlight(cfg) {
   if (cfg.start === 'route' || any) { W.ils = fdm.ap.ils = null; } W.simTime = 0; W.crashShown = false;
   // AI traffic on the runway in use (avoid the player's runway when on it)
   const act = (W.primary && activeRunwayEnd(W.primary)) || E;
-  if (!W.primary) traffic.clear(); else if (W.primary.apt !== A) traffic.setup(W.primary.apt, new THREE.Vector3(W.primary.x, W.primary.elev, W.primary.z), W.primary.geom.ends, act); else traffic.setup(A, new THREE.Vector3(W.primary.x, W.primary.elev, W.primary.z), g.ends, (cfg.start === 'gate' || cfg.start === 'terminal') ? E : act === E && cfg.start !== 'final' ? (g.ends.find(e => e !== E && e !== E.other && e.length > 1800) || act) : act);
+  if (!W.primary) traffic.clear(); else if (W.primary.apt !== A) traffic.setup(W.primary.apt, new THREE.Vector3(W.primary.x, W.primary.elev, W.primary.z), W.primary.geom.ends, act, W.primary); else traffic.setup(A, new THREE.Vector3(W.primary.x, W.primary.elev, W.primary.z), g.ends, (cfg.start === 'gate' || cfg.start === 'terminal') ? E : act === E && cfg.start !== 'final' ? (g.ends.find(e => e !== E && e !== E.other && e.length > 1800) || act) : act, W.primary);
   traffic.enabled = !cfg.menu || true;
   sky.envAge = 1e9; sky.lutDirty = true;
   // warm up shaders (flight deck included) while the loading screen is still up, so entering a view never hitches
@@ -452,7 +452,7 @@ async function startFlight(cfg) {
   return true;
 }
 // ---------------------------------------------------------------- gates, pushback, taxi routes, on foot, ATC context
-function pickStand(b) { const all = b.b.stands; all.forEach((s, i) => { s.gateName = String(i + 1); }); const free = all.filter(s => !s.used); return free[(free.length / 2) | 0] || all[(all.length / 2) | 0]; }
+function pickStand(b) { const all = b.b.stands; all.forEach((s, i) => { s.gateName = String(i + 1); }); const free = all.filter(s => !s.used); const st = free[(free.length / 2) | 0] || all[(all.length / 2) | 0]; if (st) st.used = true; return st; } // [Traffic] reserve the stand the moment it is picked: AI traffic's freeStand() skips used stands, so a traffic arrival can never be routed into the captain's stand while he taxis in (placeAtStand re-marks it on park — idempotent)
 function placeAtStand(b, st) {
   const fr = b.b.frame; fdm.reset({ x: b.x + st.x - fr.nx * 2, y: b.elev - DIM.wheelY - 0.22, z: b.z + st.z - fr.nz * 2, hdg: st.inHdg, speed: 0, gear: true, flaps: 0, tl: 0, onGround: true, parkBrake: true, spdSel: 150, altSel: 5000 });
   st.used = true; W.stand = st; W.standB = b; if (st.jb) st.jb.userData.forPlayer = true; if (!st.gateName) b.b.stands.forEach((s, i) => s.gateName = String(i + 1));
@@ -735,13 +735,13 @@ const atcCtx = {
   rescue: () => rescueDispatch(),
   weather() { const A = atc.apt(); const temp = Math.round(({ desert: 31, tropical: 29, subtropical: 26, mediterranean: 21, temperate: 13, 'temperate-green': 12, boreal: 4 })[climateFor(A.lat, A.lon)] ?? 18) - (W.wx === 'rain' ? 3 : 0);
     return { kind: W.wx, dir: W.windFrom, kt: W.windKt, gust: W.gust > 2.5, vis: sky.weather.vis, temp, utcMin: W.tod - tzFor(A) * 60, localMin: W.tod }; },
-  traffic() { const e = fdm.euler(); return traffic.list.map(a => { if (!a.type) a.type = [['737', 'seven three seven'], ['A320', 'Airbus three twenty'], ['E175', 'Embraer one seventy five'], ['787', 'seven eight seven'], ['A350', 'Airbus three fifty']][(Math.random() * 5) | 0]; const dx = a.x - fdm.pos.x, dz = a.z - fdm.pos.z; const brg = Math.atan2(dx, -dz) * R2D; let rel = ((brg - e.hdg) % 360 + 360) % 360; a.clock = String(Math.round(rel / 30) || 12); a.distNm = Math.hypot(dx, dz) / NM; a.dAltFt = (a.y - fdm.pos.y) / FT; a.vs = a.kind === 'arr' ? -700 : a.h > 1 ? 1800 : 0; return a; }); },
+  traffic() { const e = fdm.euler(); return traffic.list.map(a => { if (!a.type) a.type = [['737', 'seven three seven'], ['A320', 'Airbus three twenty'], ['E175', 'Embraer one seventy five'], ['787', 'seven eight seven'], ['A350', 'Airbus three fifty']][(Math.random() * 5) | 0]; const dx = a.x - fdm.pos.x, dz = a.z - fdm.pos.z; const brg = Math.atan2(dx, -dz) * R2D; let rel = ((brg - e.hdg) % 360 + 360) % 360; a.clock = String(Math.round(rel / 30) || 12); a.distNm = Math.hypot(dx, dz) / NM; a.dAltFt = (a.y - fdm.pos.y) / FT; a.vs = a.phase && a.phase !== 'air' ? 0 : a.kind === 'arr' ? -700 : a.h > 1 ? 1800 : 0; return a; }); },
   arrEnd() { if (W.ils && W.ils.apt === atc.arr) return W.ils.end; return activeRunwayEnd({ geom: airportGeometry(atc.arr) }) || airportGeometry(atc.arr).ends[0]; },
   runwayBusy(apt, E) {
     if (traffic.apt !== apt) return { busy: false };
     for (const a of traffic.list) { if (a.done || !(a.E === E || a.E === E.other)) continue;
-      if (a.kind === 'arr' && a.s > -7000 && a.s < a.E.length - 150 && !(a.exitT > 6)) return { busy: true, why: a.s < -400 ? `traffic ${Math.max(1, Math.round(-a.s / 1852))} mile final` : 'traffic landing' };
-      if (a.kind === 'dep' && (a.hold > 0 || a.h < 250)) return { busy: true, why: 'traffic departing' }; }
+      if (a.kind === 'arr' && (!a.phase || a.phase === 'air') && a.s > -7000 && a.s < a.E.length - 150 && !(a.exitT > 6)) return { busy: true, why: a.s < -400 ? `traffic ${Math.max(1, Math.round(-a.s / 1852))} mile final` : 'traffic landing' };
+      if (a.kind === 'dep' && (!a.phase || a.phase === 'air') && (a.hold > 0 || a.h < 250)) return { busy: true, why: 'traffic departing' }; }
     return { busy: false };
   },
   pushFace() { const u = pushDir(); return u ? compass(u) : 'west'; },
@@ -1178,7 +1178,7 @@ function rebase(lat, lon, primary) { // pre-streaming: rebuild the world around 
   fdm.pos.x = W.geo.x(ll.lon); fdm.pos.z = W.geo.z(ll.lat);
   if (W.route) { W.route.forEach(w => { w.x = W.geo.x(w.lon); w.z = W.geo.z(w.lat); }); fdm.ap.route = W.route; }
   if (fdm.ap.ils) { const A = fdm.ap.ils.apt; fdm.ap.ils = W.ils = ilsFor(A, fdm.ap.ils.end, aptPos(A)); }
-  if (W.primary) { const act = activeRunwayEnd(W.primary); traffic.setup(W.primary.apt, new THREE.Vector3(W.primary.x, W.primary.elev, W.primary.z), W.primary.geom.ends, act); }
+  if (W.primary) { const act = activeRunwayEnd(W.primary); traffic.setup(W.primary.apt, new THREE.Vector3(W.primary.x, W.primary.elev, W.primary.z), W.primary.geom.ends, act, W.primary); }
   sky.envAge = 1e9; flyby.set = false;
 }
 function maxAccel() { if (!FLY_ANYWHERE) return 16; const agl = fdm.pos.y - (fdm.gnd?.h || 0); return !fdm.onGround && fdm.ap.on && agl > 3000 ? 64 : 16; }
@@ -1620,7 +1620,7 @@ function updateShadows() {
   const setSize = n => { if (s.shadow.mapSize.x !== n) { s.shadow.mapSize.set(n, n); if (s.shadow.map) { s.shadow.map.dispose(); s.shadow.map = null; } } };
   if (!exteriorCasters) { exteriorCasters = []; aircraft.traverse(o => { if (o.isMesh && o.castShadow && !isInDeck(o)) exteriorCasters.push(o); }); }
   if (inDeck) {
-    setSize(settings.quality === 'medium' ? 1024 : 2048); const ctr = aircraft.localToWorld(_deckCtr.set(0, 1.1, -15.5 + TYPE.deckDz));
+    setSize(settings.quality === 'medium' ? 1024 : 2048); const ctr = aircraft.localToWorld(_deckCtr.set(0, 1.1 + (TYPE.deckDy || 0), -15.5 + TYPE.deckDz));
     c.left = c.bottom = -1.8; c.right = c.top = 1.8; c.near = 0.5; c.far = 40; c.updateProjectionMatrix(); s.shadow.bias = -0.0002; s.shadow.normalBias = 0.012;
     s.target.position.copy(ctr); s.position.copy(ctr).addScaledVector(dir, 18); exteriorCasters.forEach(o => o.castShadow = false);
   } else if (settings.quality === 'ultra') {
@@ -2136,8 +2136,8 @@ window.__sim = {
     if (FLY_ANYWHERE) try { const P = buildPlanet(); terrain.setPlanet(P); W.planetMs = P.ms; } catch (e) { errors.push('planet: ' + e.message); console.error(e); }
     try { await Promise.race([document.fonts.load('700 40px "Saira Condensed"'), new Promise(r => setTimeout(r, 1500))]); await document.fonts.load('16px "B612 Mono"'); } catch (e) { }
     $('#loadbar').style.width = '70%'; $('#loadmsg').textContent = 'Building the flight deck…'; await new Promise(r => setTimeout(r, 20));
-    try { try { await document.fonts.load('600 20px "B612"'); } catch (e) { } const deck = buildCockpit(displays, { quality: settings.quality }); aircraft.remove(cockpit); cockpit = deck; cockpit.position.z = TYPE.deckDz; aircraft.add(cockpit); exteriorCasters = null; } catch (e) { errors.push('flight deck: ' + e.message); console.error(e); }
-    try { fo = buildCopilot({ quality: settings.quality }); fo.object3d.visible = false; fo.object3d.position.z = TYPE.deckDz; aircraft.add(fo.object3d); } catch (e) { fo = null; errors.push('first officer: ' + e.message); console.error(e); }
+    try { try { await document.fonts.load('600 20px "B612"'); } catch (e) { } const deck = buildCockpit(displays, { quality: settings.quality }); aircraft.remove(cockpit); cockpit = deck; cockpit.position.z = TYPE.deckDz; cockpit.position.y = (TYPE.deckDy || 0); aircraft.add(cockpit); exteriorCasters = null; } catch (e) { errors.push('flight deck: ' + e.message); console.error(e); }
+    try { fo = buildCopilot({ quality: settings.quality }); fo.object3d.visible = false; fo.object3d.position.z = TYPE.deckDz; fo.object3d.position.y = (TYPE.deckDy || 0); aircraft.add(fo.object3d); } catch (e) { fo = null; errors.push('first officer: ' + e.message); console.error(e); }
     $('#loadbar').style.width = '75%'; $('#loadmsg').textContent = 'Building Tampa International…';
     try { buildMenu(); } catch (e) { errors.push('menu: ' + (e.stack || e.message)); console.error(e); }
     requestAnimationFrame(frame);
