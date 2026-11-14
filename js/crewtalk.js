@@ -382,11 +382,21 @@ export function frame(dt, env) {
   }
 }
 
+// Dismiss an open talk card from outside (main.js: a walk-around inspection that
+// uses the same E press outranks the chat, and the two cards share a screen corner).
+export function closeTalk() { closeCard(); }
+
 // E pressed on foot near a crew member: open the conversation (or close an open
 // one). True = the press was used.
 export function tryTalk(foot) {
   if (S.card) { closeCard(); return true; }
   if (!S.near || !S.crew) return false;
+  // Verify the proximity at press time, with frame()'s own rules: S.near is
+  // computed per rendered frame and only on the apron, so a captain who has
+  // since walked into the cabin must not inherit a stale apron 'near' — at the
+  // cockpit door his E belongs to the seat, not to a conversation.
+  const P = talkables(S.crew).find(p => p.id === S.near.id);
+  if (!P || !foot || (foot.zoneTag && foot.zoneTag() !== 'apron') || Math.hypot(foot.pos.x - P.x, foot.pos.z - P.z) > 2.5) { S.near = null; return false; }
   showTalk(S.near, S.crew);
   return true;
 }

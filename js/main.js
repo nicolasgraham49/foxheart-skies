@@ -34,6 +34,7 @@ import { Music, moodFor } from './music.js';
 import * as Stories from './stories.js';
 import * as CrewTalk from './crewtalk.js';
 import * as Charter from './charter.js';
+import * as Walkaround from './walkaround.js';
 import { GFX, setMsaaActive } from './gfx.js';
 import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
@@ -409,6 +410,7 @@ async function startFlight(cfg) {
   Stories.reset(); // [Stories era] a new flight starts with no story armed
   CrewTalk.reset(); // [Crew conversations] and no crew conversation or interphone state carried over
   Charter.reset(); // [Private charter] and no charter encounter or card carried over
+  Walkaround.reset(); // [Walk-around preflight] and no preflight route or gate carried over
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
@@ -529,9 +531,10 @@ function enterFoot(mode) {
   foot.enter(mode === 'dep' ? 'hall' : 'cockpit'); foot.hideInteriors(true); W.onFoot = true; W.footMode = mode;
   $('#flight').hidden = true; $('#foot').hidden = false; $('#radio').hidden = true; setView('cockpit');
   if (mode === 'dep') { if (W.charter) Charter.arm(foot, Charter.byId(W.charter.id)); else Stories.arm(foot); } // [Stories era] one of the 121 waiting in the lounge has a story today — [Private charter] on a charter flight the lounge holds only the clients, and the lead client is the encounter
+  if (mode === 'dep' && W.cfg && W.cfg.start === 'terminal') Walkaround.arm(foot); // [Walk-around preflight] terminal departures only: the captain walks the jet before boarding (gate starts never arm — unchanged)
   foot.onEvent = ev => {
     if (ev === 'checkedin') captainSignedIn(); // [Nothing starts until sign-in] the crew sign-in is the flight's true start
-    if (ev === 'boarding') { if (!beginBoarding()) toast('Boarding has started. Passengers are taking their seats.', 4000); }
+    if (ev === 'boarding') { const was = W.boarding && W.boarding.phase; if (!beginBoarding()) toast(was === 'pending' && Walkaround.pending() ? 'Boarding waits on your walk-around, Captain — finish it out on the apron, or release boarding at the aircraft door.' : 'Boarding has started. Passengers are taking their seats.', 4000); }
     if (ev === 'greet') { toast('Cabin crew: “Welcome aboard Nicofoxheart Air, captain!”', 4000); }
     if (ev === 'boarded') { audio.chime(); toast('Boarding complete', 3000); if (!foot.announced) { foot.announced = true; setTimeout(() => announce(), 1200); } }
   };
@@ -620,6 +623,7 @@ function captainAirside() {
 function beginBoarding() {
   const S = W.boarding; if (!S || S.phase !== 'pending') return false;
   if (!W.signedIn) return false; // [Nothing starts until sign-in] every caller — the auto clock, the bridge crossing, the next step — waits for the captain
+  if (!Walkaround.boardingOpen()) return false; // [Walk-around preflight] on a terminal departure boarding also waits for the captain's walk-around — or his release at the aircraft (inert on every other start: nothing armed, gate open)
   const c = ensureCabin(); if (!c) return false;
   S.phase = 'boarding'; S.group = 0; S.callT = 0;
   c.beginBoarding(); if (foot.parts && foot.parts.cabin === c) foot.boarding = true;
@@ -1569,6 +1573,7 @@ function renderRest(dt, night) {
   music.update(dt, musicWant()); musicNowUI(); if (svcPanel.open) svcPanel.update(dt);
   Stories.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Stories era] marker bob + the one cruise beat
   Charter.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Private charter] client marker bob + the one cruise beat (inert unless a charter is armed)
+  Walkaround.frame(dt * (W.timeAccel || 1), { foot, onFoot: W.onFoot, signedIn: W.signedIn, toast }); // [Walk-around preflight] checkpoint prompts + markers on the apron (inert unless a terminal departure armed it)
   CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot, hold: !W.signedIn }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats; [Nothing starts until sign-in] hold: the interphone beats wait for the captain (on-foot crew talk is not held)
   if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
   if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
@@ -1694,13 +1699,14 @@ function footInteract() {
   if (foot.interactFlow && foot.interactFlow()) return; // terminal flow (check-in / security) uses E first
   if (Stories.tryMeet(foot)) return; // [Stories era] saying hello to the story passenger uses E next
   if (Charter.tryMeet(foot)) return; // [Private charter] meeting your client uses E next (never armed on the same flight as a story)
+  if (Walkaround.tryInspect(foot)) { CrewTalk.closeTalk(); return; } // [Walk-around preflight] a checkpoint in range outranks a chat — the headset operator stands AT the nose gear, and the gated inspection must always be reachable; a used press also dismisses any open talk card so the two cards never stack
   if (CrewTalk.tryTalk(foot)) return; // [Crew conversations] talking to a ground crew member uses E next
   if (W.footMode === 'dep' && foot.pos.distanceTo(foot.seat) < 1.3) takeSeat();
   else if (W.footMode === 'arr' && foot.pos.distanceTo(foot.exitPos) < 6.5) finishTrip();
 }
 function footSkip() {
   // [Nothing starts until sign-in] the J crew path is exempt from the terminal flow by design — skipping ahead IS taking command, so it releases the gate before boarding is called.
-  if (W.footMode === 'dep') { foot.pos.copy(foot.routeToCockpit[foot.routeToCockpit.length - 1]); foot.floorY = foot.pos.y; foot.boarding = true; captainSignedIn(); beginBoarding(); }
+  if (W.footMode === 'dep') { foot.pos.copy(foot.routeToCockpit[foot.routeToCockpit.length - 1]); foot.floorY = foot.pos.y; foot.boarding = true; captainSignedIn(); Walkaround.release(); beginBoarding(); } // [Walk-around preflight] the skip IS the captain taking command — it releases the preflight gate too, so no path can strand the flight
   else { foot.pos.copy(foot.exitPos).add(V3(0, 0, 0)); foot.floorY = foot.pos.y; foot.pos.addScaledVector(foot.parts.n, 3); }
 }
 function updateParkPrompt() {
@@ -2084,6 +2090,7 @@ window.__sim = {
   stories: () => Stories.state(),
   charter: () => Charter.state(), // [Private charter] armed contract, meeting state, notes + rotation
   crewTalk: () => CrewTalk.state(), // [Crew conversations] roster positions/phases, open card, interphone beats
+  walkaround: () => Walkaround.state(), // [Walk-around preflight] route, gate, open card
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
   footStep(sec) { for (let i = 0; i < sec * 30; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); },

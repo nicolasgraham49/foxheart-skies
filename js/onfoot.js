@@ -284,8 +284,12 @@ export class OnFoot {
       }
     }
     // [Crew conversations] standing by a working crew member (apron): the talk prompt,
-    // computed by crewtalk.js in the main loop, wins while it is set.
+    // computed by crewtalk.js in the main loop.
     if (this.crewPrompt) this.prompt = this.crewPrompt;
+    // [Walk-around preflight] standing at a checkpoint (apron): the inspect / release
+    // prompt, computed by walkaround.js in the main loop, wins while it is set — the
+    // gated inspection must stay visible even where a crew member works the same spot.
+    if (this.walkPrompt) this.prompt = this.walkPrompt;
   }
   interactFlow() { // E pressed on foot: run the terminal flow when it applies; true = the press was used
     const tf = this.o.mode === 'dep' && this.parts && this.parts.term ? this.parts.term.flow : null; if (!tf || this.auto) return false;
