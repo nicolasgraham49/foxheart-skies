@@ -361,6 +361,33 @@ export function buildAirport(apt, opts) {
       net.links.push({ name: LINKS[k * 2] || 'L', s: vs, a: p0, b: q0 }, { name: LINKS[k * 2 + 1] || 'M', s: s2, a: p1, b: q1 });
     }
   }
+  // [Every airport] airports whose runways are ALL narrower than 25 m got no taxiNet
+  // at all from the loop above (28 of 1,544 — verified by the build audit), so the
+  // ground-traffic lifecycle could never run there. For NON-featured airports only,
+  // generate a net for the longest runway with the same construction (parallel +
+  // four connectors + apron links); its strips join `taxis`, so the route is drawn,
+  // and the through-terminal cull below applies to it like any other net. Featured
+  // airports never reach this block (their runways are 46-61 m wide) and the
+  // !apt.featured gate keeps their builds byte-identical regardless.
+  if (!apt.featured && !taxiNet.length && main) {
+    const r = main, k = 0, net = { k, r, name: LETTERS[0], conns: [], links: [], gen: true }; taxiNet.push(net);
+    const rx = -r.dir.z, rz = r.dir.x; const sd = Math.sign((ax - r.cx) * rx + (az - r.cz) * rz) || 1;
+    const off = r.W / 2 + 165; const P = s => ({ x: r.a.x + r.dir.x * s + rx * sd * off, z: r.a.z + r.dir.z * s + rz * sd * off });
+    const E = s => ({ x: r.a.x + r.dir.x * s + rx * sd * (r.W / 2 - 2), z: r.a.z + r.dir.z * s + rz * sd * (r.W / 2 - 2) });
+    taxis.push([P(-20), P(r.L + 20)]); net.P = P; net.E = E; net.off = off; net.sd = sd;
+    [0, r.L * 0.33, r.L * 0.62, r.L].forEach((s0, i) => { const s = Math.max(0, Math.min(r.L, s0)); taxis.push([E(s), P(s)]); net.conns.push({ name: net.name + (i + 1), s, a: E(s), b: P(s) }); });
+    const vs = Math.max(0, Math.min(r.L, (ax - r.a.x) * r.dir.x + (az - r.a.z) * r.dir.z));
+    const p0 = P(vs), dA = Math.hypot(p0.x - ax, p0.z - az);
+    if (dA < 4000 && (p0.x - ax) * nx + (p0.z - az) * nz < dep / 2) {
+      [-1, 1].forEach((sg, j) => { const q = { x: ax + adx * sg * (L2 / 2 + 35), z: az + adz * sg * (L2 / 2 + 35) }; const se = Math.max(0, Math.min(r.L, (q.x - r.a.x) * r.dir.x + (q.z - r.a.z) * r.dir.z)), pe = P(se); taxis.push([pe, q]); net.links.push({ name: LINKS[j] || 'L', s: se, a: pe, b: q }); });
+    } else if (dA < 4000) {
+      const fx = ax + nx * dep / 2, fz = az + nz * dep / 2;
+      const q0 = { x: fx + (p0.x - ax) * 0.1, z: fz + (p0.z - az) * 0.1 }; taxis.push([p0, q0]);
+      const s2 = Math.max(0, Math.min(r.L, vs + (vs > r.L / 2 ? -600 : 600))); const p1 = P(s2);
+      const q1 = { x: fx + adx * Math.sign(s2 - vs) * L2 * 0.35, z: fz + adz * Math.sign(s2 - vs) * L2 * 0.35 }; taxis.push([p1, q1]);
+      net.links.push({ name: LINKS[0] || 'L', s: vs, a: p0, b: q0 }, { name: LINKS[1] || 'M', s: s2, a: p1, b: q1 });
+    }
+  }
   { // no approximate taxiway may run through the terminal building (drop the strip and its routing link)
     const TD = apt.large ? 70 : 40, dd = dep / 2 + 6 + TD / 2, tcx = ax - nx * dd, tcz = az - nz * dd;
     const inT = (x, z) => { const dx = x - tcx, dz = z - tcz; return Math.abs(dx * adx + dz * adz) < L2 * 0.42 + 12 && Math.abs(-dx * adz + dz * adx) < TD / 2 + 12; };
@@ -387,12 +414,23 @@ export function buildAirport(apt, opts) {
   // gates & parked aircraft (jet bridges are instanced in env-buildings.js)
   const spacing = 65;
   const parked = [];
+  // [Every airport] the scenery fleet parks on ~72% of stands — tuned for the
+  // featured terminals (12-17 stands, several left free). At a small field
+  // (5-8 stands) it consumed the whole apron: no stand left for the captain's
+  // neighbours to seed on and none for an arrival to park at, so the ground
+  // lifecycle silently never ran there. Non-featured airports now cap the
+  // scenery fleet so at least 5 stands stay free (captain + 2 seeds + an
+  // arrival + the protected spare). Featured airports are exempt (cap never
+  // binds, random stream untouched) so their builds stay byte-identical.
+  let standTotal = 0; for (let k = 1; spacing * k - L2 / 2 < L2 * 0.4; k++) { const s = spacing * k - L2 / 2; if (s < -L2 * 0.4) continue; standTotal++; }
+  const sceneryCap = apt.featured ? Infinity : Math.max(0, standTotal - 5);
+  let sceneryN = 0;
   for (let k = 1, i = 0; spacing * k - L2 / 2 < L2 * 0.4; k++) {
     const s = spacing * k - L2 / 2; if (s < -L2 * 0.4) continue; i++;
     const standP = along(s, dep / 2 - 45);
     const st = { x: standP.x, z: standP.z, s, gate: i, outHdg: (Math.atan2(nx, -nz) * 180 / Math.PI + 360) % 360, inHdg: (Math.atan2(-nx, nz) * 180 / Math.PI + 360) % 360, used: false };
     stands.push(st);
-    if (full && R() < 0.72 && i % 7 !== 3) { st.used = true; const p = { x: standP.x - nx * 2, z: standP.z - nz * 2, rot: Math.atan2(nx, nz), liv: (R() * TRAFFIC_LIVERIES.length) | 0, var: pickTrafficVariant(R()), s: apt.large && R() < 0.3 ? 1.35 : 1 }; st.parkS = p.s; parked.push(p); }
+    if (full && sceneryN < sceneryCap && R() < 0.72 && i % 7 !== 3) { sceneryN++; st.used = true; const p = { x: standP.x - nx * 2, z: standP.z - nz * 2, rot: Math.atan2(nx, nz), liv: (R() * TRAFFIC_LIVERIES.length) | 0, var: pickTrafficVariant(R()), s: apt.large && R() < 0.3 ? 1.35 : 1 }; st.parkS = p.s; parked.push(p); }
   }
   if (full && parked.length) {
     // parked fleet: one InstancedMesh trio (body / livery parts / glass) per airframe variant;
@@ -432,7 +470,16 @@ export function buildAirport(apt, opts) {
   const pts = lights.build(); group.add(pts);
   const towerPos = new THREE.Vector3(tp.x, tBase + th + 2.6, tp.z);
   const frame = { ax, az, adx, adz, nx, nz, dep, L2, termDepth, termH, facadeD: dep / 2 + 6 };
-  return { group, stands, towerPos, ilsEnds, geom: g, lightsCount: lights.p.length / 3, taxis, taxiNet, frame, site, placed };
+  // [Every airport] ground-traffic coverage class, from this build's own products
+  // (build audit of all 1,544 airports, Nov 14): 'full' = the site placed clear of
+  // the runways, >= 4 stands and a real-data taxiNet — the complete lifecycle with
+  // jet-bridge docking; 'apron' = the same lifecycle on the generated single-
+  // runway net above (narrow-field airports), parking at stands without bridge
+  // docking; 'air' = anything else keeps the legacy air-only behaviour. Traffic
+  // reads this class — it is the ONLY gate on the lifecycle now (featured status
+  // no longer gates it; all 12 featured airports classify 'full').
+  const ground = { cls: placed && stands.length >= 4 && taxiNet.length ? (taxiNet.some(n => !n.gen) ? 'full' : 'apron') : 'air', stands: stands.length, nets: taxiNet.length, gen: taxiNet.some(n => !!n.gen), placed };
+  return { group, stands, towerPos, ilsEnds, geom: g, lightsCount: lights.p.length / 3, taxis, taxiNet, frame, site, placed, ground };
 }
 
 // ILS geometry for a runway end in the world frame

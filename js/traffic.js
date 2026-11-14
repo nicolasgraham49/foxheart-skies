@@ -3,6 +3,11 @@
 // vacates, taxis in on the real taxiNet (connector -> parallel -> apron link -> apron lane
 // -> lead-in) and parks at a free stand (bridge docks); after a dwell it pushes back with a
 // tug, taxis out and takes off. Non-featured airports keep the original air-only behaviour.
+// [Every airport] the lifecycle now runs wherever the airport's own build supports it:
+// the gate is the build's ground class (airport.js) — 'full' (real taxiNet, bridge
+// docks) or 'apron' (generated single-runway net at narrow fields; parks at stands,
+// no bridge docking). 'air' keeps the legacy air-only behaviour. The runway
+// occupancy model (runwayUse) is shared with ATC at every class of airport.
 import * as THREE from 'three';
 import { parkedAirlinerGeometry } from './airport.js';
 import { trafficAirliner, TRAFFIC_LIVERIES, pickTrafficVariant, trafficGlassMaterial, trafficFinMaterial, trafficTitlesMaterial, VARIANT_KZ } from './ac-traffic.js';
@@ -23,7 +28,7 @@ const pathGap = (p1, p2) => { const a = resample(p1, 7), b = resample(p2, 7); le
 export class Traffic {
   constructor(scene) {
     this.scene = scene; this.list = []; this.timer = 25; this.enabled = true; this.ends = []; this.apt = null; this.seq = 0; // [Playtest fixes Nov 14] spawn order = ground right-of-way priority
-    this.gnd = null; this.featured = false; this.playerPos = null;
+    this.gnd = null; this.featured = false; this.cls = 'air'; this.playerPos = null;
     // per-variant geometry sets with fictional liveries (ac-traffic.js); the simple parked
     // geometry stays as the fallback if the detailed build ever throws
     try { this.geoSet = {}; for (const v of ['std', 'stretch', 'short']) this.geoSet[v] = trafficAirliner('high', v); }
@@ -34,13 +39,16 @@ export class Traffic {
   setup(apt, aptPos, ends, active, built) {
     this.clear(); this.apt = apt; this.aptPos = aptPos; this.ends = ends; this.active = active; this.timer = 20;
     this.gnd = built && built.b ? built.b : null; this.featured = !!(apt && apt.featured);
+    // [Every airport] ground class from the build itself; a build without class
+    // info (defensive) falls back to the pre-pass rule (featured = full).
+    this.cls = this.gnd && this.gnd.ground ? this.gnd.ground.cls : (this.featured ? 'full' : 'air');
     if (this.groundOK()) this.seedParked();
   }
   clear() {
     for (const a of this.list) { this.scene.remove(a.obj); if (a.stand) { a.stand.used = false; a.stand = null; } }
     this.list = [];
   }
-  groundOK() { return !!(this.featured && this.gnd && this.gnd.stands && this.gnd.stands.length > 2 && this.gnd.taxiNet && this.gnd.taxiNet.length); }
+  groundOK() { return !!(this.gnd && this.cls !== 'air' && this.gnd.stands && this.gnd.stands.length > 2 && this.gnd.taxiNet && this.gnd.taxiNet.length); }
   make(liv = 0, varn = 'std') {
     const L = TRAFFIC_LIVERIES[liv % TRAFFIC_LIVERIES.length], geo = this.geoSet[varn] || this.geo, kz = VARIANT_KZ[varn] || 1;
     const grp = new THREE.Group();
@@ -154,6 +162,9 @@ export class Traffic {
     }
     return best;
   }
+  depHolding() { // [Every airport] a departure is queued at the runway hold: tower courtesy — the scheduler does not feed it another arrival, or at a busy single-runway field the arrival stream starves it at the hold point indefinitely (seen at KATL: >1,300 sim-s in taxiout)
+    return this.list.some(a => a.phase === 'taxiout' && (a.holdFor || 0) > 15);
+  }
   focusPoint(player) { // where ground ops should cluster: near the player when the player is at this airport
     if (player && Math.hypot(player.x - this.aptPos.x, player.z - this.aptPos.z) < 1600) return player;
     return { x: this.aptPos.x + this.gnd.frame.ax, z: this.aptPos.z + this.gnd.frame.az };
@@ -176,7 +187,7 @@ export class Traffic {
     const fr = this.gnd.frame;
     a.x = this.aptPos.x + st.x - fr.nx * 2; a.z = this.aptPos.z + st.z - fr.nz * 2; a.y = this.aptPos.y + 3.6;
     a.gHdg = st.inHdg * D2R;
-    st.jb?.userData?.setDocked?.(true);
+    if (this.cls !== 'apron') st.jb?.userData?.setDocked?.(true); // [Every airport] apron-class fields park without bridge theatre
     this.list.push(a); return a;
   }
   pickLink(net, nearS, mode) {
@@ -345,7 +356,7 @@ export class Traffic {
           a.phase = 'parked'; a.v = 0; a.dwell = 240 + Math.random() * 360;
           const fr = this.gnd.frame; a.gHdg = a.stand.inHdg * D2R;
           a.x = this.aptPos.x + a.stand.x - fr.nx * 2; a.z = this.aptPos.z + a.stand.z - fr.nz * 2;
-          a.stand.jb?.userData?.setDocked?.(true);
+          if (this.cls !== 'apron') a.stand.jb?.userData?.setDocked?.(true); // [Every airport] see parkNew
         }
       } else if (fin) { // taxiout complete: hand over to the legacy runway departure
         a.phase = 'air'; a.kind = 'dep'; a.s = 45; a.v = Math.max(a.v, 8); a.h = 0; a.hold = 5; a.pitch = 0;
@@ -374,7 +385,7 @@ export class Traffic {
           const ready = this.list.find(a => a.phase === 'parked' && a.dwell <= 0);
           const depBusy = this.list.some(a => a.phase === 'taxiout' || a.phase === 'push' || a.phase === 'pushpause');
           if (ready && !depBusy && this.groundMovers() < 3) this.startDeparture(ready);
-          else if (!air.some(a => a.kind === 'arr') && this.freeStand(this.focusPoint(player))) this.spawn('arr', player);
+          else if (!air.some(a => a.kind === 'arr') && !this.depHolding() && this.freeStand(this.focusPoint(player))) this.spawn('arr', player);
           else if (!ready && !depBusy) this.spawn('dep', player);
         }
       } else {
@@ -400,9 +411,17 @@ export class Traffic {
           if (a.h < 14) { a.h = Math.max(0, a.h - Math.max(1.0, a.h * 0.45) * dt); a.pitch += (4 - a.pitch) * dt; }
           else { a.h = Math.max(13.9, 15 + (286 - a.s) * Math.tan(3 * D2R)); a.pitch += (2.5 - a.pitch) * dt; }
         } else {
-          a.v = Math.max(9, a.v - 2.2 * dt); a.s += a.v * dt; a.pitch += (0 - a.pitch) * dt * 2; if (a.v <= 9.5) a.exitT = (a.exitT || 0) + dt; if (a.exitT > 25 || a.s > a.E.length - 100) a.done = true;
+          a.v = Math.max(9, a.v - 2.2 * dt); a.s += a.v * dt; a.pitch += (0 - a.pitch) * dt * 2; if (a.v <= 9.5) a.exitT = (a.exitT || 0) + dt;
           // [Traffic] slow enough on the roll-out at a featured airport: turn off and taxi to a gate
-          if (!a.done && this.groundOK() && !a.gndTried && (a.v <= 13.5 || a.s > a.E.length - 260)) { a.gndTried = true; if (this.beginTaxiIn(a, player)) a.done = false; }
+          // [Every airport] the turn-off is now attempted BEFORE the removal
+          // line below: the flare floats ~450 m past the aiming point, so on a
+          // short strip (KPAO, 744 m) touchdown lands past length-100 and the
+          // old order deleted the arrival before taxi-in was ever tried. At
+          // long fields the attempt already happened mid-rollout (gndTried),
+          // so this reorder changes nothing there; when the turn-off fails,
+          // removal proceeds exactly as before.
+          if (!a.gndTried && this.groundOK() && (a.v <= 13.5 || a.s > a.E.length - 260)) { a.gndTried = true; if (this.beginTaxiIn(a, player)) a.done = false; }
+          if (a.phase === 'air' && (a.exitT > 25 || a.s > a.E.length - 100)) a.done = true;
         }
       } else {
         if (a.hold > 0) { a.hold -= dt; }

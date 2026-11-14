@@ -55,7 +55,17 @@ export function airportGeometry(apt) {
   const elevs = [];
   const runways = apt.runways.map((rw, idx) => {
     const [A, B] = rw.ends;
-    const p1 = { x: g.x(A.lon), z: g.z(A.lat) }, p2 = { x: g.x(B.lon), z: g.z(B.lat) };
+    let p1 = { x: g.x(A.lon), z: g.z(A.lat) }, p2 = { x: g.x(B.lon), z: g.z(B.lat) };
+    // [Every airport] degenerate source data: MDLR's only runway lists BOTH ends at the
+    // same point (offset distance 0 — verified the only such runway in the set), which
+    // zeroed its direction vector and silently broke apron placement, taxiNet and ILS
+    // geometry there. Rebuild that one runway from its own CSV heading + length,
+    // centred on the given point. Guarded on L < 1 m: no other airport is touched.
+    if (Math.hypot(p2.x - p1.x, p2.z - p1.z) < 1) {
+      const brgR = (A.hdgCsv || 0) * D2R, Lr = rw.lengthFt * FT;
+      const d = { x: Math.sin(brgR), z: -Math.cos(brgR) }, cx = (p1.x + p2.x) / 2, cz = (p1.z + p2.z) / 2;
+      p1 = { x: cx - d.x * Lr / 2, z: cz - d.z * Lr / 2 }; p2 = { x: cx + d.x * Lr / 2, z: cz + d.z * Lr / 2 };
+    }
     const dx = p2.x - p1.x, dz = p2.z - p1.z, L = Math.hypot(dx, dz) || rw.lengthFt * FT;
     const dir = { x: dx / L, z: dz / L };
     const brg = (Math.atan2(dir.x, -dir.z) * R2D + 360) % 360;
