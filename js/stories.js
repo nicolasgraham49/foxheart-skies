@@ -9,6 +9,17 @@
 // the flight. All letter text is route-neutral: a diversion changes where they land, not what
 // they needed to say. Story text stays English at every airport (the heart is not machine-
 // translated). State here is per-flight only; storage is plain localStorage, fox.-prefixed.
+//
+// [Continuing stories] People's moments keep going. When a met passenger's letter lands, they
+// join a persistent THREADS pool (fox.threads — who, first/last flight dates, flight count,
+// stage). Once the fresh roster has been exhausted once, thread-holders with a second chapter
+// (RETURNS, below) begin coming back: the marked encounter is them again — they recognise the
+// captain, there is a new beat, and a SECOND letter lands (marked "— again" in the logbook),
+// taking their thread to stage 2. Returns interleave with fresh stories (never two return
+// flights in a row while a fresh story is available, and the same passenger never returns
+// back-to-back), drawn no-repeat from fox.returnCycle. While any return is still pending, a
+// thread-holder sits out the fresh rotation — nobody replays a first meeting mid-story.
+// Threads and letters both survive "Clear logbook" (it only clears flights/bests, as before).
 import * as THREE from 'three';
 
 export const ROSTER = [
@@ -224,18 +235,199 @@ export const ROSTER = [
   },
 ];
 
+// ---------------------------------------------------------------- the second chapters
+// [Continuing stories] Eight of the fourteen have a RETURN: the same person, some life
+// later, recognising the captain. Same fields as a roster entry (desc/meet/beat/letter),
+// keyed by roster id. The other six rest after their first letter — their stories were
+// complete as told.
+export const RETURNS = {
+  maya: {
+    desc: 'flying back to her mom · Biscuit still on duty',
+    meet: [
+      '“You’re my captain! From before! I told everybody at school and nobody believed me.”',
+      '“Biscuit remembers you too. He isn’t scared of flying anymore. Neither am I. Mostly.”',
+      '“I go back and forth now, Dad’s then Mom’s. I’m basically a professional traveller.”',
+    ],
+    beat: 'Maya — reading Biscuit the safety card like a bedtime story, doing all the voices.',
+    letter: [
+      'Dear Captain,',
+      'Mom was waiting right at the door this time. Back and forth isn’t so bad when the same captain does the flying.',
+      'Biscuit sat up straighter when you talked on the speaker. He knew your voice.',
+      '— Maya (and Biscuit)',
+    ],
+  },
+  'walter-rose': {
+    desc: '52 years married · back to the sea',
+    meet: [
+      'Rose: “We told you it was one more trip. We may have lied a little — the beach wasn’t finished with us.”',
+      'Walter: “Fifty-two years now. She still takes the window, I still take the middle. That’s the whole secret, Captain.”',
+      'Rose: “You brought us back last time. We thought we’d let you do it again.”',
+    ],
+    beat: 'Walter and Rose — sharing one pair of earbuds, watching the clouds like a film they still love.',
+    letter: [
+      'Dear Captain —',
+      'The water was the same blue. Again. We sat in our spot, and Walter cried a little and blamed the salt air. Again.',
+      'Some people get one great trip in a whole life. We’re on our second helping.',
+      '— Rose & Walter',
+    ],
+  },
+  june: {
+    desc: 'a musician · on tour with the band',
+    meet: [
+      '“Forty chairs, that first room. This one seats four hundred, Captain. FOUR HUNDRED.”',
+      '“The band’s in the back. We have a van with our name spelled wrong on the side. We made it.”',
+      '“I still might throw up before the show. After we land, like always. Some things don’t change.”',
+    ],
+    beat: 'June — setlist on the tray table, writing a new song in the margins instead.',
+    letter: [
+      'Captain!!',
+      'Four hundred chairs. My hands shook till the second song, like always, then it was just music.',
+      'The van broke down twice on the way to the airport and I still wouldn’t trade a mile of it.',
+      'You carried me to the start of it. It still starts there.',
+      '— June',
+    ],
+  },
+  henry: {
+    desc: 'a grandpa · Samuel is walking now',
+    meet: [
+      '“Samuel’s walking now, Captain. Walking INTO things, mostly. Gets that from my side.”',
+      '“I have photos. Seventeen of them. I will show the whole cabin if nobody stops me.”',
+      '“You flew me to him when he was four days old and grabbed my finger. He’s been improving his grip ever since.”',
+    ],
+    beat: 'Henry — showing the row a photo of a small boy standing at a fence. The row has agreed he is a genius.',
+    letter: [
+      'Captain,',
+      'He said “Papa” this week. At the dog first, then at me. We’re counting it.',
+      'You were there at the start of him, in a manner of speaking. Seemed right you should hear how it’s going.',
+      '— Henry',
+    ],
+  },
+  priya: {
+    desc: 'settled now · Hope is thriving',
+    meet: [
+      '“Hope has three new leaves, Captain. She’s basically a tree now. I am unbearable about it.”',
+      '“The apartment is still small, but it’s mine now. There’s a rug. Apparently a rug makes it a home.”',
+      '“I own a kettle. I have a neighbour who waters Hope when I travel. It got easier — you were right not to lie.”',
+    ],
+    beat: 'Priya — watering Hope with a plastic cup, same as ever, but humming this time.',
+    letter: [
+      'Dear Captain,',
+      'Hope outgrew her pot. She’s on the windowsill facing the street now, showing off to the whole neighbourhood.',
+      'I have people now. Imagine that — I’m somebody’s person to call when THEY travel.',
+      'It got easier. Slower than I wanted, faster than I feared.',
+      '— Priya',
+    ],
+  },
+  marcus: {
+    desc: 'home for good · going to show up for a friend',
+    meet: [
+      '“No surprise this time, Captain. Mom knows I’m travelling. She’s making pancakes anyway — she’s decided that’s just what she does now.”',
+      '“I’m flying to see a guy from my unit. He’s in a hard stretch. You show up — that’s the whole doctrine.”',
+      '“Home is home now. Took me a while to believe it. I believe it.”',
+    ],
+    beat: 'Marcus — asleep at last, easy in a way he wasn’t the first time you carried him.',
+    letter: [
+      'Captain —',
+      'He laughed. That was the whole mission, and the mission got done. We didn’t fix everything. We showed up.',
+      'You brought me home once. Now I get to go and bring somebody else. Funny how it travels.',
+      '— Marcus',
+    ],
+  },
+  elena: {
+    desc: 'travelling with her sister this time',
+    meet: [
+      '“See her, by the window? That’s my sister. The one from the story. She’s real — check her ticket.”',
+      '“Three years we didn’t talk. Now she steals my window seat and I let her. Everything came back, plus interest.”',
+      '“We’re taking a sisters’ trip. No occasion. That’s the occasion.”',
+    ],
+    beat: 'Elena and her sister — two heads over one phone, laughing at something only they can see.',
+    letter: [
+      'Dear Captain,',
+      'She stole my window seat the whole way home and I didn’t say a word. Some things you don’t get back. That one I did.',
+      'Last time you flew me toward her. This time we flew together. Less scary, with company.',
+      '— Elena',
+    ],
+  },
+  noah: {
+    desc: 'a dad · Elena’s first flight',
+    meet: [
+      '“Captain. CAPTAIN. You got me there in time, that day. I never did thank you properly.”',
+      '“Elena’s four months old now. She’s down the cabin eating her own foot. That’s her whole act so far.”',
+      '“First flight for her. I told her the captain’s an old friend of the family.”',
+    ],
+    beat: 'Noah — walking the aisle with a wide-awake Elena, pointing out the lights like a tour guide.',
+    letter: [
+      'CAPTAIN.',
+      'She slept through takeoff and woke up for the clouds. Four months old and already a better traveller than her dad.',
+      'Last time you carried me to meet her. This time you carried us both. Full circle, at 38,000 feet.',
+      '— Noah (and Elena)',
+    ],
+  },
+};
+
 // ---------------------------------------------------------------- storage (fox.-prefixed)
 function lsGet(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } }
 export function letters() { const L = lsGet('fox.letters', []); return Array.isArray(L) ? L : []; }
-function cycle() { const c = lsGet('fox.storyCycle', null); return c && Array.isArray(c.used) ? c : { used: [] }; }
-function nextStory() {
-  const used = cycle().used;
-  for (const s of ROSTER) if (!used.includes(s.id)) return s;
-  lsSet('fox.storyCycle', { used: [] }); // roster exhausted: the cycle restarts, letters stay
-  return ROSTER[0];
+function cycle() { const c = lsGet('fox.storyCycle', null); return c && Array.isArray(c.used) ? c : { used: [], cycles: 0, lastKind: null }; }
+function threads() { const t = lsGet('fox.threads', null); return t && typeof t === 'object' && !Array.isArray(t) ? t : {}; }
+function returnCycle() { const c = lsGet('fox.returnCycle', null); return c && Array.isArray(c.used) ? c : { used: [], last: null }; }
+// A passenger is a PENDING RETURN when their first story completed (thread, stage 1)
+// and they have a second chapter written.
+function pendingReturn(s, th) { return !!(RETURNS[s.id] && th[s.id] && th[s.id].stage === 1); }
+function returnCandidates() {
+  const th = threads();
+  const pool = ROSTER.filter(s => pendingReturn(s, th));
+  if (!pool.length) return [];
+  const rc = returnCycle();
+  let avail = pool.filter(s => !rc.used.includes(s.id) && s.id !== rc.last);
+  if (!avail.length) {
+    // every pending return has been offered this round: a new round begins — but the
+    // most recent return still never repeats back-to-back
+    lsSet('fox.returnCycle', { used: [], last: rc.last });
+    avail = pool.filter(s => s.id !== rc.last);
+  }
+  return avail;
 }
-function consume(id) { const c = cycle(); if (!c.used.includes(id)) { c.used.push(id); lsSet('fox.storyCycle', c); } }
+// Pick today's encounter: { base (roster entry), isReturn }. First cycle: pure roster
+// order, exactly as shipped. Once the roster has been exhausted once (the cycle rolls),
+// pending returns join the rotation — interleaved with fresh stories, never offered
+// twice in a row while a fresh story is available.
+function pickStory() {
+  let cyc = cycle();
+  if (cyc.used.length >= ROSTER.length) { // roster exhausted: the cycle restarts, letters + threads stay
+    cyc = { used: [], cycles: (cyc.cycles || 0) + 1, lastKind: cyc.lastKind || null };
+    lsSet('fox.storyCycle', cyc);
+  }
+  const th = threads();
+  const anyPending = ROSTER.some(s => pendingReturn(s, th));
+  const skipFresh = s => anyPending && !!RETURNS[s.id] && !!th[s.id]; // mid-story or told: no first-meeting replay
+  let fresh = ROSTER.filter(s => !cyc.used.includes(s.id) && !skipFresh(s));
+  if (!fresh.length && cyc.used.length) { // the fresh sub-pool drained mid-cycle: reopen it
+    cyc = { used: [], cycles: cyc.cycles || 0, lastKind: cyc.lastKind || null };
+    lsSet('fox.storyCycle', cyc);
+    fresh = ROSTER.filter(s => !skipFresh(s));
+  }
+  const ret = (cyc.cycles || 0) >= 1 ? returnCandidates() : [];
+  let base = null, isReturn = false;
+  if (ret.length && cyc.lastKind !== 'return') { base = ret[0]; isReturn = true; }
+  else if (fresh.length) base = fresh[0];
+  else if (ret.length) { base = ret[0]; isReturn = true; }
+  if (!base) base = ROSTER[0]; // unreachable safety: the six without second chapters are never skipped
+  cyc.lastKind = isReturn ? 'return' : 'fresh';
+  lsSet('fox.storyCycle', cyc);
+  return { base, isReturn };
+}
+function consume(id, isReturn) {
+  if (isReturn) {
+    const rc = returnCycle();
+    if (!rc.used.includes(id)) rc.used.push(id);
+    rc.last = id;
+    lsSet('fox.returnCycle', rc);
+  } else {
+    const c = cycle(); if (!c.used.includes(id)) { c.used.push(id); lsSet('fox.storyCycle', c); }
+  }
+}
 
 // ---------------------------------------------------------------- per-flight state
 const S = {
@@ -267,7 +459,11 @@ export function arm(foot) {
   let maxG = 0; for (const p of figs) if (p.bp && p.bp.group > maxG) maxG = p.bp.group;
   const fig = figs.find(p => p.bp && p.bp.group === maxG) || figs[figs.length - 1];
   if (!fig) return false;
-  S.story = nextStory(); S.foot = foot; S.fig = fig; S.met = false; S.beatShown = false; S.cruiseSince = 0; S.done = false;
+  const pick = pickStory();
+  S.story = pick.isReturn
+    ? { id: pick.base.id, name: pick.base.name, desc: RETURNS[pick.base.id].desc, meet: RETURNS[pick.base.id].meet, beat: RETURNS[pick.base.id].beat, letter: RETURNS[pick.base.id].letter, isReturn: true }
+    : pick.base;
+  S.foot = foot; S.fig = fig; S.met = false; S.beatShown = false; S.cruiseSince = 0; S.done = false;
   foot.storyFig = fig; foot.storyName = S.story.name; foot.storyMet = false;
   // the marker: a small fox-orange heart floating over their head (a sprite — no people-system cost)
   try {
@@ -338,18 +534,25 @@ export function frame(dt, env) {
 }
 
 // Trip completion (from finishTrip): the story is consumed either way; the letter lands only
-// if the captain met them. Returns the letter written, or null.
+// if the captain met them. A met completion also writes the THREAD: a first letter opens it
+// (stage 1), a met return visit brings it to stage 2. Returns the letter written, or null.
 export function completeTrip(info) {
   if (!S.story || S.done) return null;
   S.done = true;
-  const story = S.story; consume(story.id);
+  const story = S.story; consume(story.id, !!story.isReturn);
   if (!S.met) return null;
   const letter = {
     date: new Date().toISOString().slice(0, 16).replace('T', ' '),
     route: info.from + '→' + info.to, flight: 'NF 412',
     id: story.id, name: story.name, text: story.letter.slice(),
+    again: !!story.isReturn, stage: story.isReturn ? 2 : 1,
   };
   const all = letters(); all.unshift(letter); lsSet('fox.letters', all.slice(0, 60));
+  const th = threads();
+  const t = th[story.id] || (th[story.id] = { stage: 1, first: letter.date, last: letter.date, flights: 0 });
+  t.last = letter.date; t.flights = (t.flights || 0) + 1;
+  if (story.isReturn) t.stage = 2;
+  lsSet('fox.threads', th);
   return letter;
 }
 
@@ -360,17 +563,19 @@ export function lettersHtml() {
   return '<div class="sechead" style="margin-top:28px"><h3 style="margin:0">✉ Letters</h3></div>'
     + '<p style="color:var(--mute);margin:4px 0 14px">From the people you carried. They keep.</p>'
     + all.map(l => '<div style="border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:14px 16px;margin:0 0 12px;background:rgba(255,255,255,.03)">'
-      + '<div style="margin-bottom:6px"><b>' + esc(l.name) + '</b> <span style="color:var(--mute)">· ' + esc(l.date) + ' · ' + esc(l.flight) + ' · ' + esc(l.route) + '</span></div>'
+      + '<div style="margin-bottom:6px"><b>' + esc(l.name) + (l.again ? ' — again' : '') + '</b> <span style="color:var(--mute)">· ' + esc(l.date) + ' · ' + esc(l.flight) + ' · ' + esc(l.route) + '</span></div>'
       + l.text.map(p => '<p style="margin:0 0 6px">' + esc(p) + '</p>').join('') + '</div>').join('');
 }
 
 export function state() {
   return {
     armed: !!S.story, id: S.story ? S.story.id : null, name: S.story ? S.story.name : null,
+    isReturn: !!(S.story && S.story.isReturn),
     met: S.met, beatShown: S.beatShown, done: S.done,
     figGroup: S.fig && S.fig.bp ? S.fig.bp.group : null,
     figState: S.fig && S.fig.bp ? S.fig.bp.state : null,
     figLocal: S.fig ? { x: +S.fig.x.toFixed(2), z: +S.fig.z.toFixed(2) } : null,
     letters: letters().length, used: cycle().used.slice(),
+    cycles: cycle().cycles || 0, threads: threads(), returnUsed: returnCycle().used.slice(),
   };
 }
