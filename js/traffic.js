@@ -12,10 +12,17 @@ import { KT, D2R } from './data.js';
 const GROUND_PHASES = ['taxiin', 'parked', 'push', 'pushpause', 'taxiout'];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const wrapPi = a => { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; };
+// [Playtest fixes Nov 14] (P2) path helpers for mover deconfliction: distance
+// from a point to a polyline, and the gap between two polylines (resampled so
+// crossing paths read ~0 without segment-intersection math).
+const segDist = (px, pz, ax, az, bx, bz) => { const abx = bx - ax, abz = bz - az, t = clamp(((px - ax) * abx + (pz - az) * abz) / (abx * abx + abz * abz || 1), 0, 1); return Math.hypot(px - (ax + abx * t), pz - (az + abz * t)); };
+const distToPath = (x, z, path) => { if (path.length < 2) return Math.hypot(x - path[0].x, z - path[0].z); let d = 1e9; for (let i = 0; i + 1 < path.length; i++) d = Math.min(d, segDist(x, z, path[i].x, path[i].z, path[i + 1].x, path[i + 1].z)); return d; };
+const resample = (path, step) => { const out = [path[0]]; for (let i = 0; i + 1 < path.length; i++) { const a = path[i], b = path[i + 1], L = Math.hypot(b.x - a.x, b.z - a.z), n = Math.max(1, Math.ceil(L / step)); for (let k = 1; k <= n; k++) out.push({ x: a.x + (b.x - a.x) * k / n, z: a.z + (b.z - a.z) * k / n }); } return out; };
+const pathGap = (p1, p2) => { const a = resample(p1, 7), b = resample(p2, 7); let d = 1e9; for (const p of a) for (const q of b) { const dd = Math.hypot(p.x - q.x, p.z - q.z); if (dd < d) d = dd; } return d; };
 
 export class Traffic {
   constructor(scene) {
-    this.scene = scene; this.list = []; this.timer = 25; this.enabled = true; this.ends = []; this.apt = null;
+    this.scene = scene; this.list = []; this.timer = 25; this.enabled = true; this.ends = []; this.apt = null; this.seq = 0; // [Playtest fixes Nov 14] spawn order = ground right-of-way priority
     this.gnd = null; this.featured = false; this.playerPos = null;
     // per-variant geometry sets with fictional liveries (ac-traffic.js); the simple parked
     // geometry stays as the fallback if the detailed build ever throws
@@ -69,8 +76,10 @@ export class Traffic {
     // keep clear of the player on or near this runway
     const rel = player.clone().sub(thr); const along = rel.dot(dir), cross = Math.abs(rel.x * -dir.z + rel.z * dir.x);
     if (cross < 300 && along > -16000 && along < E.length + 600 && player.y - this.aptPos.y < 1200) return;
+    // [Playtest fixes Nov 14] (P1) a legacy departure materialises ON the runway: never spawn one onto an occupied strip
+    if (kind === 'dep' && this.runwayUse(E).busy) return;
     const liv = (Math.random() * TRAFFIC_LIVERIES.length) | 0, varn = pickTrafficVariant(Math.random());
-    const a = { kind, obj: this.make(liv, varn), t: 0, thr, dir, start, E, s: 0, v: 0, h: 0, pitch: 0, done: false, phase: 'air' };
+    const a = { kind, obj: this.make(liv, varn), t: 0, thr, dir, start, E, s: 0, v: 0, h: 0, pitch: 0, done: false, phase: 'air', seq: this.seq++ };
     if (kind === 'arr') { a.s = -16000; a.v = 145 * KT; a.h = 15 + 16000 * Math.tan(3 * D2R); }
     else { a.s = 40; a.v = 0; a.h = 0; a.hold = 12; a.s0 = start.clone().sub(thr).dot(dir) + 40; a.s = a.s0; }
     this.list.push(a);
@@ -79,6 +88,56 @@ export class Traffic {
   netFor() {
     if (!this.gnd) return null;
     return this.gnd.taxiNet.find(t => t.r.a === this.active || t.r.b === this.active) || this.gnd.taxiNet[0] || null;
+  }
+  // ------------------------------------------------------------ [Playtest fixes Nov 14] (P1) ONE runway-occupancy model
+  // Shared by the tower (atcCtx.runwayBusy in main.js delegates here) and by
+  // traffic itself (runwayEntryClear, the arrival go-around, the dep spawn
+  // guard). A physical runway (either end) is in use when any traffic aircraft
+  // is physically ON the strip — any phase, ground or air (the old ctx test
+  // read air-phase traffic only, so a jet sitting on the runway in a ground
+  // phase was invisible and the captain got his takeoff clearance over it) —
+  // or on short final, or rolling / climbing out over the strip.
+  onStrip(E, x, z, alongPad = 90, crossPad = 16) { // world-frame point vs E's strip rectangle
+    if (!E) return false;
+    const dx = x - (this.aptPos.x + E.thrX), dz = z - (this.aptPos.z + E.thrZ);
+    const along = dx * E.dir.x + dz * E.dir.z, cross = -dx * E.dir.z + dz * E.dir.x;
+    const W = E.width || (this.netFor() && this.netFor().r.W) || 45;
+    return along > -alongPad && along < E.length + alongPad && Math.abs(cross) < W / 2 + crossPad;
+  }
+  runwayUse(E) {
+    if (!this.apt || !this.active || !E) return { busy: false };
+    if (!(E === this.active || E === this.active.other || this.active === E.other ||
+      (E.ident && this.active.ident && (E.ident === this.active.ident || (this.active.other && E.ident === this.active.other.ident))))) return { busy: false }; // traffic only ever uses the active runway (ident fallback: the caller's end may come from another geometry instance of the same strip)
+    for (const a of this.list) { if (a.done) continue;
+      if ((a.h || 0) < 120 && this.onStrip(E, a.x, a.z)) return { busy: true, a, why: a.kind === 'arr' ? 'traffic landing' : (a.phase && a.phase !== 'air') ? 'traffic on the runway' : 'traffic departing' };
+      if (a.kind === 'arr' && (!a.phase || a.phase === 'air') && !a.ga && a.s > -7000 && a.s < 60) return { busy: true, a, why: a.s < -400 ? `traffic ${Math.max(1, Math.round(-a.s / 1852))} mile final` : 'traffic landing' };
+      if (a.kind === 'dep' && (!a.phase || a.phase === 'air') && (a.hold > 0 || a.h < 250) && a.s < E.length + 400) return { busy: true, a, why: 'traffic departing' };
+    }
+    return { busy: false };
+  }
+  playerOnRunway(pp) { // the captain physically on the active strip (ground or just-rotated height)
+    if (!pp || !this.active) return false;
+    if (pp.y - this.aptPos.y > 120) return false;
+    return this.onStrip(this.active, pp.x, pp.z, 160, 22);
+  }
+  runwayEntryClear(a, player) { // may ground mover a cross onto the active runway right now?
+    const use = this.runwayUse(this.active); if (use.busy && use.a !== a) return false;
+    if (this.playerOnRunway(player)) return false;
+    if (player && a.route) {
+      if (player.y - this.aptPos.y < 60) { const lp = a.route.find(p => p.tag === 'lineup'); if (lp && Math.hypot(player.x - lp.p.x, player.z - lp.p.z) < 170) return false; } // captain taxiing to the same entry
+      else if (player.y - this.aptPos.y >= 40) { // captain airborne on approach to this runway: do not enter under him
+        const E = this.active, dx = player.x - (this.aptPos.x + E.thrX), dz = player.z - (this.aptPos.z + E.thrZ);
+        const along = dx * E.dir.x + dz * E.dir.z, cross = -dx * E.dir.z + dz * E.dir.x;
+        if (along > -3800 && along < E.length && Math.abs(cross) < 320) return false;
+      }
+    }
+    return true;
+  }
+  pathAhead(a, len) { // [Playtest fixes Nov 14] (P2) my position + upcoming route points, truncated to ~len metres of travel
+    const pts = [{ x: a.x, z: a.z }]; if (!a.route) return pts;
+    let acc = 0, px = a.x, pz = a.z;
+    for (let i = a.routeI; i < a.route.length && acc < len; i++) { const p = a.route[i].p; acc += Math.hypot(p.x - px, p.z - pz); pts.push({ x: p.x, z: p.z }); px = p.x; pz = p.z; }
+    return pts;
   }
   lanePt(s) { // a point on the apron taxilane (42 m in front of the stand line), airport-local
     const fr = this.gnd.frame, nOff = -(fr.dep / 2 - 45) + 42;
@@ -112,7 +171,7 @@ export class Traffic {
   parkNew(st, focus) {
     const liv = (Math.random() * TRAFFIC_LIVERIES.length) | 0, varn = pickTrafficVariant(Math.random());
     const E = this.active, thr = new THREE.Vector3(this.aptPos.x + E.thrX, this.aptPos.y, this.aptPos.z + E.thrZ), dir = new THREE.Vector3(E.dir.x, 0, E.dir.z);
-    const a = { kind: 'dep', obj: this.make(liv, varn), t: 0, thr, dir, start: thr.clone(), E, s: 0, v: 0, h: 0, pitch: 0, done: false, phase: 'parked', stand: st, dwell: 200 + Math.random() * 320 };
+    const a = { kind: 'dep', obj: this.make(liv, varn), t: 0, thr, dir, start: thr.clone(), E, s: 0, v: 0, h: 0, pitch: 0, done: false, phase: 'parked', stand: st, dwell: 200 + Math.random() * 320, seq: this.seq++ };
     st.used = true;
     const fr = this.gnd.frame;
     a.x = this.aptPos.x + st.x - fr.nx * 2; a.z = this.aptPos.z + st.z - fr.nz * 2; a.y = this.aptPos.y + 3.6;
@@ -211,14 +270,46 @@ export class Traffic {
     const ad = Math.abs(diff);
     if (ad > 0.45) vT = Math.min(vT, 3.6); else if (ad > 0.2) vT = Math.min(vT, 6.5);
     if (a.routeI === a.route.length - 1) vT = Math.min(vT, Math.max(2.2, dist * 0.32));
-    // never taxi through the player, and never through another mover: hold short of either
+    // [Playtest fixes Nov 14] (P2) deconfliction with NO drive-through. Three
+    // independent stops, each held until it actually clears:
+    //  (a) the captain: the original ahead-cone hard stop (62 m), unchanged;
+    //  (b) any mover physically in my immediate path (15 m of my next ~36 m):
+    //      a hard stop — except a mover that is stopped and yielding to me,
+    //      which I may pass; under 6 m I stop whoever I am;
+    //  (c) right-of-way: I yield EARLY to an earlier-spawned (lower-seq) mover
+    //      whose route crosses mine inside the ~95 m lookahead — I stop well
+    //      before the conflict point, its path stays clear, and once it has
+    //      passed, mine clears too, so the pair never meets nose-to-nose.
+    // The old release — "creep on after a 30 s hold" — is gone: it drove movers
+    // through each other at intersections whenever a hold outlasted the timer.
     if (a.phase === 'taxiin' || a.phase === 'taxiout') {
       const fx = Math.sin(a.gHdg), fz = -Math.cos(a.gHdg);
       const block = (ox, oz, rad) => { const bx = ox - a.x, bz = oz - a.z, dd = Math.hypot(bx, bz); return dd < rad && (bx * fx + bz * fz) > 0.15 * dd; };
-      let held = false;
-      if (player && player.y - this.aptPos.y < 60 && block(player.x, player.z, 62)) held = true;
-      if (!held) for (const o of this.list) { if (o !== a && o.phase !== 'parked' && block(o.x, o.z, 48)) { held = true; break; } }
-      if (held) { a.holdFor = (a.holdFor || 0) + dt; if (a.holdFor < 30) vT = 0; } else a.holdFor = 0;
+      let held = false; a.yielding = false;
+      const nearPlayer = player && player.y - this.aptPos.y < 60;
+      const myNear = this.pathAhead(a, 36), myPath = this.pathAhead(a, 95);
+      // the 62 m ahead-cone alone also fires for a captain PARKED at his
+      // gate tens of metres off the route line (44 m away, 37 m off the
+      // path, in the probe) — and he never moves, so the mover held
+      // forever: apron gridlock next to the captain's stand. The cone now
+      // only counts when the captain is also near my actual route path;
+      // the precise path check below remains the hard stop.
+      if (nearPlayer && block(player.x, player.z, 62) && distToPath(player.x, player.z, myPath) < 30) held = true;
+      if (nearPlayer && distToPath(player.x, player.z, myNear) < 20) held = true;
+      for (const o of this.list) {
+        if (o === a || o.done || o.phase === 'parked') continue;
+        const dNear = distToPath(o.x, o.z, myNear);
+        if (dNear < 6) { held = true; continue; }
+        const oYieldingToMe = o.phase && o.phase !== 'air' && o.yielding && (o.seq || 0) > (a.seq || 0) && o.v < 0.5;
+        if (dNear < 15 && !oYieldingToMe) held = true;
+        if (o.phase && o.phase !== 'air' && o.route && (o.seq || 0) < (a.seq || 0) && pathGap(myPath, this.pathAhead(o, 95)) < 24) { held = true; a.yielding = true; }
+      }
+      // [Playtest fixes Nov 14] (P1) a line-up point is a runway entry: cross
+      // onto the strip only when the shared occupancy model says it is clear
+      // and the captain is neither on it nor about to use it. Once I am on the
+      // strip myself I am committed and vacate/line up without stopping.
+      if (!held && a.phase === 'taxiout' && pt.tag === 'lineup' && a.routeI <= a.route.findIndex(p => p.tag === 'lineup') && !this.runwayEntryClear(a, player)) held = true; // committed once the first line-up point is REACHED (routeI passes it): geometry can't say it — a connector joins the strip flush, so the mover is inside the runway rectangle while still on the connector
+      if (held) { a.holdFor = (a.holdFor || 0) + dt; vT = 0; } else a.holdFor = 0;
     }
     a.v += clamp(vT - a.v, -2.4 * dt, 1.3 * dt);
     const rate = a.v < 7 ? 0.5 : a.v < 12 ? 0.33 : 0.22;
@@ -295,7 +386,15 @@ export class Traffic {
       a.t += dt;
       if (a.phase && a.phase !== 'air') { this.updateGround(a, dt, player); }
       else if (a.kind === 'arr') {
-        if (a.h > 0.01) {
+        // [Playtest fixes Nov 14] (P1) never land on an occupied runway: on short
+        // final, if the strip is physically in use (the captain on it, or any
+        // other mover on it), go around, climb away and leave.
+        if (!a.ga && a.s > -4200 && a.s < -40) {
+          const stripBusy = this.playerOnRunway(player) || this.list.some(o => o !== a && !o.done && (o.h || 0) < 120 && this.onStrip(this.active, o.x, o.z));
+          if (stripBusy) a.ga = true;
+        }
+        if (a.ga) { a.v += (150 * KT - a.v) * dt * 0.3; a.s += a.v * dt; a.h += dt * 10.5; a.pitch += (8 - a.pitch) * dt; if (a.h > 1100 || a.s > 12000) a.done = true; }
+        else if (a.h > 0.01) {
           a.v += (138 * KT - a.v) * dt * 0.05;
           a.s += a.v * dt;
           if (a.h < 14) { a.h = Math.max(0, a.h - Math.max(1.0, a.h * 0.45) * dt); a.pitch += (4 - a.pitch) * dt; }

@@ -493,6 +493,7 @@ function taxiInRoute() {
 function showTaxi(r) {
   if (taxiLine) { scene.remove(taxiLine); taxiLine.geometry.dispose(); taxiLine = null; } W.taxiR = r || null; if (!r || !r.pts || r.pts.length < 2) return;
   const g = new THREE.BufferGeometry().setFromPoints(r.pts); taxiLine = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xff5cff, transparent: true, opacity: 0.9 })); taxiLine.frustumCulled = false; taxiLine.renderOrder = 6; scene.add(taxiLine);
+  taxiLine.visible = !!W.autoTaxi; // [Playtest fixes Nov 14] (P2) the magenta route is an auto-taxi aid: it renders only while auto-taxi is engaged — never as ambient decoration across the airport in normal play
 }
 function compass(v) { const h = (Math.atan2(v.x, -v.z) * R2D + 360) % 360; return ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(h / 45) % 8]; }
 function pushDir() { const b = W.standB; if (!b) return null; const fr = b.b.frame; const ad = V3(fr.adx, 0, fr.adz); const r = taxiOutRoute(); if (r.linkB && V3(r.linkB.x - fdm.pos.x, 0, r.linkB.z - fdm.pos.z).dot(ad) < 0) ad.negate(); return ad; }
@@ -518,7 +519,7 @@ function pushStep(dt) {
   if (P.done) W.push = Object.assign(P, { finished: true });
 }
 function autoTaxiStep(dt) {
-  const T = W.autoTaxi; const tgt = T.pts[T.i]; if (!tgt) { W.autoTaxi = null; fdm.parkBrake = true; fdm.vel.set(0, 0, 0); toast('Auto-taxi finished'); return; }
+  const T = W.autoTaxi; const tgt = T.pts[T.i]; if (!tgt) { W.autoTaxi = null; if (taxiLine) taxiLine.visible = false; fdm.parkBrake = true; fdm.vel.set(0, 0, 0); toast('Auto-taxi finished'); return; }
   const d = V3(tgt.x - fdm.pos.x, 0, tgt.z - fdm.pos.z); const L = d.length(); if (L < 4) { T.i++; return; }
   const v = Math.min(T.speed, L * 0.6 + 2); d.normalize(); fdm.pos.x += d.x * v * dt; fdm.pos.z += d.z * v * dt; fdm.vel.set(d.x * v, 0, d.z * v); fdm.w.set(0, 0, 0);
   const cur = fdm.euler().hdg, want = Math.atan2(d.x, -d.z) * R2D; const dh = ((want - cur + 540) % 360) - 180; const h = cur + THREE.MathUtils.clamp(dh, -25 * dt, 25 * dt);
@@ -742,11 +743,17 @@ const atcCtx = {
   traffic() { const e = fdm.euler(); return traffic.list.map(a => { if (!a.type) a.type = [['737', 'seven three seven'], ['A320', 'Airbus three twenty'], ['E175', 'Embraer one seventy five'], ['787', 'seven eight seven'], ['A350', 'Airbus three fifty']][(Math.random() * 5) | 0]; const dx = a.x - fdm.pos.x, dz = a.z - fdm.pos.z; const brg = Math.atan2(dx, -dz) * R2D; let rel = ((brg - e.hdg) % 360 + 360) % 360; a.clock = String(Math.round(rel / 30) || 12); a.distNm = Math.hypot(dx, dz) / NM; a.dAltFt = (a.y - fdm.pos.y) / FT; a.vs = a.phase && a.phase !== 'air' ? 0 : a.kind === 'arr' ? -700 : a.h > 1 ? 1800 : 0; return a; }); },
   arrEnd() { if (W.ils && W.ils.apt === atc.arr) return W.ils.end; return activeRunwayEnd({ geom: airportGeometry(atc.arr) }) || airportGeometry(atc.arr).ends[0]; },
   runwayBusy(apt, E) {
-    if (traffic.apt !== apt) return { busy: false };
-    for (const a of traffic.list) { if (a.done || !(a.E === E || a.E === E.other)) continue;
-      if (a.kind === 'arr' && (!a.phase || a.phase === 'air') && a.s > -7000 && a.s < a.E.length - 150 && !(a.exitT > 6)) return { busy: true, why: a.s < -400 ? `traffic ${Math.max(1, Math.round(-a.s / 1852))} mile final` : 'traffic landing' };
-      if (a.kind === 'dep' && (!a.phase || a.phase === 'air') && (a.hold > 0 || a.h < 250)) return { busy: true, why: 'traffic departing' }; }
-    return { busy: false };
+    // [Playtest fixes Nov 14] (P1) ONE occupancy model, shared with traffic
+    // itself: Traffic.runwayUse sees every phase (ground movers on the strip
+    // included). The old inline test read air-phase traffic only, so the tower
+    // cleared the captain for takeoff over a jet sitting on the runway. The
+    // airport match is by WORLD POSITION: ATC holds the airport DATA record
+    // while traffic holds the built record — different objects, same airport,
+    // and neither carries a shared id field.
+    if (!traffic.gnd || !apt) return { busy: false };
+    const P = aptPos(apt);
+    if (!P || P.distanceTo(traffic.aptPos) > 2000) return { busy: false };
+    return traffic.runwayUse(E);
   },
   pushFace() { const u = pushDir(); return u ? compass(u) : 'west'; },
   startPushback, pushDone: () => !!(W.push && W.push.done), crewState: () => ({ state: crew.state, t: +crew.t.toFixed(1), push: W.push && +W.push.t.toFixed(1), tug: crew.tug.visible, cones: crew.cones.filter(c => c.visible).length, chocks: crew.chocks.filter(c => c.visible).length }),
@@ -1717,7 +1724,7 @@ function updateParkPrompt() {
   if (el.textContent !== txt) el.textContent = txt; el.hidden = !txt;
 }
 function parkPromptAction() {
-  if (keys.ShiftLeft || keys.ShiftRight) { if (W.taxiR && W.taxiR.pts && fdm.onGround) { W.autoTaxi = { pts: W.taxiR.pts.slice(1), i: 0, speed: 9 }; toast('Auto-taxi engaged'); } return; }
+  if (keys.ShiftLeft || keys.ShiftRight) { if (W.taxiR && W.taxiR.pts && fdm.onGround) { W.autoTaxi = { pts: W.taxiR.pts.slice(1), i: 0, speed: 9 }; if (taxiLine) taxiLine.visible = true; toast('Auto-taxi engaged'); } return; }
   if (W.parkedAt && !W.onFoot) { enterFoot('arr'); return; }
   const gs = Math.hypot(fdm.vel.x, fdm.vel.z) / KT; if (fdm.onGround && gs < 4 && fdm.td) { const st = nearestFreeStand(120); if (st) parkAtGate(st); }
 }
@@ -2091,6 +2098,7 @@ window.__sim = {
   charter: () => Charter.state(), // [Private charter] armed contract, meeting state, notes + rotation
   crewTalk: () => CrewTalk.state(), // [Crew conversations] roster positions/phases, open card, interphone beats
   walkaround: () => Walkaround.state(), // [Walk-around preflight] route, gate, open card
+  taxiLineVis: () => !!(taxiLine && taxiLine.visible), // [Playtest fixes Nov 14] test hook: is the magenta taxi route line rendering?
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
   footStep(sec) { for (let i = 0; i < sec * 30; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); },

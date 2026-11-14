@@ -137,6 +137,8 @@ export function buildBridges(group, stands, f, along, floorY = 4.6) {
     st.jb = new THREE.Object3D(); st.jb.name = 'jetbridge';
     Object.defineProperty(st.jb, 'visible', { get: () => !b.hidden, set: v => { b.hidden = !v; pose(b); } });
     st.jb.userData.setDocked = v => { b.target = v ? 1 : 0; b.t0 = performance.now(); anim.add(b); };
+    st.jb.userData.dockAmount = () => b.e; // [Playtest fixes Nov 14] test hook (fsim-harness): 1 = fully docked, 0 = fully retracted
+    st.jb.userData.dockTarget = () => b.target; // [Playtest fixes Nov 14] test hook: where the bridge is heading (setDocked's last call)
     return b;
   });
   const pose = b => {
