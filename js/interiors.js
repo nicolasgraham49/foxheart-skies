@@ -548,9 +548,10 @@ export function buildBridge(pts, matSrc) {
 
 // ---------------------------------------------------------------- cabin (aircraft body frame)
 import { buildCabinShell } from './ac-cabin.js';
+import { smooth } from './ac-util.js';
 // [Aircraft types] the cabin layout of the SELECTED type (fox values are the defaults below);
 // applyCabinType (main.js boot, after applyType) re-points it before any cabin builds.
-export const CABIN = { floor: -0.55, door: new THREE.Vector3(-1.98, -0.55, -13.0), seatRows: 29, pitch: 0.79, z0: -10.6, ckFloor: -0.15, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], paxN: 121, entryHx: 1.7, psuXs: [-1.17, 1.17], crewPostX: 0.62, ckSeatZ: -15.05, ckZoneZ: -15.35, ckDoorZ: -14.55, profile: { sx: 1, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false } };
+export const CABIN = { floor: -0.55, door: new THREE.Vector3(-1.98, -0.55, -13.0), seatRows: 29, pitch: 0.79, z0: -10.6, ckFloor: -0.15, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], paxN: 121, entryHx: 1.7, psuXs: [-1.17, 1.17], crewPostX: 0.62, ckSeatZ: -15.05, ckZoneZ: -15.35, ckDoorZ: -14.55, profile: { sx: 1, dy: 0, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false } };
 export function applyCabinType(cab) {
   const T = currentType();
   CABIN.seatRows = cab.rows; CABIN.pitch = cab.pitch; CABIN.z0 = cab.z0;
@@ -643,11 +644,13 @@ export function buildCabin(icao, rnd) {
   // cabin signs: ceiling-hung boxes over the aisle (lit on both faces) + small PSU icons above every row
   const signMat = { belt: new THREE.MeshBasicMaterial({ map: signTexture('belt') }), smoke: new THREE.MeshBasicMaterial({ map: signTexture('smoke') }) };
   const houseMat = new THREE.MeshBasicMaterial({ color: 0x7d838b }); const sgeo = new THREE.PlaneGeometry(0.2, 0.1), hgeo = new THREE.BoxGeometry(0.46, 0.13, 0.055);
+  // [Interior scale fix] ceiling-hung signs ride the shell's per-type ceiling lift (profile.dy)
+  const cdy = (CABIN.profile && CABIN.profile.dy) || 0;
   for (let r = 2; r < CABIN.seatRows; r += 6) { const z = CABIN.z0 + r * CABIN.pitch - 0.38;
-    for (const a of CABIN.aisleXs) { const hb = new THREE.Mesh(hgeo, houseMat); hb.position.set(a, 1.43, z); group.add(hb); const rod = new THREE.Mesh(new THREE.BoxGeometry(0.02, shell ? 0.24 : 0.06, 0.02), houseMat); rod.position.set(a, shell ? 1.58 : 1.5, z); group.add(rod);
-      for (const f of [-1, 1]) for (const [k, dx] of [['belt', -0.11], ['smoke', 0.11]]) { const pl = new THREE.Mesh(sgeo, signMat[k]); pl.position.set(a + dx * f, 1.43, z + f * 0.029); pl.rotation.y = f > 0 ? 0 : Math.PI; group.add(pl); } } }
+    for (const a of CABIN.aisleXs) { const hb = new THREE.Mesh(hgeo, houseMat); hb.position.set(a, 1.43 + cdy, z); group.add(hb); const rod = new THREE.Mesh(new THREE.BoxGeometry(0.02, shell ? 0.24 : 0.06, 0.02), houseMat); rod.position.set(a, shell ? 1.58 + cdy : 1.5, z); group.add(rod);
+      for (const f of [-1, 1]) for (const [k, dx] of [['belt', -0.11], ['smoke', 0.11]]) { const pl = new THREE.Mesh(sgeo, signMat[k]); pl.position.set(a + dx * f, 1.43 + cdy, z + f * 0.029); pl.rotation.y = f > 0 ? 0 : Math.PI; group.add(pl); } } }
   const psuGeo = new THREE.PlaneGeometry(0.075, 0.038); const psu = {}; const Mp = new THREE.Matrix4(), Qp = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.93, 0, 0)), Sp = new THREE.Vector3(1, 1, 1);
-  for (const [k, dx] of [['belt', -0.045], ['smoke', 0.045]]) { const m = new THREE.InstancedMesh(psuGeo, signMat[k], CABIN.seatRows * CABIN.psuXs.length); let i = 0; for (let r = 0; r < CABIN.seatRows; r++) for (const px of CABIN.psuXs) { Mp.compose(new THREE.Vector3(px + dx, 1.035, CABIN.z0 + r * CABIN.pitch - 0.12), Qp, Sp); m.setMatrixAt(i++, Mp); } m.frustumCulled = false; group.add(m); psu[k] = m; }
+  for (const [k, dx] of [['belt', -0.045], ['smoke', 0.045]]) { const m = new THREE.InstancedMesh(psuGeo, signMat[k], CABIN.seatRows * CABIN.psuXs.length); let i = 0; for (let r = 0; r < CABIN.seatRows; r++) for (const px of CABIN.psuXs) { Mp.compose(new THREE.Vector3(px + dx, 1.035 + cdy * smooth(0.70, 1.06, 1.035), CABIN.z0 + r * CABIN.pitch - 0.12), Qp, Sp); m.setMatrixAt(i++, Mp); } m.frustumCulled = false; group.add(m); psu[k] = m; }
   const sign = { belt: true, smoke: true, k: 1 };
   const paintSigns = () => { signMat.belt.color.setScalar(sign.belt ? 1.9 * sign.k : 0.09); signMat.smoke.color.setScalar(sign.smoke ? 1.9 * sign.k : 0.09); houseMat.color.setHex(0x7d838b).multiplyScalar(sign.k); };
   paintSigns();

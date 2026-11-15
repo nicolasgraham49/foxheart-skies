@@ -219,8 +219,14 @@ export function buildCabinShell(o) {
   const { seats, rnd = Math.random, floor: FL = -0.55, rows = 29, pitch = 0.79, z0: R0 = -10.6, quality = 'high' } = o;
   // [Aircraft types] cabin profile of the selected type: sx scales every lateral (x) dimension of
   // the fox shell; door1/door2 place the wall spans. The fox profile (default) is exactly the old shell.
-  const PR = o.profile || { sx: 1, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false };
-  const sx = PR.sx, SC = prof => prof.map(([x, y]) => [x * sx, y]);
+  const PR = o.profile || { sx: 1, dy: 0, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false };
+  // [Interior scale fix] dy = per-type ceiling lift. The shell's width scaled with sx but its
+  // HEIGHTS were the fox's for every type: the widebody ceiling sat ~0.19 m low for its width
+  // and the PJ-1's ceiling poked through its own crown. L(y) ramps 0 at the window band
+  // (y <= 0.70 — windows stay glued to the exterior openings) to full dy at the bin line
+  // (y >= 1.06): the wall stretches in between, everything above the bins rides rigidly.
+  const dy = PR.dy || 0, L = y => dy * smooth(0.70, 1.06, y);
+  const sx = PR.sx, SC = prof => prof.map(([x, y]) => [x * sx, y + L(y)]);
   const hi = quality !== 'low';
   const A = paintAtlas(hi ? 512 : 256), mat = cabinMaterial(A);
   const group = new THREE.Group(); group.name = 'cabinShell';
@@ -248,7 +254,7 @@ export function buildCabinShell(o) {
     P.add(loft(FRONT.map(([x, y]) => [x + 0.012, y]), ZF + 0.5, ZA - 0.3, sd), 'dark', { ao: 0.5 });
     for (let z = R0 - 0.6 - 4 * pitch; z < ZA - 0.4; z += 2 * pitch) { const za = Math.max(ZF + 0.5, z) + 0.004, zb = Math.min(ZA - 0.3, z + 2 * pitch) - 0.004; if (zb - za < 0.2) continue;
       P.add(loft(FRONT, za, zb, sd), 'bin', { uvScale: [1 / 0.5, 1 / (2 * pitch)] });
-      const zc = (za + zb) / 2; P.add(rbox(0.035, 0.03, 0.2, 0.01, sd * 1.075 * sx, 1.112, zc, 1), 'dark', { ao: 0.9 }); P.add(box(0.006, 0.012, 0.15, sd * 1.058 * sx, 1.112, zc), 'alu', { flat: true, ao: 1.1 }); }
+      const zc = (za + zb) / 2; P.add(rbox(0.035, 0.03, 0.2, 0.01, sd * 1.075 * sx, 1.112 + dy, zc, 1), 'dark', { ao: 0.9 }); P.add(box(0.006, 0.012, 0.15, sd * 1.058 * sx, 1.112 + dy, zc), 'alu', { flat: true, ao: 1.1 }); }
     // window band: one bay per window (rounded hole), plain bays at the ends; reveals + shades
     const wins = WINDOWS.filter(w => w.side === sd).sort((a, b) => a.z - b.z), hole = rrPts(0.26, 0.37, 0.1, hi ? 4 : 2);
     const mapBand = (g) => { const p = g.attributes.position; for (let i = 0; i < p.count; i++) { const z = p.getX(i), y = p.getY(i); p.setXYZ(i, sd * Xs(y), y, z); } g.computeVertexNormals(); return inward(g); };
@@ -268,24 +274,24 @@ export function buildCabinShell(o) {
     }
     // closed door linings (R1 forward right, L2 / R2 aft) and the open L1 frame
     const doorWall = (za, zb, zd, open) => { const prof = SC([[1.80, -0.28], [1.84, 0.4], [1.75, 0.95], [1.66, 1.03]]);
-      if (!open) { P.add(loft(prof, za, zb, sd), 'plastic'); for (const dz of [-0.42, 0.42]) P.add(box(0.02, 1.75, 0.025, sd * 1.83 * sx, 0.33, zd + dz), 'dark', { ao: 0.6 }); P.add(rbox(0.05, 0.05, 0.3, 0.015, sd * 1.8 * sx, 0.35, zd, 1), 'alu', { flat: true }); }
+      if (!open) { P.add(loft(prof, za, zb, sd), 'plastic'); for (const dz of [-0.42, 0.42]) P.add(box(0.02, 1.75 + dy, 0.025, sd * 1.83 * sx, 0.33 + dy / 2, zd + dz), 'dark', { ao: 0.6 }); P.add(rbox(0.05, 0.05, 0.3, 0.015, sd * 1.8 * sx, 0.35, zd, 1), 'alu', { flat: true }); }
       else { const zc = zd; P.add(loft(prof, za, zc - 0.43, sd), 'plastic'); P.add(loft(prof, zc + 0.43, zb, sd), 'plastic'); P.add(loft(prof.filter(p => p[1] > 0.9), zc - 0.43, zc + 0.43, sd), 'plastic');
-        for (const dz of [-0.43, 0.43]) P.add(box(0.12, 1.88, 0.03, sd * 1.86 * sx, 0.39, zc + dz), 'plastic', { ao: 0.85 }); }
-      P.add(box(0.03, 0.08, 0.2, sd * 1.06 * sx, 1.25, zd), 'exit', { e: [1.4, 0], flat: true }); };
+        for (const dz of [-0.43, 0.43]) P.add(box(0.12, 1.88 + dy, 0.03, sd * 1.86 * sx, 0.39 + dy / 2, zc + dz), 'plastic', { ao: 0.85 }); }
+      P.add(box(0.03, 0.08, 0.2, sd * 1.06 * sx, 1.25 + dy, zd), 'exit', { e: [1.4, 0], flat: true }); };
     doorWall(ZF, ZS0, PR.door1, sd < 0); doorWall(ZS1, ZA, PR.door2, false);
     // PSUs above each row: reading lights (a few on), gaspers, attendant call button; a seat-number placard on the bin lip
     for (let r = 0; r < rows; r++) { const z = R0 + r * pitch - 0.14;
-      for (const [k, xu] of [[0, 1.2], [1, 1.36], [2, 1.52]]) { const x = xu * sx; const yb = 1.06 - (xu - 1.12) / (1.66 - 1.12) * 0.015 - 0.008; const on = rnd() < 0.18;
+      for (const [k, xu] of [[0, 1.2], [1, 1.36], [2, 1.52]]) { const x = xu * sx; const yb0 = 1.06 - (xu - 1.12) / (1.66 - 1.12) * 0.015 - 0.008; const yb = yb0 + L(yb0); const on = rnd() < 0.18;
         P.add(new THREE.CylinderGeometry(0.024, 0.027, 0.012, hi ? 12 : 6).translate(sd * x, yb, z), on ? 'light' : 'alu', { e: on ? [1.5, 0] : [0, 0], flat: true, ao: on ? 1 : 0.95 });
         if (on) coneSpots.push([sd * x, yb, z]);
         P.add(new THREE.CylinderGeometry(0.014, 0.019, 0.025, hi ? 10 : 5).translate(sd * x, yb - 0.004, z + 0.09), 'dark', { flat: true, ao: 0.9 }); }
-      P.add(box(0.03, 0.006, 0.03, sd * 1.62 * sx, 1.04, z + 0.06), 'red', { e: [0.5, 0], flat: true, ao: 0.6 });
-      P.add(new THREE.BoxGeometry(0.018, 0.055, 0.17).rotateX(-0.45).translate(sd * 1.08 * sx, 1.15, z + 0.14), 'dark', { flat: true, ao: 0.9 });
-      P.add(new THREE.BoxGeometry(0.02, 0.016, 0.11).rotateX(-0.45).translate(sd * 1.072 * sx, 1.15, z + 0.14), 'light', { e: [0.7, 0], flat: true, ao: 1 }); }
+      P.add(box(0.03, 0.006, 0.03, sd * 1.62 * sx, 1.04 + L(1.04), z + 0.06), 'red', { e: [0.5, 0], flat: true, ao: 0.6 });
+      P.add(new THREE.BoxGeometry(0.018, 0.055, 0.17).rotateX(-0.45).translate(sd * 1.08 * sx, 1.15 + dy, z + 0.14), 'dark', { flat: true, ao: 0.9 });
+      P.add(new THREE.BoxGeometry(0.02, 0.016, 0.11).rotateX(-0.45).translate(sd * 1.072 * sx, 1.15 + dy, z + 0.14), 'light', { e: [0.7, 0], flat: true, ao: 1 }); }
   }
   // centre PSU domes over the middle seat block (twin-aisle types)
   if (PR.centrePSU) for (let r = 0; r < rows; r++) { const z = R0 + r * pitch - 0.14;
-    for (const xu of [-0.45, 0, 0.45]) { const x = xu * sx, yb = 1.045, on = rnd() < 0.18;
+    for (const xu of [-0.45, 0, 0.45]) { const x = xu * sx, yb = 1.045 + L(1.045), on = rnd() < 0.18;
       P.add(new THREE.CylinderGeometry(0.024, 0.027, 0.012, hi ? 12 : 6).translate(x, yb, z), on ? 'light' : 'alu', { e: on ? [1.5, 0] : [0, 0], flat: true, ao: on ? 1 : 0.95 });
       if (on) coneSpots.push([x, yb, z]);
       P.add(new THREE.CylinderGeometry(0.014, 0.019, 0.025, hi ? 10 : 5).translate(x, yb - 0.004, z + 0.09), 'dark', { flat: true, ao: 0.9 }); } }
@@ -317,7 +323,7 @@ export function buildCabinShell(o) {
   galley(-0.72 * sx, 0.72 * sx, ZA - 0.5, -1); face(0.7, 0.5, 0, 1.42, ZA - 0.506, -1, 'bulk', { flat: true, ao: 1 });
   for (const x0 of [-1.27, 1.27]) { const x = x0 * sx; P.add(box(0.95, 2.25, 0.5, x, 0.58, ZA - 0.25), 'plastic', { ao: 0.92 }); face(0.6, 1.85, x, FL + 0.93, ZA - 0.503, -1, 'lav', { ao: 1 }); P.add(box(0.52, 0.045, 0.018, x, FL + 1.90, ZA - 0.512), 'light', { e: [0.85, 0], flat: true, ao: 1 }); }
   // exit signs above the overwing exits (bins) and at the doors
-  for (const e of EXITS.filter(e => e.side > 0)) for (const sd of [1, -1]) { P.add(box(0.03, 0.08, 0.2, sd * 1.06 * sx, 1.25, e.z), 'exit', { e: [1.4, 0], flat: true }); }
+  for (const e of EXITS.filter(e => e.side > 0)) for (const sd of [1, -1]) { P.add(box(0.03, 0.08, 0.2, sd * 1.06 * sx, 1.25 + dy, e.z), 'exit', { e: [1.4, 0], flat: true }); }
   const shellMesh = new THREE.Mesh(P.merge(), mat); shellMesh.frustumCulled = false; group.add(shellMesh);
   // flight-only closures: the L1 door and the flight-deck door (on foot the boarding door is open and the deck has its own door)
   const PD = new Parts(ao);

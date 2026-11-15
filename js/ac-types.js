@@ -19,7 +19,7 @@ export const TYPES = [
     deckDz: 0, deckDy: 0,
     vis: { wg: { b0: 1.2, bK: 6.2, bT: 16.95, sweep: Math.tan(27 * Math.PI / 180), dih: Math.tan(5.5 * Math.PI / 180), zRef: -4.3, bRef: 1.7, yRef: -1.05, te: [2.5, 2.8, 5.0] }, ht: { b0: 0.35, bT: 6.3, z0: 13.7, y0: 1.0, sweep: Math.tan(32 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), cr: 3.75, ct: 1.3 }, vt: { y0: 1.4, h: 6.45, z0: 11.55, sweep: Math.tan(37 * Math.PI / 180), cr: 6.05, ct: 2.05 }, eng: { x: 5.75, y: -1.95, z0: -6.95, scale: 1 }, wingletScale: 1, mask: false, flatFan: false, fair: { yc: -0.95, a: 2.2, b: 1.24 } },
     fdm: { mass: 64000, I: { pitch: 3.4e6, roll: 1.5e6, yaw: 4.4e6 }, S: 122.6, CBAR: 4.19, B: 34.1, thrust: 120000, engX: 5.75, probes: FOX_PROBES, belly: FOX_BELLY },
-    cabin: { rows: 29, pitch: 0.79, z0: -10.6, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], pax: 121, psuXs: [-1.17, 1.17], entryHx: 1.7, crewPostX: 0.62, profile: { sx: 1, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false } },
+    cabin: { rows: 29, pitch: 0.79, z0: -10.6, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], pax: 121, psuXs: [-1.17, 1.17], entryHx: 1.7, crewPostX: 0.62, profile: { sx: 1, dy: 0.06, door1: -13.0, door2: 11.6, aisles: [0], centrePSU: false } },
     gse: { belt1z: -8.4, belt2z: 9.2, contz: 5.9, fuelX: 16, fuelz: -1.5, fuelPanelX: 13.5, fuelPanelZ: 2.62, lavz: 19.4, waterz: 17.8, vanz: -37, trainz: -8.6, doorR1z: -13.0, doorR2z: 11.6, catX: 6.75, contX: 6.15, beltX: null, lavX: 3.2, waterX: 7.2 },
   },
   {
@@ -34,7 +34,7 @@ export const TYPES = [
     deckDz: -1.15, deckDy: 0,
     vis: { wg: { b0: 1.15, bK: 6.0, bT: 16.95, sweep: Math.tan(25 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), zRef: -4.0, bRef: 1.7, yRef: -1.08, te: [2.5, 2.8, 5.0] }, ht: { b0: 0.35, bT: 6.9, z0: 14.6, y0: 1.05, sweep: Math.tan(32 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), cr: 3.6, ct: 1.25 }, vt: { y0: 1.35, h: 6.1, z0: 12.3, sweep: Math.tan(38 * Math.PI / 180), cr: 6.4, ct: 1.9 }, eng: { x: 5.6, y: -1.90, z0: -6.6, scale: 0.94 }, wingletScale: 1.25, mask: false, flatFan: true, fair: { yc: -0.90, a: 2.1, b: 1.18 } },
     fdm: { mass: 66000, I: { pitch: 3.9e6, roll: 1.7e6, yaw: 5.0e6 }, S: 124.6, CBAR: 4.05, B: 35.8, thrust: 121000, engX: 5.6, probes: [[0, -2.0, -18.6], [0, -1.08, 12.6], [5.6, -2.9, -5], [-5.6, -2.9, -5], [16.8, -0.2, 3.8], [-16.8, -0.2, 3.8], [0, -2.1, 0]], belly: [[5.6, -2.9, -5], [-5.6, -2.9, -5], [0, -2.1, 0], [0, -2.0, -15.1], [0, -1.08, 12.6]] },
-    cabin: { rows: 28, pitch: 0.79, z0: -11.6, seatXs: [-1.43, -0.955, -0.48, 0.48, 0.955, 1.43], aisleXs: [0], pax: 117, psuXs: [-1.11, 1.11], entryHx: 1.65, crewPostX: 0.59, profile: { sx: 1.88 / 1.98, door1: -14.2, door2: 12.8, aisles: [0], centrePSU: false } },
+    cabin: { rows: 28, pitch: 0.79, z0: -11.6, seatXs: [-1.43, -0.955, -0.48, 0.48, 0.955, 1.43], aisleXs: [0], pax: 117, psuXs: [-1.11, 1.11], entryHx: 1.65, crewPostX: 0.59, profile: { sx: 1.88 / 1.98, dy: -0.06, door1: -14.2, door2: 12.8, aisles: [0], centrePSU: false } },
     gse: { belt1z: -9.6, belt2z: 10.4, contz: 7.1, fuelX: 16, fuelz: -1.2, fuelPanelX: 13.5, fuelPanelZ: 2.9, lavz: 20.2, waterz: 18.6, vanz: -38.2, trainz: -9.8, doorR1z: -14.2, doorR2z: 12.8, catX: 6.6, contX: 6.0, beltX: null, lavX: 3.1, waterX: 7.0 },
   },
   {
@@ -49,7 +49,7 @@ export const TYPES = [
     deckDz: -0.19, deckDy: 0,
     vis: { wg: { b0: 1.2, bK: 6.0, bT: 15.9, sweep: Math.tan(25 * Math.PI / 180), dih: Math.tan(5.7 * Math.PI / 180), zRef: -4.2, bRef: 1.7, yRef: -1.02, te: [2.5, 2.8, 5.0] }, ht: { b0: 0.35, bT: 6.1, z0: 13.2, y0: 1.0, sweep: Math.tan(28 * Math.PI / 180), dih: Math.tan(5 * Math.PI / 180), cr: 3.5, ct: 1.2 }, vt: { y0: 1.4, h: 5.9, z0: 11.2, sweep: Math.tan(33 * Math.PI / 180), cr: 5.6, ct: 1.95 }, eng: { x: 5.9, y: -1.92, z0: -6.8, scale: 1.0 }, wingletScale: 1.3, mask: true, flatFan: false, fair: { yc: -0.95, a: 2.2, b: 1.24 } },
     fdm: { mass: 64000, I: { pitch: 3.4e6, roll: 1.5e6, yaw: 4.4e6 }, S: 122.6, CBAR: 4.19, B: 34.1, thrust: 120000, engX: 5.9, probes: [[0, -2.0, -17.7], [0, -1.08, 11.8], [5.9, -3.0, -5], [-5.9, -3.0, -5], [16.15, -0.2, 3.8], [-16.15, -0.2, 3.8], [0, -2.1, 0]], belly: [[5.9, -3.0, -5], [-5.9, -3.0, -5], [0, -2.1, 0], [0, -2.0, -14.2], [0, -1.08, 11.8]] },
-    cabin: { rows: 30, pitch: 0.79, z0: -10.8, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], pax: 125, psuXs: [-1.17, 1.17], entryHx: 1.7, crewPostX: 0.62, profile: { sx: 1, door1: -13.4, door2: 12.6, aisles: [0], centrePSU: false } },
+    cabin: { rows: 30, pitch: 0.79, z0: -10.8, seatXs: [-1.505, -1.005, -0.505, 0.505, 1.005, 1.505], aisleXs: [0], pax: 125, psuXs: [-1.17, 1.17], entryHx: 1.7, crewPostX: 0.62, profile: { sx: 1, dy: 0, door1: -13.4, door2: 12.6, aisles: [0], centrePSU: false } },
     gse: { belt1z: -8.8, belt2z: 10.2, contz: 6.9, fuelX: 16, fuelz: -1.4, fuelPanelX: 13.5, fuelPanelZ: 2.7, lavz: 19.2, waterz: 17.6, vanz: -37.2, trainz: -9.0, doorR1z: -13.4, doorR2z: 12.6, catX: 6.75, contX: 6.15, beltX: null, lavX: 3.2, waterX: 7.2 },
   },
   {
@@ -66,7 +66,7 @@ export const TYPES = [
     // the widebody's own planform (the fox te values break this wing; see ac-model wingSec).
     vis: { wg: { b0: 1.9, bK: 9.0, bT: 29.9, sweep: Math.tan(31.9 * Math.PI / 180), dih: Math.tan(6 * Math.PI / 180), zRef: -6.0, bRef: 2.6, yRef: -1.5, te: [4.3, 4.8, 13.9] }, ht: { b0: 0.5, bT: 11.2, z0: 24.6, y0: 1.6, sweep: Math.tan(33.5 * Math.PI / 180), dih: Math.tan(5 * Math.PI / 180), cr: 5.6, ct: 1.9 }, vt: { y0: 2.0, h: 8.6, z0: 21.5, sweep: Math.tan(38 * Math.PI / 180), cr: 8.6, ct: 2.9 }, eng: { x: 9.6, y: -2.9, z0: -10.5, scale: 1.45 }, wingletScale: 1.5, mask: true, flatFan: false, fair: { yc: -1.5, a: 3.3, b: 1.75 } },
     fdm: { mass: 215000, I: { pitch: 3.0e7, roll: 1.33e7, yaw: 3.9e7 }, S: 443, CBAR: 7.0, B: 61.0, thrust: 374000, engX: 9.6, probes: [[0, -3.0, -29.4], [0, -1.6, 23.5], [9.6, -4.4, -8], [-9.6, -4.4, -8], [29.6, -0.3, 5.5], [-29.6, -0.3, 5.5], [0, -3.1, 0]], belly: [[9.6, -4.4, -8], [-9.6, -4.4, -8], [0, -3.1, 0], [0, -3.0, -25.9], [0, -1.6, 23.5]] },
-    cabin: { rows: 33, pitch: 0.84, z0: -21.5, seatXs: [-2.5, -1.97, -1.44, -0.5, 0, 0.5, 1.44, 1.97, 2.5], aisleXs: [-0.97, 0.97], pax: 252, psuXs: [-2.05, 0, 2.05], entryHx: 2.7, crewPostX: 0.97, profile: { sx: 2.98 / 1.98, door1: -24.8, door2: 9.0, aisles: [-0.97, 0.97], centrePSU: true } },
+    cabin: { rows: 33, pitch: 0.84, z0: -21.5, seatXs: [-2.5, -1.97, -1.44, -0.5, 0, 0.5, 1.44, 1.97, 2.5], aisleXs: [-0.97, 0.97], pax: 252, psuXs: [-2.05, 0, 2.05], entryHx: 2.7, crewPostX: 0.97, profile: { sx: 2.98 / 1.98, dy: 0.19, door1: -24.8, door2: 9.0, aisles: [-0.97, 0.97], centrePSU: true } },
     gse: { belt1z: -20.2, belt2z: 6.6, contz: 3.3, fuelX: 23, fuelz: -3.0, fuelPanelX: 20, fuelPanelZ: 3.4, lavz: 24.5, waterz: 23.0, vanz: -48.9, trainz: -20.4, doorR1z: -24.8, doorR2z: 9.0, catX: 7.7, contX: 7.1, beltX: null, lavX: 4.3, waterX: 8.2 },
   },
   {
@@ -98,7 +98,7 @@ export const TYPES = [
     // leading edge never crosses the trailing edge at any station (the a350 lesson).
     vis: { wg: { b0: 0.9, bK: 4.4, bT: 9.3, sweep: Math.tan(23 * Math.PI / 180), dih: Math.tan(4 * Math.PI / 180), zRef: -1.6, bRef: 1.0, yRef: -0.92, te: [1.75, 2.1, 3.25] }, ht: { b0: 0.05, bT: 2.6, z0: 8.45, y0: 3.88, sweep: Math.tan(30 * Math.PI / 180), dih: Math.tan(3 * Math.PI / 180), cr: 2.15, ct: 0.85 }, vt: { y0: 0.85, h: 3.2, z0: 6.3, sweep: Math.tan(38 * Math.PI / 180), cr: 3.6, ct: 1.15 }, eng: { x: 3.1, y: -1.55, z0: -2.7, scale: 0.62 }, wingletScale: 0.8, mask: false, flatFan: false, fair: { yc: -0.63, a: 1.45, b: 0.82 } },
     fdm: { mass: 17500, I: { pitch: 5.2e5, roll: 2.6e5, yaw: 7.4e5 }, S: 46, CBAR: 2.4, B: 20.4, thrust: 67000, engX: 3.1, probes: [[0, -1.15, -9.9], [0, -0.62, 7.6], [3.1, -1.75, -2.2], [-3.1, -1.75, -2.2], [9.1, -0.1, 2.2], [-9.1, -0.1, 2.2], [0, -1.25, 0]], belly: [[3.1, -1.75, -2.2], [-3.1, -1.75, -2.2], [0, -1.25, 0], [0, -1.15, -8.2], [0, -0.62, 7.6]] },
-    cabin: { rows: 3, pitch: 1.02, z0: -4.35, seatXs: [-0.78, -0.30, 0.30, 0.78], aisleXs: [0], pax: 8, psuXs: [-0.55, 0.55], entryHx: 1.15, crewPostX: 0.45, profile: { sx: 1.32 / 1.98, door1: -5.25, door2: 3.2, aisles: [0], centrePSU: false } },
+    cabin: { rows: 3, pitch: 1.02, z0: -4.35, seatXs: [-0.78, -0.30, 0.30, 0.78], aisleXs: [0], pax: 8, psuXs: [-0.55, 0.55], entryHx: 1.15, crewPostX: 0.45, profile: { sx: 1.32 / 1.98, dy: -0.30, door1: -5.25, door2: 3.2, aisles: [0], centrePSU: false } },
     gse: { belt1z: 5.2, belt2z: 7.6, contz: 4.4, fuelX: 9, fuelz: 0.4, fuelPanelX: 7.4, fuelPanelZ: 2.2, lavz: 10.6, waterz: 9.8, vanz: -22, trainz: -5.5, doorR1z: -5.25, doorR2z: 3.2, catX: 4.6, contX: 4.2, beltX: null, lavX: 2.4, waterX: 4.8 },
   },
 ];
