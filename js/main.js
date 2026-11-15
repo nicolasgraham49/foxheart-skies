@@ -35,6 +35,7 @@ import * as Stories from './stories.js';
 import * as CrewTalk from './crewtalk.js';
 import * as Charter from './charter.js';
 import * as Walkaround from './walkaround.js';
+import * as StairsBus from './stairsbus.js'; // [Stairs + bus] PJ-1 charter ops: stair truck + apron bus, no jet bridge
 import { GFX, setMsaaActive } from './gfx.js';
 import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
@@ -411,8 +412,9 @@ async function startFlight(cfg) {
   CrewTalk.reset(); // [Crew conversations] and no crew conversation or interphone state carried over
   Charter.reset(); // [Private charter] and no charter encounter or card carried over
   Walkaround.reset(); // [Walk-around preflight] and no preflight route or gate carried over
+  StairsBus.reset(); // [Stairs + bus] and no stair truck, bus or walker carried over
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
-  crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); W.stand.jb?.userData?.setDocked?.(true); }
+  crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); if (!(cfg.mode === 'charter' && cfg.contract && TYPE.id === 'pjet')) W.stand.jb?.userData?.setDocked?.(true); } // [Stairs + bus] the PJ-1 never docks a bridge
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
   const atGate = cfg.start === 'gate' || cfg.start === 'terminal', cold = !!cfg.cold && atGate;
   sys.reset(cold ? 'cold' : atGate && !cfg.menu ? 'gate' : 'run'); fails.reset(); fails.random = cfg.menu ? 'off' : settings.failRand || 'off'; if (cfg.fail && !cfg.menu) fails.trigger(cfg.fail, { eng: 0 }); rescue.clear(); Object.assign(W, { evac: false, emerStop: false, rescueT: 0, foam: false, braced: false, emergPA: false, bellyT: 0, souls: TYPE.id === 'fox' ? 120 + ((Math.random() * 50) | 0) + 6 : TYPE.cabin.pax + 5 + ((Math.random() * 10) | 0) }); W.ndRange = null;
@@ -423,6 +425,7 @@ async function startFlight(cfg) {
   // type's own values — airline flights run with exactly the boot state, as always.
   W.charter = null;
   if (cfg.mode === 'charter' && cfg.contract && TYPE.id === 'pjet') { const C = Charter.byId(cfg.contract); if (C) { W.charter = { id: C.id, n: C.party, name: C.name }; Charter.setContract(C.id); } }
+  if (W.charter && W.stand) StairsBus.setupDeparture(scene, aircraft, ground(aircraft.position.x, aircraft.position.z).h, W.charter.n, cfg.start === 'gate'); // [Stairs + bus] stairs at the door + the bus at the kerb
   const paxKey = W.charter ? 'charter' + W.charter.n : 'std';
   if (paxKey !== _paxKey) { _paxKey = paxKey; if (W.charter) { setFlightPax(W.charter.n); applyCabinType({ ...TYPE.cabin, pax: W.charter.n }); } else { setFlightPax(null); applyCabinType(TYPE.cabin); } }
   if (W.charter) W.souls = W.charter.n + 4; lights._auto = undefined; W.coldDone = !cold; W.coldT = 0; W.autoStart = null;
@@ -504,6 +507,7 @@ function startPushback() {
   const P0 = fdm.pos.clone(), P1 = P0.clone().addScaledVector(n, 30), Rr = 26, C = P1.clone().addScaledVector(n, Rr), P2 = C.clone().addScaledVector(u, -Rr);
   // ground crew first: jet bridge retracts, cones and chocks come away, GPU off, the tug drives in and hooks up (about 7 s)
   W.stand?.jb?.userData?.setDocked?.(false); W.parkedAt?.jb?.userData?.setDocked?.(false);
+  StairsBus.reset(); // [Stairs + bus] the stair truck and bus clear the stand before she moves
   aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); if (crew.state === 'off') crew.atStand(aircraft, ground); crew.startPush(aircraft);
   W.push = { t: -7, T1: 20, T2: 24, P0, P1, C, P2, n, u, done: false }; toast('Pushback: the bridge is retracting and the tug is connecting…');
 }
@@ -528,7 +532,7 @@ function autoTaxiStep(dt) {
 function enterFoot(mode) {
   const b = W.standB || W.primary; const st = mode === 'arr' ? W.parkedAt : W.stand; if (!b || !st) return;
   aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true);
-  disposeFlightCabin(); if (!foot.parts) foot.build({ mode, apt: b.apt, b, stand: st, dest: mode === 'dep' ? W.dest : W.cfg.apt, featured: featured() });
+  disposeFlightCabin(); if (!foot.parts) foot.build({ mode, apt: b.apt, b, stand: st, dest: mode === 'dep' ? W.dest : W.cfg.apt, featured: featured(), stairsBus: mode === 'dep' && !!W.charter }); // [Stairs + bus] the flag rides the existing opts
   foot.enter(mode === 'dep' ? 'hall' : 'cockpit'); foot.hideInteriors(true); W.onFoot = true; W.footMode = mode;
   $('#flight').hidden = true; $('#foot').hidden = false; $('#radio').hidden = true; setView('cockpit');
   if (mode === 'dep') { if (W.charter) Charter.arm(foot, Charter.byId(W.charter.id)); else Stories.arm(foot); } // [Stories era] one of the 121 waiting in the lounge has a story today — [Private charter] on a charter flight the lounge holds only the clients, and the lead client is the encounter
@@ -628,6 +632,7 @@ function beginBoarding() {
   const c = ensureCabin(); if (!c) return false;
   S.phase = 'boarding'; S.group = 0; S.callT = 0;
   c.beginBoarding(); if (foot.parts && foot.parts.cabin === c) foot.boarding = true;
+  if (W.charter) { c.setFeeder('stairs'); StairsBus.startBoarding(); } // [Stairs + bus] on the PJ-1 the bus drives the admits — no bridge, no door clock
   const dest = W.dest ? (SHORT[W.dest.icao] || W.dest.city) : 'our destination';
   audio.chime(); paSpeak(W.charter ? `Ladies and gentlemen, the Foxheart Charter flight to ${dest} is now boarding at gate ${S.gate}. Would our charter guests please make their way to the aircraft.` : `Ladies and gentlemen, Nicofoxheart Air flight four one two to ${dest} is now boarding at gate ${S.gate}. Please have your boarding pass ready, and listen for your group number.`, 'GATE');
   toast(W.charter ? 'Your clients are boarding at gate ' + S.gate + ' — all ' + W.charter.n + ' of them.' : 'Boarding has begun at gate ' + S.gate + ' — the cabin fills group by group.', 4500);
@@ -660,11 +665,12 @@ function finishBoardingNow() { // the game's skip-ahead idiom: wrap boarding up 
   const c = cabinObj(); if (c) c.seatAll();
   if (foot.parts) foot.boardingDone = true;
   S.phase = 'done'; toast('Boarding complete — everyone is aboard.', 3500);
+  StairsBus.cancel(); // [Stairs + bus] boarding wrapped up early — the bus heads back
 }
 function takeSeat() {
   captainSignedIn(); // [Nothing starts until sign-in] taking the seat is taking command — the gate releases here, so no path can strand the flight
   const BS = W.boarding;
-  if (BS && BS.phase === 'boarding') { foot.parts?.cabin.setFeeder?.('door'); } // boarding continues behind the captain — the lounge hands over to the door clock
+  if (BS && BS.phase === 'boarding') { if (W.charter) StairsBus.collectAll(); else foot.parts?.cabin.setFeeder?.('door'); } // boarding continues behind the captain — [Stairs + bus] on a charter the bus keeps driving the admits and gathers whoever is still in the hall; on an airline flight the lounge hands over to the door clock
   else { if (!foot.boardingDone) { audio.chime(); foot.boardingDone = true; foot.parts?.cabin.seatAll(); } if (BS && BS.phase === 'pending') BS.phase = 'done'; }
   W.onFoot = false; foot.active = false; foot.hideInteriors(false);
   try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { }
@@ -678,7 +684,8 @@ function parkAtGate(st) {
   Object.assign(sys.sw, { master1: false, master2: false, apuMaster: true, apuBleed: true, beacon: false }); sys.apuN = 100; sys.apuFlap = 1; W.autoStart = null;
   setTimeout(() => { if (W.parkedAt === st) paSay('arrival'); }, 1500); setTimeout(() => { if (W.parkedAt === st) setSigns(false, W.signs.smoke); }, 9000); aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true);
   foot.build({ mode: 'arr', apt: b.apt, b, stand: st, dest: W.cfg.apt, featured: featured() }); foot.hideInteriors(false);
-  crew.atStand(aircraft, ground, true); st.jb?.userData?.setDocked?.(true);
+  crew.atStand(aircraft, ground, true);
+  if (W.charter) StairsBus.setupArrival(scene, aircraft, ground(aircraft.position.x, aircraft.position.z).h, W.charter.n); else st.jb?.userData?.setDocked?.(true); // [Stairs + bus] a charter arrival gets the stairs + bus, not the bridge
   toast('Parked at gate ' + st.gateName + '. Press Enter to stand up and walk out with the passengers.', 6000);
 }
 function finishTrip() {
@@ -1581,6 +1588,7 @@ function renderRest(dt, night) {
   Stories.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Stories era] marker bob + the one cruise beat
   Charter.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Private charter] client marker bob + the one cruise beat (inert unless a charter is armed)
   Walkaround.frame(dt * (W.timeAccel || 1), { foot, onFoot: W.onFoot, signedIn: W.signedIn, toast }); // [Walk-around preflight] checkpoint prompts + markers on the apron (inert unless a terminal departure armed it)
+  StairsBus.frame(W.paused ? 0 : dt * (W.timeAccel || 1), { camera, exposure: sky.exposure, simTime: W.simTime, admitNext: () => { const c = cabinObj(); return c ? c.admitNext() : false; }, entered: () => { const c = cabinObj(); return c ? c.boardingInfo().entered : 0; }, outCount: () => { const c = cabinObj(); return c ? c.boarders.reduce((n, p) => n + (p.state === 'gone' ? 1 : 0), 0) : 0; }, loungeDown: () => { const f = foot.parts && foot.parts.term && foot.parts.term.flightPax; return f ? f.reduce((n, p) => n + (p.bp && p.bp.state === 'gone' ? 1 : 0), 0) : 0; } }); // [Stairs + bus] bus routes, stair climbs, deplane mirror (inert unless a charter flight set it up)
   CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot, hold: !W.signedIn }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats; [Nothing starts until sign-in] hold: the interphone beats wait for the captain (on-foot crew talk is not held)
   if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
   if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
@@ -2098,6 +2106,7 @@ window.__sim = {
   charter: () => Charter.state(), // [Private charter] armed contract, meeting state, notes + rotation
   crewTalk: () => CrewTalk.state(), // [Crew conversations] roster positions/phases, open card, interphone beats
   walkaround: () => Walkaround.state(), // [Walk-around preflight] route, gate, open card
+  stairsbus: () => StairsBus.state(), // [Stairs + bus] bus/stairs/walker state for tests
   taxiLineVis: () => !!(taxiLine && taxiLine.visible), // [Playtest fixes Nov 14] test hook: is the magenta taxi route line rendering?
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },

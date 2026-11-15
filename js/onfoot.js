@@ -85,7 +85,7 @@ export class OnFoot {
   zoom(s) { this.camDist = THREE.MathUtils.clamp(this.camDist * (1 + s * 0.12), 1.2, 6); if (this.camMode === 'first' && s > 0) this.camMode = 'third'; return this.camDist; }
   // o: { mode:'dep'|'arr', apt, b (built airport entry), stand, dest, featured }
   build(o) {
-    this.dispose(); const R = rng(Date.now() & 0xffff); this.o = o;
+    this.dispose(); const R = rng(Date.now() & 0xffff); this.o = o; this.stairsBus = !!o.stairsBus; // [Stairs + bus] PJ-1 charter departures: lounge clients leave at the gate door, down to the apron bus (see stairsbus.js)
     const fr = o.b.b.frame, base = new THREE.Vector3(o.b.x, o.b.elev, o.b.z);
     const n = new THREE.Vector3(fr.nx, 0, fr.nz), ad = new THREE.Vector3(fr.adx, 0, fr.adz);
     const Ofac = base.clone().add(new THREE.Vector3(fr.ax, 0, fr.az)).add(ad.clone().multiplyScalar(o.stand.s)).addScaledVector(n, -fr.facadeD);
@@ -348,7 +348,7 @@ export class OnFoot {
       if (bp.leg === 0) { if (move(p, dx + 7 + lane, F, 13.9, 1.25)) bp.leg = 1; }
       else if (bp.leg === 1) { if (move(p, dx + 7 + lane, F, 5.6 + row, 1.2)) { bp.leg = 2; p.mode = 'stand'; } }
       else if (bp.leg === 2) { if (this.time < bp.scanAt) { p.mode = 'stand'; p.act = 'idle'; } else if (move(p, dx + 7 + lane * 0.4, F, 3.05, 1.1)) { bp.state = 'scan'; bp.scanEnd = this.time + 1.25; p.mode = 'stand'; } }
-      else if (bp.leg === 3) { if (move(p, dx, F, 1.3, 1.2)) bp.leg = 4; }
+      else if (bp.leg === 3) { if (move(p, dx, F, 1.3, 1.2)) { if (this.stairsBus) { bp.state = 'gone'; p.hidden = true; } else bp.leg = 4; } } // [Stairs + bus] charter clients go down to the bus here — stairsbus.js counts them off the lounge crowd and admits them at the aircraft door
       else if (bp.leg === 4) { if (move(p, L.pts.fp.x, L.pts.fp.y, L.pts.fp.z, 1.1)) bp.leg = 5; }
       else if (bp.leg === 5) { if (move(p, L.pts.rr.x, L.pts.rr.y, L.pts.rr.z, 1.0)) bp.leg = 6; }
       else if (bp.leg === 6) { if (move(p, L.pts.d.x, L.pts.d.y, L.pts.d.z, 1.0)) { bp.state = 'gone'; p.hidden = true; cabin.admitNext(); } } }
