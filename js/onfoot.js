@@ -8,6 +8,7 @@ import { buildTerminal, buildBridge, buildCabin, boardRows, CABIN, WalkMap } fro
 import { rng } from './terrain.js';
 import { SHORT } from './atc.js';
 import { People } from './people.js';
+import { stairFrame } from './stairsbus.js'; // [Charter apron] the captain's stair slope shares the stair truck's geometry
 
 const EYE = 1.62, TAU = Math.PI * 2;
 // per walk-zone tag: [max boom (m), camera height cap above that floor (m), shoulder offset (m)]
@@ -86,13 +87,15 @@ export class OnFoot {
   // o: { mode:'dep'|'arr', apt, b (built airport entry), stand, dest, featured }
   build(o) {
     this.dispose(); const R = rng(Date.now() & 0xffff); this.o = o; this.stairsBus = !!o.stairsBus; // [Stairs + bus] PJ-1 charter departures: lounge clients leave at the gate door, down to the apron bus (see stairsbus.js)
+    this.apron = !!o.apron; // [Charter apron] a charter session builds no terminal at all (see _buildApron)
     const fr = o.b.b.frame, base = new THREE.Vector3(o.b.x, o.b.elev, o.b.z);
     const n = new THREE.Vector3(fr.nx, 0, fr.nz), ad = new THREE.Vector3(fr.adx, 0, fr.adz);
-    const Ofac = base.clone().add(new THREE.Vector3(fr.ax, 0, fr.az)).add(ad.clone().multiplyScalar(o.stand.s)).addScaledVector(n, -fr.facadeD);
-    // bridge geometry: façade F → rotunda Rr → aircraft door D
     this.aircraft.updateMatrixWorld(true);
     const D = this.aircraft.localToWorld(new THREE.Vector3(CABIN.door.x - 0.25, CABIN.floor, CABIN.door.z));
     const left = new THREE.Vector3(-1, 0, 0).applyQuaternion(this.aircraft.quaternion).setY(0).normalize();
+    if (this.apron) return this._buildApron(o, R, base, n, D, left); // [Charter apron]
+    const Ofac = base.clone().add(new THREE.Vector3(fr.ax, 0, fr.az)).add(ad.clone().multiplyScalar(o.stand.s)).addScaledVector(n, -fr.facadeD);
+    // bridge geometry: façade F → rotunda Rr → aircraft door D
     const Rr = D.clone().addScaledVector(left, 7.5); Rr.y = D.y + 0.7;
     const Fp = Rr.clone().addScaledVector(n, -(Rr.clone().sub(Ofac).dot(n))); Fp.y = base.y + 4.6;
     // terminal hall around the façade point of this gate
@@ -145,10 +148,67 @@ export class OnFoot {
     this._ckAt = 0; this._alarmAt = -9; this._plz = null; this._destName = destName;
     return this;
   }
+  // [Charter apron] the charter on-foot session: NO terminal, NO jet bridge — the
+  // cabin, the open apron around the jet, and the airstair's own slope as the way
+  // up (its geometry comes from stairsbus.js's stairFrame, so the captain climbs
+  // the very steps the clients climb). The captain spawns on the apron beside the
+  // jet; on arrival the trip ends at the FBO kerb point where the bus works from.
+  _buildApron(o, R, base, n, D, left) {
+    const fwdA = new THREE.Vector3(0, 0, -1).applyQuaternion(this.aircraft.quaternion).setY(0).normalize();
+    const cabin = buildCabin(o.apt.icao, R); this.aircraft.add(cabin.group);
+    for (const p of cabin.crowd.p) if (p.talkSide == null) p.talkSide = p.i % 2 ? 1 : -1; // the seated 'talk' pose needs a side (undefined gave NaN bones)
+    if (o.mode === 'arr') { cabin.boarders.forEach(p => { p.state = 'seated'; p.seated = true; p.hidden = false; p.y = CABIN.floor + 0.42; p.x = p.target.x; p.z = p.target.z + 0.08; p.yaw = Math.PI; }); const bp = cabin.baby; if (bp) { const par = bp.baby; bp.hidden = false; bp.state = 'seated'; bp.x = par.x; bp.z = par.z - 0.22; bp.y = CABIN.floor + 0.36; } }
+    if (o.mode === 'dep') cabin.setFeeder('stairs'); // the bus delivers the party to the stairs; stairsbus.js admits each client at the door
+    // walk map: cabin zones (world space, as in the terminal build) + the apron + the stair slope
+    const wm = new WalkMap();
+    const toWorldBody = (x, y, z) => this.aircraft.localToWorld(new THREE.Vector3(x, y, z));
+    for (const z of cabin.zones) { const c = this.aircraft.localToWorld(new THREE.Vector3(z.x, 0, z.z)); const yw = y => this.aircraft.localToWorld(new THREE.Vector3(0, y, 0)).y; wm.rect(c, fwdA, z.hz, z.hx, yw(z.y0), yw(z.y1), z.tag); }
+    const apronY = base.y, gy = apronY - this.aircraft.position.y; // local y of the apron surface (parked, level)
+    wm.rect(new THREE.Vector3(this.aircraft.position.x, apronY, this.aircraft.position.z), fwdA, 46, 42, apronY, apronY, 'apron');
+    const SF = stairFrame(this.aircraft.position.y - apronY - 0.55); // the live sill, measured exactly as stairsbus.js measures it
+    const basePt = toWorldBody(SF.baseX + 0.3, gy, SF.doorZ); basePt.y = apronY;
+    const mid = D.clone().add(basePt).multiplyScalar(0.5), run = Math.hypot(basePt.x - D.x, basePt.z - D.z);
+    wm.rect(mid, left, run / 2 + 0.3, 0.62, D.y, apronY, 'apron'); // door end (at -left) at sill height, apron end at apron level
+    // floorAt picks a floor by height proximity, so the flat apron rect would win
+    // over the slope lying on it at every step and the captain would walk UNDER
+    // the stair truck. On this build only, wrap the map: inside the slope's
+    // footprint, a climbable step up (<= 0.6 m above the walker's current floor)
+    // beats the flat apron — the first step mounts the stairs, proximity does the
+    // rest of the climb, and crossing the truck's footprint higher up (where the
+    // slope is more than a step above the apron) stays flat, so the walk-around
+    // checkpoints beside the fuselage keep their ground.
+    const slopeZ = wm.zones[wm.zones.length - 1], floorAt0 = wm.floorAt.bind(wm);
+    wm.floorAt = (x, z, prefY) => {
+      const [a, b] = wm.local(slopeZ, x, z);
+      if (Math.abs(a) <= slopeZ.hl && Math.abs(b) <= slopeZ.hw) {
+        const sy = slopeZ.y0 + (slopeZ.y1 - slopeZ.y0) * (a + slopeZ.hl) / (2 * slopeZ.hl);
+        if (sy > prefY + 0.02 && sy - prefY <= 0.6) return { y: sy, tag: slopeZ.tag };
+      }
+      return floorAt0(x, z, prefY);
+    };
+    this.walk = wm; this.parts = { term: null, bridge: null, cabin, Fp: null, Rr: null, D, n };
+    this.grid = null; this.apronMesh = null; this.lounge = null;
+    this.avatar();
+    // spawn: on the apron outboard of the wing, just aft of the door — beside the jet
+    this.apronSpawn = toWorldBody(SF.doorX - 5.2, gy, SF.doorZ + 5.5); this.apronSpawn.y = apronY;
+    const look = D.clone().sub(this.apronSpawn); this.apronYaw = Math.atan2(-look.x, -look.z);
+    this.exitPos = toWorldBody(-30, gy, -34); this.exitPos.y = apronY; // the FBO kerb point (stairsbus.js's KERB, in body coords)
+    this.routeToCockpit = [this.apronSpawn.clone(), basePt.clone(), D.clone(), toWorldBody(CABIN.door.x + 0.78, CABIN.floor, CABIN.door.z), toWorldBody(CABIN.aisleXs[0], CABIN.floor, CABIN.door.z - 0.3), toWorldBody(-0.2, CABIN.floor, CABIN.ckSeatZ + 0.75), toWorldBody(-0.45, CABIN.ckFloor, CABIN.ckSeatZ - 0.2)];
+    this.routeOut = this.routeToCockpit.slice(3).reverse().concat([D.clone(), basePt.clone(), this.exitPos.clone()]);
+    this.seat = toWorldBody(-0.52, CABIN.ckFloor, CABIN.ckSeatZ);
+    this.boardingDone = false; this.announced = false; this.greeted = false;
+    this.flow = { crew: null, tray: false, trayLane: -1, arch: false, done: false };
+    this.storyFig = null; this.storyName = ''; this.storyMet = false;
+    this.charterFig = null; this.charterName = ''; this.charterMet = false;
+    this._ckAt = 0; this._alarmAt = -9; this._plz = null; this._destName = o.dest ? (SHORT[o.dest.icao] || o.dest.city) : '';
+    this.cityInfo = null; this.cityPrompt = null;
+    return this;
+  }
   enter(where) {
     this.active = true; this.time = 0;
     const p = this.parts;
     if (where === 'cockpit') { this.pos.copy(this.seat).add(new THREE.Vector3(0, 0, 0)); this.pos.y = this.walk.floorAt(this.pos.x, this.pos.z, this.pos.y)?.y ?? this.pos.y; const back = new THREE.Vector3(0, 0, 1).applyQuaternion(this.aircraft.quaternion); this.yaw = Math.atan2(-back.x, -back.z); this.pos.addScaledVector(back, 0.35); this.parts.cabin.deplane(); this.deplaning = true; }
+    else if (where === 'apron') { this.pos.copy(this.apronSpawn); this.yaw = this.apronYaw; } // [Charter apron] the captain starts beside the jet
     else { const s = p.term.spawn; this.pos.copy(s.pos); const f = p.n.clone(); this.yaw = Math.atan2(-f.x, -f.z); }
     this.pitch = this.thirdPerson && where !== 'cockpit' ? -0.2 : -0.05; this.floorY = this.pos.y;
     this.bodyYaw = this.yaw; this.vel.set(0, 0, 0); this.camE = 0.8; this.fpK = where === 'cockpit' || !this.thirdPerson ? 1 : 0; this.lookIdle = 9; this.anim.stop = 0;
@@ -157,11 +217,13 @@ export class OnFoot {
   dispose() {
     if (this.apronMesh) { this.scene.remove(this.apronMesh); this.apronMesh.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); }); this.apronMesh = null; }
     if (!this.parts) return; const { term, bridge, cabin } = this.parts;
-    this.scene.remove(term.group); this.scene.remove(bridge.group); this.aircraft.remove(cabin.group); term.dispose(); bridge.dispose(); cabin.dispose();
+    if (term) { this.scene.remove(term.group); term.dispose(); } // [Charter apron] an apron session has no terminal or bridge to remove
+    if (bridge) { this.scene.remove(bridge.group); bridge.dispose(); }
+    this.aircraft.remove(cabin.group); cabin.dispose();
     if (this.o?.stand?.jb) this.o.stand.jb.visible = true;
     this.parts = null; this.active = false; this.grid = null; this.lounge = null; this.avRoot.visible = false;
   }
-  hideInteriors(v) { if (!v) this.avRoot.visible = false; if (!this.parts) return; this.parts.term.group.visible = this.parts.cabin.group.visible = v; }
+  hideInteriors(v) { if (!v) this.avRoot.visible = false; if (!this.parts) return; if (this.parts.term) this.parts.term.group.visible = v; this.parts.cabin.group.visible = v; } // [Charter apron] term may be null
   zoneTag() { const f = this.walk.floorAt(this.pos.x, this.pos.z, this.floorY); return f ? f.tag : ''; }
   zoneAt(x, z, prefY) { // walk zone under (x, z), ignoring furniture blocks (the camera may pass over benches)
     let best = null, by = 0;
@@ -224,10 +286,11 @@ export class OnFoot {
     // the avatar: walk / run cycle at the real ground speed, idle when stopped; hidden in first person
     if (this.av) { const p = this.av.p[0]; this._animate(dt, moved); p.x = this.pos.x; p.y = this.pos.y; p.z = this.pos.z; p.yaw = this.bodyYaw + Math.PI;
       const show = tp && this.fpK < 0.55; this.avRoot.visible = show; if (show) { this.av.setExposure(k); this.av.commit(this.anim.t, H); } }
-    term.mat.color.setScalar(k); if (term.shafts) term.shafts.opacity = 0.14 * Math.max(0, Math.min(1, (2.0 - exposure) / 1.2)); cabin.mat.color.setScalar(k); cabin.light && cabin.light(k); term.crowd.setExposure(k); cabin.crowd.setExposure(k);
+    if (term) { term.mat.color.setScalar(k); if (term.shafts) term.shafts.opacity = 0.14 * Math.max(0, Math.min(1, (2.0 - exposure) / 1.2)); term.crowd.setExposure(k); } // [Charter apron] no terminal on an apron session
+    cabin.mat.color.setScalar(k); cabin.light && cabin.light(k); cabin.crowd.setExposure(k);
     if (this.o.mode === 'dep' && !this.boarding && cabin.boardingInfo().on) { this.boarding = true; this.onEvent && this.onEvent('boarding'); } // main.js began the boarding session (turnaround flow)
     if (this.o.mode === 'dep' && this.boarding) this._loungeStep(dt);
-    const cp = this.camera.position; term.update(dt, this.time, cp);
+    const cp = this.camera.position; if (term) term.update(dt, this.time, cp); // [Charter apron]
     if (this.deplaning) cabin.updateOut(dt, this.time, cp);
     else if (this.boarding) { const done = cabin.update(dt, this.time, cp); if (done && !this.boardingDone) { this.boardingDone = true; this.onEvent && this.onEvent('boarded'); } } else cabin.crowd.commit(this.time, cabin.group.worldToLocal(cp.clone()));
     // events and prompts
@@ -237,9 +300,10 @@ export class OnFoot {
       if (['entry', 'door'].includes(tag) && !this.greeted) { this.greeted = true; this.onEvent && this.onEvent('greet'); }
       if (this.pos.distanceTo(this.seat) < 1.1) this.prompt = 'E  Take the captain’s seat';
       else if (tag === 'hall') this.prompt = 'Walk to the gate and down the jet bridge · J skips to the flight deck · V camera';
+      else if (this.apron && tag === 'apron') this.prompt = 'Your jet, your apron — walk the preflight, meet your clients at the stairs · J skips to the flight deck · V camera'; // [Charter apron]
     } else {
-      if (this.pos.distanceTo(this.exitPos) < 6) this.prompt = 'E  Leave the airport and finish your trip';
-      else if (tag === 'cockpit') this.prompt = 'Follow the passengers out through the door on the left · J skips to the arrival hall';
+      if (this.pos.distanceTo(this.exitPos) < 6) this.prompt = this.apron ? 'E  Finish your trip at the FBO point' : 'E  Leave the airport and finish your trip'; // [Charter apron]
+      else if (tag === 'cockpit') this.prompt = 'Follow the passengers out through the door on the left · J skips ' + (this.apron ? 'down to the apron' : 'to the arrival hall'); // [Charter apron]
     }
     // ---- terminal flow gates + prompts (Terminal rebuild): crew sign-in, then tray -> arch
     // -> collect; airside past the security exit only opens once the tray is collected.
@@ -286,6 +350,10 @@ export class OnFoot {
     // [Crew conversations] standing by a working crew member (apron): the talk prompt,
     // computed by crewtalk.js in the main loop.
     if (this.crewPrompt) this.prompt = this.crewPrompt;
+    // [Charter apron] standing by the lead client at the foot of the stairs: the meet
+    // prompt, computed by charter.js in the main loop — over the crew chatter, under
+    // the walk-around prompts (the gated task keeps the last word).
+    if (this.charterPrompt) this.prompt = this.charterPrompt;
     // [Walk-around preflight] standing at a checkpoint (apron): the inspect / release
     // prompt, computed by walkaround.js in the main loop, wins while it is set — the
     // gated inspection must stay visible even where a crew member works the same spot.
@@ -326,7 +394,8 @@ export class OnFoot {
   _loungeStep(dt) { // real boarding, lounge side: when the cabin calls a group, its figures rise, gather at
     // the podium, pause for the scan, then walk the gate door and the jet bridge; a figure that reaches the
     // aircraft door admits the next waiting cabin passenger, so the two crowds hand over one-for-one.
-    const { term, cabin, Fp, Rr, D } = this.parts; const figs = term.flightPax; if (!figs || !figs.length) return;
+    const { term, cabin, Fp, Rr, D } = this.parts; if (!term) return; // [Charter apron] no lounge on an apron session — the bus feeds the cabin directly
+    const figs = term.flightPax; if (!figs || !figs.length) return;
     const L = this.lounge || (this.lounge = { seen: 0, pts: null });
     if (!L.pts) { const lc = v => term.group.worldToLocal(v.clone()); L.pts = { fp: lc(Fp), rr: lc(Rr), d: lc(D) }; }
     const info = cabin.boardingInfo(), dx = term.doorX, F = term.F;

@@ -395,7 +395,7 @@ async function startFlight(cfg) {
     else { fdm.ap.route = W.route = cfg.route.wps.map(([lat, lon, name]) => ({ lat, lon, name, x: W.geo.x(lon), z: W.geo.z(lat) })); fdm.ap.wp = 0; fdm.ap.lat = 'NAV'; fdm.ap.vert = 'ALT'; fdm.ap.alt = cfg.route.alt; }
     W.phase = 'approach';
   } else if ((cfg.start === 'gate' || cfg.start === 'terminal') && W.primary.b.stands.length) {
-    const st = pickStand(W.primary); placeAtStand(W.primary, st);
+    const st = (cfg.mode === 'charter' && cfg.contract && TYPE.id === 'pjet') ? (charterRemoteStand(W.primary) || pickStand(W.primary)) : pickStand(W.primary); placeAtStand(W.primary, st); // [Charter apron] charter parks on the open apron, never at a gate
     fdm.ap.spd = Math.round(sp.v2 + 10); fdm.ap.alt = Math.round((elev / FT + 5000) / 1000) * 1000; fdm.ap.hdg = Math.round(E.hdg);
     W.phase = 'gate';
   } else {
@@ -425,7 +425,7 @@ async function startFlight(cfg) {
   // type's own values — airline flights run with exactly the boot state, as always.
   W.charter = null;
   if (cfg.mode === 'charter' && cfg.contract && TYPE.id === 'pjet') { const C = Charter.byId(cfg.contract); if (C) { W.charter = { id: C.id, n: C.party, name: C.name }; Charter.setContract(C.id); } }
-  if (W.charter && W.stand) StairsBus.setupDeparture(scene, aircraft, ground(aircraft.position.x, aircraft.position.z).h, W.charter.n, cfg.start === 'gate'); // [Stairs + bus] stairs at the door + the bus at the kerb
+  if (W.charter && W.stand) StairsBus.setupDeparture(scene, aircraft, ground(aircraft.position.x, aircraft.position.z).h, W.charter.n, cfg.start === 'gate', { feedKerb: cfg.start === 'terminal', holdLead: true }); // [Stairs + bus] stairs at the door + the bus at the kerb — [Charter apron] shuttle flavour gathers at the kerb; the lead client waits at the stairs for the captain
   const paxKey = W.charter ? 'charter' + W.charter.n : 'std';
   if (paxKey !== _paxKey) { _paxKey = paxKey; if (W.charter) { setFlightPax(W.charter.n); applyCabinType({ ...TYPE.cabin, pax: W.charter.n }); } else { setFlightPax(null); applyCabinType(TYPE.cabin); } }
   if (W.charter) W.souls = W.charter.n + 4; lights._auto = undefined; W.coldDone = !cold; W.coldT = 0; W.autoStart = null;
@@ -448,11 +448,11 @@ async function startFlight(cfg) {
     setView(cfg.view || (cfg.start === 'final' ? 'cockpit' : 'chase'));
     showNote(A);
     if (any) toast(`Free flight over ${fmtLL(cfg.lat, cfg.lon)}. Autopilot holds heading and altitude. Shift N: direct to ${W.dest.icao} (${Math.round(haversine(cfg.lat, cfg.lon, W.dest.lat, W.dest.lon) / NM)} nm) · . and , time acceleration.`, 8000); else
-    toast(cfg.start === 'runway' ? 'Parking brake set. Space releases it; Page Up / Shift adds thrust. T opens the radio.' : cfg.start === 'gate' ? 'At gate ' + W.stand.gateName + '. Press T for the radio: clearance, then pushback (or K to push without ATC).' : cfg.start === 'final' ? 'Autopilot flying the ILS. Press Z to take over, T for the radio.' : cfg.start === 'air' ? 'Airborne near ' + A.icao + ' at ' + Math.round(fdm.pos.y / FT).toLocaleString() + ' ft, autopilot holding a heading for ' + (W.dest ? W.dest.icao : A.icao) + '. T opens the radio; Esc pauses for the Free Flight sandbox controls (time, weather, jump).' : 'Autopilot on NAV. Use . and , for time acceleration. T opens the radio.', 6500);
+    toast(W.charter ? 'On the apron at ' + A.icao + ' — she’s all yours, Captain. Walk the preflight, meet your clients at the stairs, and boarding follows your release.' : cfg.start === 'runway' ? 'Parking brake set. Space releases it; Page Up / Shift adds thrust. T opens the radio.' : cfg.start === 'gate' ? 'At gate ' + W.stand.gateName + '. Press T for the radio: clearance, then pushback (or K to push without ATC).' : cfg.start === 'final' ? 'Autopilot flying the ILS. Press Z to take over, T for the radio.' : cfg.start === 'air' ? 'Airborne near ' + A.icao + ' at ' + Math.round(fdm.pos.y / FT).toLocaleString() + ' ft, autopilot holding a heading for ' + (W.dest ? W.dest.icao : A.icao) + '. T opens the radio; Esc pauses for the Free Flight sandbox controls (time, weather, jump).' : 'Autopilot on NAV. Use . and , for time acceleration. T opens the radio.', 6500); // [Charter apron] a charter start speaks apron, not gates
     // a departure at a gate starts with an EMPTY aircraft: the load waits in the lounge and boards in
     // groups as part of the turnaround (boardingStep conducts; see beginBoarding)
     if ((cfg.start === 'gate' || cfg.start === 'terminal') && !cfg.menu) W.boarding = { phase: 'pending', t: 0, group: 0, callT: 0, gate: String(W.stand?.gateName || 7) };
-    if (cfg.start === 'terminal') enterFoot('dep');
+    if (cfg.start === 'terminal' || W.charter) enterFoot('dep'); // [Charter apron] every charter start begins on foot at the jet, whichever flavour was picked
   }
   return true;
 }
@@ -461,6 +461,22 @@ function pickStand(b) { const all = b.b.stands; all.forEach((s, i) => { s.gateNa
 function placeAtStand(b, st) {
   const fr = b.b.frame; fdm.reset({ x: b.x + st.x - fr.nx * 2, y: b.elev - DIM.wheelY - 0.22, z: b.z + st.z - fr.nz * 2, hdg: st.inHdg, speed: 0, gear: true, flaps: 0, tl: 0, onGround: true, parkBrake: true, spdSel: 150, altSel: 5000 });
   st.used = true; W.stand = st; W.standB = b; if (st.jb) st.jb.userData.forPlayer = true; if (!st.gateName) b.b.stands.forEach((s, i) => s.gateName = String(i + 1));
+}
+// [Charter apron] a charter flight never takes a gate: the PJ-1 parks on the open
+// apron. The remote stand is derived from the airport's own data — pickStand
+// reserves an anchor gate stand (it stays marked used, so traffic never takes it)
+// and the jet parks offset airside of it along the stand frame's normal, clear of
+// the terminal face, with no jet bridge at all (jb: null). Memoised per airport
+// build, so the departure placement, the taxi-in route and the parking scan all
+// agree on the same spot; ground crew / GSE ride the aircraft transform as always.
+function charterRemoteStand(b) {
+  const bb = b && b.b; if (!bb || !bb.stands || !bb.stands.length) return null;
+  if (bb._remoteStand) return bb._remoteStand;
+  const anchor = pickStand(b); if (!anchor) return null;
+  const fr = bb.frame, dep = fr.termDepth || 250;
+  const off = Math.min(70, Math.max(48, dep * 0.22)); // airside of the stand line, off the terminal face
+  const rs = { x: anchor.x + fr.nx * off, z: anchor.z + fr.nz * off, s: anchor.s, gate: 'Apron', gateName: 'Apron', outHdg: anchor.outHdg, inHdg: anchor.inHdg, used: true, jb: null, remote: true, anchor };
+  bb._remoteStand = rs; return rs;
 }
 const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
 function taxiOutRoute() {
@@ -487,7 +503,7 @@ function taxiInRoute() {
   const { net, s } = best; const fwdSign = Math.sign(fdm.vel.x * net.r.dir.x + fdm.vel.z * net.r.dir.z) || 1;
   const conn = net.conns.filter(c => (c.s - s) * fwdSign > 30).sort((p, q) => Math.abs(p.s - s) - Math.abs(q.s - s))[0] || net.conns.slice().sort((p, q) => Math.abs(p.s - s) - Math.abs(q.s - s))[0];
   const link = net.links.slice().sort((p, q) => Math.abs(p.s - conn.s) - Math.abs(q.s - conn.s))[0];
-  const st = pickStand(b); W.arrStand = st; const fr = b.b.frame;
+  const st = W.charter ? (charterRemoteStand(b) || pickStand(b)) : pickStand(b); W.arrStand = st; const fr = b.b.frame; // [Charter apron] a charter arrival is routed to its remote stand, never a gate
   const W3 = q => V3(b.x + q.x, b.elev + 0.6, b.z + q.z);
   const standPt = V3(b.x + st.x + fr.nx * 30, b.elev + 0.6, b.z + st.z + fr.nz * 30);
   const pts = [p.clone().setY(b.elev + 0.6), W3(conn.a), W3(conn.b)]; if (link) pts.push(W3(net.P(link.s)), W3(link.a), W3(link.b)); pts.push(standPt, V3(b.x + st.x, b.elev + 0.6, b.z + st.z));
@@ -532,11 +548,11 @@ function autoTaxiStep(dt) {
 function enterFoot(mode) {
   const b = W.standB || W.primary; const st = mode === 'arr' ? W.parkedAt : W.stand; if (!b || !st) return;
   aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true);
-  disposeFlightCabin(); if (!foot.parts) foot.build({ mode, apt: b.apt, b, stand: st, dest: mode === 'dep' ? W.dest : W.cfg.apt, featured: featured(), stairsBus: mode === 'dep' && !!W.charter }); // [Stairs + bus] the flag rides the existing opts
-  foot.enter(mode === 'dep' ? 'hall' : 'cockpit'); foot.hideInteriors(true); W.onFoot = true; W.footMode = mode;
+  disposeFlightCabin(); if (!foot.parts) foot.build({ mode, apt: b.apt, b, stand: st, dest: mode === 'dep' ? W.dest : W.cfg.apt, featured: featured(), stairsBus: mode === 'dep' && !!W.charter, apron: !!W.charter }); // [Stairs + bus] the flag rides the existing opts — [Charter apron] a charter session builds the apron build (no terminal, no world district)
+  foot.enter(mode === 'dep' ? (W.charter ? 'apron' : 'hall') : 'cockpit'); foot.hideInteriors(true); W.onFoot = true; W.footMode = mode; // [Charter apron] the captain steps out beside the jet
   $('#flight').hidden = true; $('#foot').hidden = false; $('#radio').hidden = true; setView('cockpit');
-  if (mode === 'dep') { if (W.charter) Charter.arm(foot, Charter.byId(W.charter.id)); else Stories.arm(foot); } // [Stories era] one of the 121 waiting in the lounge has a story today — [Private charter] on a charter flight the lounge holds only the clients, and the lead client is the encounter
-  if (mode === 'dep' && W.cfg && W.cfg.start === 'terminal') Walkaround.arm(foot); // [Walk-around preflight] terminal departures only: the captain walks the jet before boarding (gate starts never arm — unchanged)
+  if (mode === 'dep') { if (W.charter) Charter.armApron(foot, Charter.byId(W.charter.id), scene); else Stories.arm(foot); } // [Stories era] one of the 121 waiting in the lounge has a story today — [Charter apron] on a charter flight the encounter waits at the stairs, not in a lounge
+  if (mode === 'dep' && W.cfg && (W.cfg.start === 'terminal' || W.charter)) Walkaround.arm(foot); // [Walk-around preflight] terminal departures: the captain walks the jet before boarding (gate starts never arm — unchanged) — [Charter apron] and every charter departure, out on the apron
   foot.onEvent = ev => {
     if (ev === 'checkedin') captainSignedIn(); // [Nothing starts until sign-in] the crew sign-in is the flight's true start
     if (ev === 'boarding') { const was = W.boarding && W.boarding.phase; if (!beginBoarding()) toast(was === 'pending' && Walkaround.pending() ? 'Boarding waits on your walk-around, Captain — finish it out on the apron, or release boarding at the aircraft door.' : 'Boarding has started. Passengers are taking their seats.', 4000); }
@@ -634,8 +650,8 @@ function beginBoarding() {
   c.beginBoarding(); if (foot.parts && foot.parts.cabin === c) foot.boarding = true;
   if (W.charter) { c.setFeeder('stairs'); StairsBus.startBoarding(); } // [Stairs + bus] on the PJ-1 the bus drives the admits — no bridge, no door clock
   const dest = W.dest ? (SHORT[W.dest.icao] || W.dest.city) : 'our destination';
-  audio.chime(); paSpeak(W.charter ? `Ladies and gentlemen, the Foxheart Charter flight to ${dest} is now boarding at gate ${S.gate}. Would our charter guests please make their way to the aircraft.` : `Ladies and gentlemen, Nicofoxheart Air flight four one two to ${dest} is now boarding at gate ${S.gate}. Please have your boarding pass ready, and listen for your group number.`, 'GATE');
-  toast(W.charter ? 'Your clients are boarding at gate ' + S.gate + ' — all ' + W.charter.n + ' of them.' : 'Boarding has begun at gate ' + S.gate + ' — the cabin fills group by group.', 4500);
+  audio.chime(); paSpeak(W.charter ? `Ladies and gentlemen, the Foxheart Charter flight to ${dest} is now boarding ${W.stand && W.stand.remote ? 'at the apron stand' : 'at gate ' + S.gate}. Would our charter guests please make their way to the aircraft.` : `Ladies and gentlemen, Nicofoxheart Air flight four one two to ${dest} is now boarding at gate ${S.gate}. Please have your boarding pass ready, and listen for your group number.`, 'GATE'); // [Charter apron] the charter PA names the apron, not a gate
+  toast(W.charter ? 'Your clients are boarding ' + (W.stand && W.stand.remote ? 'at the apron' : 'at gate ' + S.gate) + ' — all ' + W.charter.n + ' of them.' : 'Boarding has begun at gate ' + S.gate + ' — the cabin fills group by group.', 4500); // [Charter apron]
   return true;
 }
 function callBoardingGroup(g) {
@@ -683,10 +699,10 @@ function parkAtGate(st) {
   // shut down at the gate: APU on, engines off, beacon off; the purser welcomes everyone, then the seat belt sign goes off
   Object.assign(sys.sw, { master1: false, master2: false, apuMaster: true, apuBleed: true, beacon: false }); sys.apuN = 100; sys.apuFlap = 1; W.autoStart = null;
   setTimeout(() => { if (W.parkedAt === st) paSay('arrival'); }, 1500); setTimeout(() => { if (W.parkedAt === st) setSigns(false, W.signs.smoke); }, 9000); aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true);
-  foot.build({ mode: 'arr', apt: b.apt, b, stand: st, dest: W.cfg.apt, featured: featured() }); foot.hideInteriors(false);
+  foot.build({ mode: 'arr', apt: b.apt, b, stand: st, dest: W.cfg.apt, featured: featured(), apron: !!W.charter }); foot.hideInteriors(false); // [Charter apron] a charter arrival builds the apron session — the captain steps off onto the apron
   crew.atStand(aircraft, ground, true);
   if (W.charter) StairsBus.setupArrival(scene, aircraft, ground(aircraft.position.x, aircraft.position.z).h, W.charter.n); else st.jb?.userData?.setDocked?.(true); // [Stairs + bus] a charter arrival gets the stairs + bus, not the bridge
-  toast('Parked at gate ' + st.gateName + '. Press Enter to stand up and walk out with the passengers.', 6000);
+  toast(W.charter ? 'Parked on the apron at ' + b.apt.icao + '. Press Enter to stand up and walk out with your clients.' : 'Parked at gate ' + st.gateName + '. Press Enter to stand up and walk out with the passengers.', 6000); // [Charter apron]
 }
 function finishTrip() {
   if (W.tripDone) return; W.tripDone = true; try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { }
@@ -697,7 +713,8 @@ function finishTrip() {
   $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">${W.charter ? 'Your charter is in the logbook' : 'Flight 412 is in the logbook'}${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. ${W.charter ? 'Thank you for looking after them, captain.' : 'Thanks for flying Nicofoxheart Air.'}</p>${storyLetter ? '<p style="color:var(--fox2);margin:8px 0 0">✉ A letter is waiting in your logbook.</p>' : ''}${charterNote ? '<p style="color:var(--fox2);margin:8px 0 0">✦ Your clients left a note in the Charter Book.</p>' : ''}<div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
   $('#result').hidden = false; $('#rMenu').onclick = () => { $('#result').hidden = true; toMenu(); }; $('#rCont').onclick = () => { $('#result').hidden = true; W.tripDone = false; };
 }
-function nearestFreeStand(maxD) { const b = W.primary; if (!b || !b.full) return null; let best = null, bd = maxD; for (const st of b.b.stands) { if (st.used && st !== W.arrStand) continue; const d = Math.hypot(b.x + st.x - fdm.pos.x, b.z + st.z - fdm.pos.z); if (d < bd) { bd = d; best = st; } } return best; }
+function nearestFreeStand(maxD) { const b = W.primary; if (!b || !b.full) return null; if (W.charter) { const rs = charterRemoteStand(b); if (!rs) return null; const d = Math.hypot(b.x + rs.x - fdm.pos.x, b.z + rs.z - fdm.pos.z); return d < maxD ? rs : null; } // [Charter apron] a charter flight parks at its remote stand, never a gate
+  let best = null, bd = maxD; for (const st of b.b.stands) { if (st.used && st !== W.arrStand) continue; const d = Math.hypot(b.x + st.x - fdm.pos.x, b.z + st.z - fdm.pos.z); if (d < bd) { bd = d; best = st; } } return best; }
 // The nearest airport this jet can actually land at, from the whole world data (every airport object
 // carries its runway lengths — no need to be built or streamed in first, so a mid-ocean emergency still
 // finds the real nearest field). Suitable = longest PAVED runway >= 1,900 m, the game's own landing floor
@@ -1586,7 +1603,7 @@ function renderRest(dt, night) {
   audio.update({ fdm, apuN: sys.apuN, paused: W.paused || W.menuMode, ground: fdm.onGround, camDist: camera.position.distanceTo(aircraft.position), rain: W.wx === 'rain', nearAirport: true, groundH: gh, flapTarget: FLAPS[fdm.flapIdx].flap }, dt, W.view);
   music.update(dt, musicWant()); musicNowUI(); if (svcPanel.open) svcPanel.update(dt);
   Stories.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Stories era] marker bob + the one cruise beat
-  Charter.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast }); // [Private charter] client marker bob + the one cruise beat (inert unless a charter is armed)
+  Charter.frame(dt * (W.timeAccel || 1), { phase: W.cabPhase, onGround: fdm.onGround, toast, foot, onFoot: W.onFoot, leadPos: () => StairsBus.leadPos(), leadWaiting: () => StairsBus.leadWaiting() }); // [Private charter] client marker bob + the one cruise beat (inert unless a charter is armed) — [Charter apron] env extended: the apron encounter rides the lead client's wait at the stairs
   Walkaround.frame(dt * (W.timeAccel || 1), { foot, onFoot: W.onFoot, signedIn: W.signedIn, toast }); // [Walk-around preflight] checkpoint prompts + markers on the apron (inert unless a terminal departure armed it)
   StairsBus.frame(W.paused ? 0 : dt * (W.timeAccel || 1), { camera, exposure: sky.exposure, simTime: W.simTime, admitNext: () => { const c = cabinObj(); return c ? c.admitNext() : false; }, entered: () => { const c = cabinObj(); return c ? c.boardingInfo().entered : 0; }, outCount: () => { const c = cabinObj(); return c ? c.boarders.reduce((n, p) => n + (p.state === 'gone' ? 1 : 0), 0) : 0; }, loungeDown: () => { const f = foot.parts && foot.parts.term && foot.parts.term.flightPax; return f ? f.reduce((n, p) => n + (p.bp && p.bp.state === 'gone' ? 1 : 0), 0) : 0; } }); // [Stairs + bus] bus routes, stair climbs, deplane mirror (inert unless a charter flight set it up)
   CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot, hold: !W.signedIn }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats; [Nothing starts until sign-in] hold: the interphone beats wait for the captain (on-foot crew talk is not held)
@@ -1713,7 +1730,7 @@ function footInput(dt) {
 function footInteract() {
   if (foot.interactFlow && foot.interactFlow()) return; // terminal flow (check-in / security) uses E first
   if (Stories.tryMeet(foot)) return; // [Stories era] saying hello to the story passenger uses E next
-  if (Charter.tryMeet(foot)) return; // [Private charter] meeting your client uses E next (never armed on the same flight as a story)
+  if (Charter.tryMeet(foot)) { StairsBus.meetLead(); return; } // [Private charter] meeting your client uses E next (never armed on the same flight as a story) — [Charter apron] a hello at the stairs also releases the lead client to climb (a no-op on the retired lounge path)
   if (Walkaround.tryInspect(foot)) { CrewTalk.closeTalk(); return; } // [Walk-around preflight] a checkpoint in range outranks a chat — the headset operator stands AT the nose gear, and the gated inspection must always be reachable; a used press also dismisses any open talk card so the two cards never stack
   if (CrewTalk.tryTalk(foot)) return; // [Crew conversations] talking to a ground crew member uses E next
   if (W.footMode === 'dep' && foot.pos.distanceTo(foot.seat) < 1.3) takeSeat();
@@ -1728,7 +1745,7 @@ function updateParkPrompt() {
   const el = $('#parkPrompt'); let txt = '';
   const gs = Math.hypot(fdm.vel.x, fdm.vel.z) / KT;
   if (W.parkedAt && !W.onFoot) txt = 'Enter  Stand up and walk out with the passengers';
-  else if (fdm.onGround && gs < 4 && !W.push && W.mode !== 'challenge' && fdm.td) { const st = nearestFreeStand(120); if (st) txt = 'Enter  Park at gate ' + (st.gateName || '') + ' and shut down'; }
+  else if (fdm.onGround && gs < 4 && !W.push && W.mode !== 'challenge' && fdm.td) { const st = nearestFreeStand(120); if (st) txt = st.remote ? 'Enter  Park on the apron and shut down' : 'Enter  Park at gate ' + (st.gateName || '') + ' and shut down'; } // [Charter apron] the remote stand is not a gate
   if (el.textContent !== txt) el.textContent = txt; el.hidden = !txt;
 }
 function parkPromptAction() {

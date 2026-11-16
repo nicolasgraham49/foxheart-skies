@@ -184,7 +184,7 @@ export function frame(dt, env) {
   // The passive progress hint is the apron's lowest-priority prompt: it yields to an
   // actionable crew-talk prompt (the inspect / release prompts above stay dominant —
   // they are the gated task at its own checkpoint).
-  else foot.walkPrompt = foot.crewPrompt ? null : (S.released ? 'Preflight ' + n + '/' + total + ' · boarding released — finish the checks or head up' : 'Preflight ' + n + '/' + total + ' · walk the jet, captain — boarding waits on you');
+  else foot.walkPrompt = (foot.crewPrompt || foot.charterPrompt) ? null : (S.released ? 'Preflight ' + n + '/' + total + ' · boarding released — finish the checks or head up' : 'Preflight ' + n + '/' + total + ' · walk the jet, captain — boarding waits on you'); // [Charter apron] the passive hint also yields to the charter meet prompt (charterPrompt is only ever set on charter flights — airline walks are unchanged)
 }
 
 // E pressed on foot: inspect the checkpoint in range, release boarding at the door,

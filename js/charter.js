@@ -18,6 +18,13 @@
 //     thank-you is part of the service. The cruise beat still belongs to the hello alone.
 // Skipping the hello never blocks the flight. Nothing here moves the aircraft, touches the
 // sign-in gate, or knows about FLY_ANYWHERE (which stays OFF).
+//
+// [Charter apron] (Nov 15): the owner played the stairs+bus build and ordered the terminal
+// out of charter entirely — the jet parks on the open apron and the captain starts at the
+// jet. The lounge encounter above is retired in favour of armApron(): the same hello, the
+// same card and beat, but the lead client waits at the foot of the stairs (stairsbus.js
+// holds her there) and the heart rides over her on the apron. arm() stays for the record;
+// main.js no longer calls it.
 import * as THREE from 'three';
 
 // ---------------------------------------------------------------- the contracts
@@ -183,11 +190,27 @@ const S = {
   beatShown: false, // the cruise beat already surfaced
   cruiseSince: 0,   // wall-clock start of the current continuous cruise stretch
   done: false,      // trip completed / consumed
+  apronArm: false,  // [Charter apron] the encounter lives at the stairs, not the lounge
+  apronNear: false, // [Charter apron] the captain is within hello range of the lead client
 };
 
 export function reset() {
-  S.contract = null; S.foot = null; S.fig = null; S.marker = null; S.met = false; S.beatShown = false; S.cruiseSince = 0; S.done = false;
+  if (S.marker && S.marker.parent) S.marker.parent.remove(S.marker); // [Charter apron] an apron marker is scene-parented — it must not outlive its flight (the lounge marker's terminal is disposed whole, so removing it there too is harmless)
+  if (S.foot) S.foot.charterPrompt = null; // [Charter apron]
+  S.contract = null; S.foot = null; S.fig = null; S.marker = null; S.met = false; S.beatShown = false; S.cruiseSince = 0; S.done = false; S.apronArm = false; S.apronNear = false;
   const el = document.getElementById('charterCard'); if (el) el.remove();
+}
+
+// The little fox-orange heart the story passengers and charter clients wear (a
+// sprite — no people-system cost), so a client reads the same way everywhere.
+function heartSprite() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const cx = cv.getContext('2d'); cx.font = '104px serif'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+  cx.shadowColor = 'rgba(120,50,5,.95)'; cx.shadowBlur = 7; cx.fillStyle = '#e8721c'; cx.fillText('♥', 64, 70); cx.fillText('♥', 64, 70);
+  const tex = new THREE.CanvasTexture(cv);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
+  const sp = new THREE.Sprite(mat); sp.scale.set(0.36, 0.36, 1);
+  return sp;
 }
 
 // Register the flight's contract at flight start (called by main.js for EVERY charter
@@ -213,18 +236,28 @@ export function arm(foot, contract) {
   if (!fig) return false;
   S.contract = contract; S.foot = foot; S.fig = fig; S.met = false; S.beatShown = false; S.cruiseSince = 0; S.done = false;
   foot.charterFig = fig; foot.charterName = contract.name; foot.charterMet = false;
-  // the marker: the same little fox-orange heart the story passengers wear (a sprite — no
-  // people-system cost), so a charter client reads the same way in the lounge.
+  // the marker: the same little fox-orange heart the story passengers wear, so a
+  // charter client reads the same way in the lounge.
   try {
-    const cv = document.createElement('canvas'); cv.width = cv.height = 128;
-    const cx = cv.getContext('2d'); cx.font = '104px serif'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
-    cx.shadowColor = 'rgba(120,50,5,.95)'; cx.shadowBlur = 7; cx.fillStyle = '#e8721c'; cx.fillText('♥', 64, 70); cx.fillText('♥', 64, 70);
-    const tex = new THREE.CanvasTexture(cv);
-    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false });
-    S.marker = new THREE.Sprite(mat); S.marker.scale.set(0.36, 0.36, 1);
+    S.marker = heartSprite();
     S.markerBaseY = fig.y + 2.05; S.marker.position.set(fig.x, S.markerBaseY, fig.z);
     term.group.add(S.marker);
   } catch (e) { S.marker = null; }
+  return true;
+}
+
+// [Charter apron] Arm the encounter on the apron (called by main.js on every charter
+// departure now — there is no lounge anymore): no figure to bind. The lead client is
+// the first walker off the bus; stairsbus.js holds her at the foot of the stairs and
+// frame() rides the heart over her there, fed by main.js's env (leadPos/leadWaiting).
+// The card, the cruise beat and the Charter Book note are the lounge encounter's own,
+// unchanged — only the meeting place moved out to the jet.
+export function armApron(foot, contract, parent) {
+  if (!foot || !contract) return false;
+  if (S.apronArm && S.foot === foot && S.contract && S.contract.id === contract.id) return true; // already armed on this build
+  S.contract = contract; S.foot = foot; S.fig = null; S.apronArm = true; S.apronNear = false; S.met = false; S.beatShown = false; S.cruiseSince = 0; S.done = false;
+  foot.charterName = contract.name;
+  try { S.marker = heartSprite(); S.marker.visible = false; if (parent) parent.add(S.marker); } catch (e) { S.marker = null; }
   return true;
 }
 
@@ -238,6 +271,15 @@ export function nearFig(foot) {
 
 // E pressed near the lead client: open the meeting card. True = the press was used.
 export function tryMeet(foot) {
+  // [Charter apron] the apron hello: same card, same beat — the captain walked up
+  // to the lead client where she waits at the foot of the stairs.
+  if (S.apronArm) {
+    if (!S.contract || S.met || !S.apronNear) return false;
+    S.met = true; if (foot) foot.charterMet = true;
+    if (S.marker) S.marker.visible = false;
+    showCard(S.contract);
+    return true;
+  }
   if (!nearFig(foot)) return false;
   S.met = true; if (foot) foot.charterMet = true;
   if (S.marker) { S.marker.visible = false; }
@@ -271,6 +313,18 @@ export function frame(dt, env) {
     const bp = S.fig.bp;
     if (bp && bp.state === 'gone') S.marker.visible = false;
     else { S.marker.visible = true; S.marker.position.set(S.fig.x, S.markerBaseY + Math.sin(performance.now() / 480) * 0.07, S.fig.z); }
+  }
+  // [Charter apron] the apron encounter: while the lead client waits at the foot of
+  // the stairs, the heart rides over her in world space and the meet prompt is
+  // offered in the crew-talk idiom (foot.charterPrompt, set here in the main loop).
+  if (S.apronArm && env && env.foot) {
+    const foot = env.foot;
+    foot.charterPrompt = null; S.apronNear = false;
+    const waiting = !S.met && env.leadWaiting && env.leadWaiting();
+    const lp = waiting && env.leadPos ? env.leadPos() : null;
+    if (S.marker) { S.marker.visible = !!lp; if (lp) S.marker.position.set(lp.x, lp.y + 1.9 + Math.sin(performance.now() / 480) * 0.07, lp.z); }
+    if (lp && foot.pos && Math.hypot(foot.pos.x - lp.x, foot.pos.z - lp.z) < 2.4) { S.apronNear = true; foot.charterPrompt = 'E  Meet ' + (S.contract ? S.contract.name : 'your client'); }
+    if (S.met && S.marker) S.marker.visible = false;
   }
   if (!S.contract || !S.met || S.beatShown || S.done) { S.cruiseSince = 0; return; }
   if (env && env.phase === 'cruise' && !env.onGround) {
@@ -314,6 +368,7 @@ export function state() {
   return {
     armed: !!S.contract, id: S.contract ? S.contract.id : null, name: S.contract ? S.contract.name : null,
     party: S.contract ? S.contract.party : null,
+    apronArm: S.apronArm, apronNear: S.apronNear, // [Charter apron]
     met: S.met, beatShown: S.beatShown, done: S.done,
     figGroup: S.fig && S.fig.bp ? S.fig.bp.group : null,
     figState: S.fig && S.fig.bp ? S.fig.bp.state : null,

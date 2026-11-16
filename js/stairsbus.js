@@ -52,6 +52,14 @@ class Parts {
 const wheel = (P, x, y, z, r, w) => { P.cyl('tyre', r, r, w, 14, x, y, z, 0, 0, Math.PI / 2); P.cyl('metal', r * 0.45, r * 0.45, w + 0.02, 10, x, y, z, 0, 0, Math.PI / 2); };
 
 // ---------------------------------------------------------------- the stair truck
+// [Charter apron] the stair truck's plan geometry for a sill height, exported so
+// onfoot.js can lay the captain's walk slope over the very steps the clients climb
+// (one source of truth for the door / platform / stair-base positions).
+export function stairFrame(sill) {
+  const T = currentType();
+  const n = Math.max(5, Math.ceil(sill / 0.19)), run = n * 0.29;
+  return { doorX: -T.dim.R, doorZ: T.cabin.profile.door1, platX1: -T.dim.R - 1.55, baseX: -T.dim.R - 1.55 - run, steps: n, run };
+}
 // Built in the stand frame (x right wing, z aft, y up from the apron) against the
 // L1 door of the current type: a towed airstair — top platform at the sill, a flight
 // of steps down to the apron, handrails, support legs and a tow bar. Returns the
@@ -62,8 +70,9 @@ function buildStairs(T, sill) {
   const platX0 = doorX - 0.05, platX1 = doorX - 1.55, platCx = (platX0 + platX1) / 2; // platform span in x
   P.box('paint', platX0 - platX1, 0.09, 1.35, platCx, sill - 0.045, doorZ);            // platform deck
   P.box('accent', 0.06, 0.1, 1.35, platX1 + 0.02, sill - 0.04, doorZ);                 // orange nosing at the flight
-  const n = Math.max(5, Math.ceil(sill / 0.19)), riser = sill / n, tread = 0.29, run = n * tread;
-  const baseX = platX1 - run;
+  const SF = stairFrame(sill);
+  const n = SF.steps, riser = sill / n, tread = 0.29, run = SF.run;
+  const baseX = SF.baseX;
   for (let i = 0; i < n; i++) P.box('dark', tread + 0.03, 0.05, 1.1, platX1 - (i + 0.5) * tread, sill - (i + 0.5) * riser + 0.025, doorZ); // treads
   const slopeLen = Math.hypot(run, sill), slopeA = Math.atan2(sill, run), midX = (platX1 + baseX) / 2, midY = sill / 2;
   for (const s of [-1, 1]) {
@@ -143,6 +152,9 @@ const S = {
   active: false, mode: null,           // 'dep' | 'arr'
   scene: null, group: null, stairs: null, stairWrap: null, bus: null, crowd: null,
   party: 0, preloaded: false,
+  // [Charter apron] shuttle-feed + lead-client hold (charter apron starts only;
+  // both stay false for the original lounge/gate flows, which are untouched)
+  feedKerb: false, feedT: 0, holdLead: false, leadMet: false, leadReleased: false, leadWaiting: false, leadHoldT: 0,
   // departure counters
   atKerb: 0, inBus: 0, walking: 0, delivered: 0, firstKerbT: -1, loungeSeen: 0,
   boardingActive: false, phase: 'idle', route: null, dwell: 0, releaseT: 0,
@@ -166,7 +178,7 @@ function driveBus(pts, speed, next) { S.route = Route(pts, speed); S.phase = nex
 
 export function reset() {
   if (S.group && S.scene) { S.scene.remove(S.group); S.group.traverse(o => { if (o.geometry) o.geometry.dispose(); }); }
-  Object.assign(S, { active: false, mode: null, scene: null, group: null, stairs: null, stairWrap: null, bus: null, crowd: null, party: 0, preloaded: false, atKerb: 0, inBus: 0, walking: 0, delivered: 0, firstKerbT: -1, loungeSeen: 0, boardingActive: false, phase: 'idle', route: null, dwell: 0, releaseT: 0, walkers: [], nextIdx: 0, outSeen: 0, aboard: 0, stairK: 1, stairDocked: true, time: 0, env: null });
+  Object.assign(S, { active: false, mode: null, scene: null, group: null, stairs: null, stairWrap: null, bus: null, crowd: null, party: 0, preloaded: false, feedKerb: false, feedT: 0, holdLead: false, leadMet: false, leadReleased: false, leadWaiting: false, leadHoldT: 0, atKerb: 0, inBus: 0, walking: 0, delivered: 0, firstKerbT: -1, loungeSeen: 0, boardingActive: false, phase: 'idle', route: null, dwell: 0, releaseT: 0, walkers: [], nextIdx: 0, outSeen: 0, aboard: 0, stairK: 1, stairDocked: true, time: 0, env: null });
 }
 
 // Shared scene build: the stand group rides the aircraft's parked transform, so
@@ -195,9 +207,13 @@ function build(scene, aircraft, groundH, party) {
 // docked at the door, the bus waiting at the terminal kerb. On a GATE start the
 // party is already aboard the bus (preloaded); on a TERMINAL start they come down
 // from the lounge group by group (clientDown, via the lounge 'gone' count).
-export function setupDeparture(scene, aircraft, groundH, party, preloaded) {
+// [Charter apron] opts (charter apron starts only): feedKerb — no lounge feeds the
+// kerb, so the party gathers there once boarding is called; holdLead — the lead
+// client waits at the foot of the stairs for the captain's hello (see frame()).
+export function setupDeparture(scene, aircraft, groundH, party, preloaded, opts) {
   build(scene, aircraft, groundH, party);
   S.mode = 'dep'; S.preloaded = !!preloaded; S.stairDocked = true; S.phase = 'kerb';
+  S.feedKerb = !!(opts && opts.feedKerb); S.holdLead = !!(opts && opts.holdLead);
   if (S.preloaded) { S.inBus = party; }
   S.bus.position.set(KERB[0], 0, KERB[1]); S.bus.rotation.y = Math.PI / 2; // facing the stand
 }
@@ -218,13 +234,28 @@ export function clientDown() { if (S.active && S.mode === 'dep' && !S.preloaded)
 // The captain took his seat mid-boarding: the lounge feed stops where it stands,
 // so every client not yet delivered counts as having made their own way down.
 export function collectAll() {
-  if (!S.active || S.mode !== 'dep' || S.preloaded) return;
+  if (!S.active || S.mode !== 'dep') return;
+  S.leadReleased = true; // [Charter apron] a seated captain ends the lead client's wait too — she boards with the rest
+  if (S.preloaded) return;
   const missing = S.party - (S.delivered + S.walking + S.inBus + S.atKerb);
   if (missing > 0) { S.atKerb += missing; if (S.firstKerbT < 0) S.firstKerbT = S.time; }
 }
+// [Charter apron] the lead client's apron wait, for charter.js (via main.js env):
+// leadWaiting() while she stands at the foot of the stairs; leadPos() her ground
+// point in world space (null when no lead walker is out); meetLead() — the captain
+// said hello, she may climb.
+export function leadWaiting() { return !!S.leadWaiting; }
+export function leadPos() {
+  if (!S.group) return null;
+  const lead = S.walkers.find(w => w.state === 'up' && w.idx === 0);
+  if (!lead) return null;
+  return S.group.localToWorld(new THREE.Vector3(lead.p.x, 0, lead.p.z));
+}
+export function meetLead() { if (S.holdLead && !S.leadMet) { S.leadMet = true; S.leadWaiting = false; return true; } return false; }
 // Boarding was skipped (seatAll): the show is over — walkers vanish, the bus leaves.
 export function cancel() {
   if (!S.active) return;
+  S.leadWaiting = false; // [Charter apron]
   for (const w of S.walkers) hideWalker(w);
   S.walkers = []; S.walking = 0;
   if (S.mode === 'dep' && S.phase !== 'gone') { const o = { x: S.bus.position.x, z: S.bus.position.z, yaw: 0 }; driveBus([[o.x, o.z], [-6, -24], [6, -33], [40, -35], [95, -35]], 7, 'leaving'); }
@@ -268,6 +299,13 @@ export function frame(dt, env) {
     // terminal starts: count lounge figures who reached the gate door (they went
     // down to the bus) — main.js reads the count off the lounge crowd each frame
     if (!S.preloaded && env.loungeDown) { const n = env.loungeDown(); if (n > S.loungeSeen) { const d = n - S.loungeSeen; S.loungeSeen = n; for (let i = 0; i < d; i++) clientDown(); } }
+    // [Charter apron] shuttle starts have no lounge to empty: once boarding is
+    // called, the party gathers at the FBO kerb a few at a time, and the kerb
+    // logic below shuttles them in as they come — same bus, same stairs.
+    if (S.feedKerb && S.boardingActive && S.phase === 'kerb') {
+      const remaining = S.party - S.delivered - S.walking - S.inBus - S.atKerb;
+      if (remaining > 0) { S.feedT += dt; if (S.feedT >= 2.2) { S.feedT = 0; S.atKerb++; if (S.firstKerbT < 0) S.firstKerbT = S.time; } }
+    }
     if (S.phase === 'kerb' && S.boardingActive) {
       const remaining = S.party - S.delivered - S.walking - S.inBus;
       const allHere = S.atKerb > 0 && S.atKerb >= remaining;
@@ -287,13 +325,23 @@ export function frame(dt, env) {
       }
     } else if (S.phase === 'toKerb' && busParked) { S.phase = 'kerb'; if (S.firstKerbT < 0 && S.atKerb > 0) S.firstKerbT = S.time; }
     else if (S.phase === 'leaving' && busParked) { S.phase = 'gone'; S.bus.visible = false; }
+    // [Charter apron] the lead client (walker 0) waits at the foot of the stairs
+    // for the captain's hello: she holds at the stair base, the rest of the party
+    // queues behind her, and the wait ends when he meets her (meetLead), takes
+    // his seat (collectAll), or 45 s pass — she is never a deadlock, only a hello.
+    const leadW = S.walkers.find(w => w.state === 'up' && w.idx === 0);
+    const leadAtBase = !!(leadW && leadW.seg >= 2 && !leadW.atTop);
+    if (S.holdLead && leadAtBase && !S.leadMet && !S.leadReleased) { S.leadHoldT += dt; if (S.leadHoldT >= 45) S.leadReleased = true; }
+    S.leadWaiting = !!(S.holdLead && leadAtBase && !S.leadMet && !S.leadReleased);
     // walkers climb; at the top each one admits the next cabin passenger, and a
     // walker completes whenever the cabin's entered count passes its index (the
     // cabin's own safety net can admit ahead of the climb — counts stay honest)
     for (let i = S.walkers.length - 1; i >= 0; i--) {
       const w = S.walkers[i];
       if (w.state === 'up') {
-        if (!w.atTop) { if (stepWalker(w, dt)) { w.atTop = true; w.p.mode = 'stand'; env.admitNext && env.admitNext(); } }
+        const held = S.leadWaiting && !w.atTop && (w.idx === 0 ? w.seg >= 2 : w.seg >= 1); // [Charter apron] the queue behind the lead
+        if (held) w.p.mode = 'stand';
+        else if (!w.atTop) { if (stepWalker(w, dt)) { w.atTop = true; w.p.mode = 'stand'; env.admitNext && env.admitNext(); } }
         else if (env.admitNext) env.admitNext();
         const entered = env.entered ? env.entered() : 0;
         if (w.atTop && entered > w.idx) { hideWalker(w); S.walkers.splice(i, 1); S.walking--; S.delivered++; }
@@ -330,8 +378,11 @@ export function frame(dt, env) {
 }
 
 export function state() {
+  const lp = leadPos();
   return {
     active: S.active, mode: S.mode, phase: S.phase, party: S.party, preloaded: S.preloaded,
+    feedKerb: S.feedKerb, holdLead: S.holdLead, leadWaiting: S.leadWaiting, leadMet: S.leadMet, // [Charter apron]
+    leadPos: lp ? [+lp.x.toFixed(1), +lp.y.toFixed(1), +lp.z.toFixed(1)] : null, // [Charter apron]
     boardingActive: S.boardingActive, atKerb: S.atKerb, inBus: S.inBus, walking: S.walking,
     delivered: S.delivered, aboard: S.aboard, outSeen: S.outSeen, stairDocked: S.stairDocked,
     busVisible: S.bus ? S.bus.visible : false,
