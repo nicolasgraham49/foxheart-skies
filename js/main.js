@@ -1906,8 +1906,44 @@ function setPlayerType(id) {
   if (id !== TYPE.id) { toast('Aircraft: ' + T.name + ' — applies on reload'); setTimeout(() => location.reload(), 600); }
   return id;
 }
+// [Menu redesign] re-group the Free Flight setup's two columns into the numbered
+// dispatch-manifest blocks of the new design, and dock the Fly button in a sticky
+// footer bar carrying a live summary line (#flysum, fed by flySum()). Pure DOM
+// moves: every node keeps its identity and listeners; anything the blocks don't
+// claim is parked in a trailing block rather than dropped.
+function menuManifest() {
+  const setup = $('#setup'); if (!setup || setup.dataset.manifest) return; setup.dataset.manifest = '1';
+  const [left, right] = setup.children; if (!left || !right) return;
+  const fieldOf = id => { const n = document.getElementById(id); return n ? n.closest('.field') : null; };
+  const rowOf = id => { const n = document.getElementById(id); return n ? n.closest('.row2') : null; };
+  const togOf = id => { const n = document.getElementById(id); return n ? n.closest('.toggle') : null; };
+  const blocks = [
+    ['01', 'Runway', [left.children[0], $('#aptkv'), $('#aptnote'), fieldOf('rwlist')]],
+    ['02', 'Start', [fieldOf('startSeg')]],
+    ['03', 'Aircraft', [fieldOf('typeSeg')]],
+    ['04', 'Destination', [fieldOf('destQ')]],
+    ['05', 'Time & Weather', [fieldOf('tod'), fieldOf('wxSeg'), rowOf('wdir'), togOf('gusts')]],
+  ];
+  const frag = document.createDocumentFragment();
+  for (const [no, title, nodes] of blocks) {
+    const d = document.createElement('div'); d.className = 'mblock';
+    d.innerHTML = `<div class="mhead"><span class="mno">${no}</span><span class="mtitle">${title}</span></div>`;
+    for (const n of nodes) if (n) d.appendChild(n);
+    frag.appendChild(d);
+  }
+  const leftovers = [...left.children, ...right.children].filter(n => n.id !== 'fly');
+  if (leftovers.length) { const d = document.createElement('div'); d.className = 'mblock'; for (const n of leftovers) d.appendChild(n); frag.appendChild(d); }
+  const flyBtn = document.getElementById('fly');
+  setup.replaceChildren(frag);
+  const bar = document.createElement('div'); bar.id = 'flybar';
+  const sum = document.createElement('div'); sum.id = 'flysum'; bar.appendChild(sum);
+  if (flyBtn) bar.appendChild(flyBtn);
+  const wrap = $('#setupWrap'); if (wrap) wrap.appendChild(bar);
+}
 function buildMenu() {
+  menuManifest();
   $('#stA').textContent = World.stats.airports.toLocaleString(); $('#stR').textContent = World.stats.runways.toLocaleString(); $('#stN').textContent = World.stats.navaids.toLocaleString();
+  { const ts = $('#topStats'); if (ts) ts.innerHTML = `<b>${World.stats.airports.toLocaleString()}</b> airports · Tampa, Florida · Golden hour`; }
   const cards = $('#cards'); cards.innerHTML = '';
   for (const A of featured()) {
     const g = airportGeometry(A); const b = document.createElement('button'); b.className = 'card'; b.setAttribute('aria-pressed', 'false'); const idnC = identityFor(A); b.style.setProperty('--acc', idnC.stripe2 || (idnC.hall && idnC.hall.signFg) || '#f29a4c');
@@ -2019,7 +2055,19 @@ function applySettings(key) {
 }
 function autoDest(A) { return World.byIcao.get(DEST_DEFAULT[A.icao]) || nearestAirports(A.lat, A.lon, 900000, 6).find(x => x !== A && x.large) || null; }
 function destInfo() { const el = $('#destInfo'); if (!el) return; const A = sel.apt; if (!A) { el.textContent = ''; return; } const D = sel.dest && sel.dest !== A ? sel.dest : autoDest(A);
-  el.textContent = D ? (sel.dest && sel.dest !== A ? 'Flight plan ' : 'Automatic ') + A.icao + ' → ' + D.icao + ' · ' + Math.round(haversine(A.lat, A.lon, D.lat, D.lon) / 1852) + ' nm' : ''; }
+  el.textContent = D ? (sel.dest && sel.dest !== A ? 'Flight plan ' : 'Automatic ') + A.icao + ' → ' + D.icao + ' · ' + Math.round(haversine(A.lat, A.lon, D.lat, D.lon) / 1852) + ' nm' : ''; flySum(); }
+// [Menu redesign] the dispatch summary over the Fly button, live from the same
+// state destInfo() reads (sel.apt / sel.end / sel.dest or the automatic pick).
+// The ETE is a planning estimate — 18 min of climb/descent allowance plus the
+// great-circle distance at a 450 kt cruise; the in-flight ETE stays NavPlan's.
+function flySum() { const el = $('#flysum'); if (!el) return; const A = sel.apt; if (!A) { el.textContent = ''; return; }
+  const D = sel.dest && sel.dest !== A ? sel.dest : autoDest(A);
+  const head = `FLY — <b>${A.icao}${sel.end ? ' ' + sel.end : ''}${D ? ' → ' + D.icao : ''}</b>`;
+  if (!D) { el.innerHTML = head; return; }
+  const nm = Math.round(haversine(A.lat, A.lon, D.lat, D.lon) / 1852);
+  el.innerHTML = `${head} · ${nm} NM · ${fmtEte(Math.round(18 + nm / 450 * 60))}`;
+  const fb = $('#fly'); if (fb && fb.lastChild && fb.lastChild.nodeType === 3) fb.lastChild.textContent = ` FLY — ${A.icao} → ${D.icao}`;
+}
 function selectAirport(A, quiet) {
   if (!A) return; sel.apt = A; const g = airportGeometry(A); destInfo();
   $$('#cards .card').forEach(c => c.setAttribute('aria-pressed', c.querySelector('.code span').textContent === A.icao));
@@ -2028,7 +2076,7 @@ function selectAirport(A, quiet) {
   const list = $('#rwlist'); list.innerHTML = '';
   for (const E of ends) { const f = ilsFreq(A, E); const b = document.createElement('button'); b.setAttribute('aria-pressed', E.ident === sel.end);
     b.innerHTML = `<b>${E.ident}</b><small>${Math.round(E.hdg)}°T · ${Math.round(E.length / FT).toLocaleString()} ft</small><small class="ils">ILS ${f.mhz.toFixed(2)}${f.real ? '' : '*'}</small>${E.derived ? '<small style="color:var(--amber)">derived position</small>' : ''}`;
-    b.onclick = () => { sel.end = E.ident; $$('#rwlist button').forEach(x => x.setAttribute('aria-pressed', x === b)); drawDiagram($('#diag'), A, sel.end); }; list.appendChild(b); }
+    b.onclick = () => { sel.end = E.ident; $$('#rwlist button').forEach(x => x.setAttribute('aria-pressed', x === b)); drawDiagram($('#diag'), A, sel.end); flySum(); }; list.appendChild(b); }
   drawDiagram($('#diag'), A, sel.end);
   const st = sunTimes(A, TODAY);
   $('#aptkv').innerHTML = `<dt>ICAO / IATA</dt><dd>${A.icao} / ${A.iata || '—'}</dd><dt>Location</dt><dd>${A.city ? A.city + ', ' : ''}${A.country} · ${A.lat.toFixed(4)}, ${A.lon.toFixed(4)}</dd><dt>Elevation</dt><dd>${Math.round(g.elevFt)} ft (mean of runway ends)</dd>
@@ -2041,6 +2089,7 @@ function selectAirport(A, quiet) {
   const idnH = identityFor(A); $('#menu').style.setProperty('--acc', idnH.stripe2 || (idnH.hall && idnH.hall.signFg) || '#f29a4c');
   const hI = $('#heroIata'); if (hI) { hI.textContent = A.iata || A.icao; $('#heroName').textContent = A.name; $('#heroSub').textContent = (A.city ? A.city + ' · ' : '') + A.country + ' · ' + A.icao; $('#heroChips').innerHTML = '<span>' + g.runways.length + ' runways</span><span>' + Math.round(g.elevFt).toLocaleString() + ' ft elevation</span><span>sunset ' + (st.set != null ? fmtTime(st.set) : '—') + '</span><span>' + (FEATURED_INFO[A.icao] ? 'hand-made surroundings' : 'world-data surroundings') + '</span>'; }
   if (!quiet) { $('#results').hidden = true; $('#q').value = ''; $('#setupWrap').scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+  flySum();
 }
 function renderLog() {
   const log = store.get('log', []); const body = $('#logBody');
