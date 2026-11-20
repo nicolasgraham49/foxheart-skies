@@ -1,9 +1,10 @@
 <!DOCTYPE html>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Foxheart Skies</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612:wght@400;700&family=B612+Mono:wght@400;700&family=Saira+Condensed:wght@300;500;700;800&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=B612:ital,wght@0,400;0,700;1,400&family=B612+Mono:wght@400;700&family=Saira+Condensed:wght@300;500;600;700;800&display=swap">
 <style>
 /* Layout: full-bleed live 3D scene; glass flight-deck panels float above it (left rail menu, right content sheet, in-flight FCU strip). */
 :root{
@@ -296,6 +297,269 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
   #info{display:none}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+/* =====================================================================
+   MENU REDESIGN — "Silence, Then Sky" hybrid (Nov 2026)
+   Chassis: A (cinematic minimal) · B's live dispatch summary over #fly ·
+   C's warmth contained to story surfaces (rail story line, charter
+   dossiers, cream-paper letters in the logbook).
+   Hand-ported from the approved preview (foxheart-menu-upgrade). Every
+   rule is scoped to #menu so the in-flight UI keeps the original system.
+   The game's own markup IDs and JS population are unchanged; the setup
+   columns are re-grouped into numbered dispatch blocks at build time
+   (menuManifest in js/main.js) and #flysum is fed by flySum().
+   ===================================================================== */
+#menu{
+  --inkbg:#05080E; --navy:#0E1A2E; --bone:#F4F1EA; --stone:#9AA3B2;
+  --hair:rgba(244,241,234,.14); --hair2:rgba(244,241,234,.28);
+  --paper:#F7F2E7; --inktx:#241C12;
+  position:fixed; inset:0; z-index:10;
+  display:grid; grid-template-rows:56px 1fr auto; grid-template-columns:1fr;
+  gap:0; padding:0; pointer-events:none;
+  font:13.5px/1.6 var(--f-body); color:var(--bone);
+}
+#menu *,#menu *::before,#menu *::after{box-sizing:border-box}
+#menu button:focus-visible,#menu input:focus-visible,#menu select:focus-visible{outline:2px solid var(--bone);outline-offset:2px}
+
+/* ---------- backdrop: the scene as cinema (video over the live menu scene) ---------- */
+#menu #backdrop{position:fixed;inset:0;z-index:-2;pointer-events:none}
+#menu #backdrop img,#menu #backdrop video{width:100%;height:100%;object-fit:cover;display:block}
+#menu #scrim{position:fixed;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(180deg,rgba(5,8,14,.42) 0%,rgba(5,8,14,.05) 34%,rgba(5,8,14,.55) 72%,rgba(5,8,14,.93) 100%)}
+
+/* ---------- frame ---------- */
+#menu #topbar{display:flex;align-items:center;justify-content:space-between;padding:0 28px;pointer-events:none}
+#menu #topbar .brandline{display:flex;align-items:center;gap:12px}
+#menu #topbar .brandline svg{filter:drop-shadow(0 2px 10px rgba(242,154,76,.4))}
+#menu #topbar .brandname{font:600 15px var(--f-mono);letter-spacing:.34em;color:var(--bone)}
+#menu #topbar .statsline{font:11px var(--f-mono);letter-spacing:.14em;color:var(--stone);text-transform:uppercase;white-space:nowrap}
+#menu #topbar .statsline b{color:var(--bone);font-weight:400}
+#menu #stage{display:grid;grid-template-columns:minmax(330px,42%) 1fr;gap:24px;padding:8px 28px 18px;min-height:0;pointer-events:none}
+#menu #rail,#menu #sheet,#menu #nav{pointer-events:auto}
+
+/* ---------- home block (the rail, unboxed) ---------- */
+#menu #rail{align-self:end;padding:0 8px 26px 4px;min-width:0;min-height:0;display:block;overflow:visible;background:none;border:0;border-radius:0;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none}
+#menu #rail::before{display:none}
+#menu #rail .eyebrow{color:var(--fox);margin-bottom:14px}
+#menu #rail .wordmark{font:300 clamp(56px,7.2vw,104px)/0.92 var(--f-display);text-transform:uppercase;letter-spacing:.01em;color:var(--bone)}
+#menu #rail .wordmark span{display:block;font-size:.30em;font-weight:500;letter-spacing:.3em;color:var(--stone);margin-top:14px;white-space:nowrap}
+#menu #rail .tag{font-size:15px;color:var(--bone);max-width:34ch;margin:20px 0 6px}
+#menu #rail .story{font-style:italic;color:var(--stone);margin:0 0 22px}
+#menu #rail .railfoot{border-top:1px solid var(--hair);padding-top:14px;display:grid;gap:8px;margin-top:0;color:var(--stone);font-size:11px}
+#menu #rail .railfoot .padhint{border:0;padding:0;background:none;font:11px var(--f-mono);color:var(--stone);letter-spacing:.06em}
+#menu #rail .stats{display:flex;gap:26px}
+#menu #rail .stats div{font:10.5px var(--f-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--stone);display:block}
+#menu #rail .stats b{display:block;font-size:19px;letter-spacing:0;color:var(--bone);font-weight:400;font-family:var(--f-body)}
+
+/* ---------- bottom chapter nav ---------- */
+#menu #nav{display:flex;flex-direction:row;gap:4px;padding:0 28px calc(14px + env(safe-area-inset-bottom,0px));overflow-x:auto;scrollbar-width:none;margin:0}
+#menu #nav::-webkit-scrollbar{display:none}
+#menu #nav button{position:relative;flex:1 1 0;min-width:0;text-align:left;padding:16px 14px 6px;min-height:44px;color:var(--stone);display:block;border:0;border-radius:0;background:none;transform:none;box-shadow:none}
+#menu #nav button::before{content:"";position:absolute;top:0;left:14px;height:1px;width:calc(100% - 28px);background:var(--hair)}
+#menu #nav button .no{font:10px var(--f-mono);letter-spacing:.14em;display:block;color:var(--stone)}
+#menu #nav button b{font:600 15px var(--f-display);letter-spacing:.03em;text-transform:uppercase;color:var(--bone);display:flex;align-items:center;gap:8px}
+#menu #nav button small{display:block;font-size:10px;color:var(--stone);max-width:none;white-space:normal;line-height:1.35;margin-top:2px}
+#menu #nav button .lamp{width:7px;height:7px;border-radius:50%;background:transparent;flex:none}
+#menu #nav button .ic{display:none}
+#menu #nav button[aria-current="true"]{color:var(--bone);background:none;box-shadow:none}
+#menu #nav button[aria-current="true"]::after{content:"";position:absolute;top:-1px;left:14px;width:44px;height:3px;background:var(--fox)}
+#menu #nav button[aria-current="true"] .lamp{background:var(--fox)}
+#menu #nav button:hover{background:none;transform:none}
+#menu #nav button:hover b{color:#fff}
+
+/* ---------- focus sheet ---------- */
+#menu #sheet{justify-self:end;width:min(680px,100%);max-width:none;background:rgba(5,8,14,.94);border:0;border-left:1px solid var(--hair);border-radius:0;overflow-y:auto;overflow-x:hidden;min-height:0;padding:30px 34px 34px;box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;animation:sheetin .55s cubic-bezier(.22,1,.36,1)}
+@keyframes sheetin{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}
+#menu .sec{display:block;height:auto;min-height:0}
+#menu .sechead{display:flex;align-items:end;justify-content:space-between;gap:18px;border-bottom:1px solid var(--hair);padding:0 0 14px;margin-bottom:20px;flex-wrap:wrap}
+#menu .sechead h2{font:600 40px/1 var(--f-display);text-transform:uppercase;letter-spacing:.02em;margin:0;color:var(--bone)}
+#menu .secbody{display:grid;gap:18px;padding:0;overflow:visible;min-height:0}
+#menu .secbody>.field{border-top:1px solid var(--hair);padding-top:14px}
+#menu .eyebrow{font:500 10.5px/1 var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--stone)}
+#menu .note{color:var(--stone);font-size:13px;margin:0;max-width:62ch;border:0;padding:0}
+#menu .note b{color:var(--bone)}
+#menu .empty{color:var(--stone);padding:30px 0;text-align:center}
+
+/* hero */
+#menu #hero{display:grid;gap:4px;padding:6px 0 2px;margin:0;background:none;border:0;border-radius:0;overflow:visible;position:static}
+#menu #hero .heroFox{display:none}
+#menu .heroEyebrow{font:500 10.5px var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--fox)}
+#menu .heroIata{font:300 clamp(72px,9vw,118px)/0.9 var(--f-display);text-transform:uppercase;color:var(--bone);text-shadow:none;margin:0}
+#menu .heroName{font-size:16px;color:var(--bone);margin:0}
+#menu .heroChips{margin:8px 0 0;display:block;position:static}
+#menu .heroChips span{font:11px var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--stone);border:0;background:none;padding:0;border-radius:0;white-space:normal}
+#menu .heroChips span+span::before{content:" · "}
+
+/* search + results */
+#menu .search{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--hair2);padding-bottom:6px;flex:1;min-width:220px;max-width:none;position:static}
+#menu .search svg{position:static;transform:none;color:var(--stone);flex:none}
+#menu .search input{background:none;border:0;color:var(--bone);font-size:18px;width:100%;padding:4px 0}
+#menu .search input::placeholder{color:var(--stone)}
+#menu .search input:focus{outline:none}
+#menu #q{background:none!important;border:0!important;border-radius:0!important;padding:4px 0!important}
+#menu #results{display:block;border-top:1px solid var(--hair)}
+#menu #results button{display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;padding:11px 2px;border:0;border-bottom:1px solid var(--hair);border-radius:0;background:none}
+#menu #results button:hover,#menu #results button:focus-visible{background:rgba(244,241,234,.04)}
+#menu #results .ic{font:12px var(--f-mono);color:var(--fox);min-width:44px}
+#menu #results .ia{font:12px var(--f-mono);color:var(--stone);min-width:34px}
+#menu #results .nm{color:var(--bone);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#menu #results .nm small{color:var(--stone);margin-left:6px}
+#menu #results .rw{font:11px var(--f-mono);color:var(--stone)}
+
+/* cards: unboxed gallery (real .card markup: canvas + pill + meta) */
+#menu .cardrow{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#menu .cards{display:grid;grid-template-columns:1fr 1fr;gap:22px 18px}
+#menu .card{position:relative;display:grid;grid-template-rows:none;gap:8px;text-align:left;padding:0;background:none;border:0;border-radius:0;overflow:visible;transform:none;box-shadow:none}
+#menu .card::before{display:none}
+#menu .card canvas{width:100%;height:auto;aspect-ratio:420/236;display:block;border:1px solid var(--hair);background:linear-gradient(150deg,#12233d,#0a1526 60%,#060a12)}
+#menu .card:hover{transform:none;border-color:transparent;box-shadow:none}
+#menu .card:hover canvas{border-color:var(--fox)}
+#menu .card[aria-pressed="true"]{border-color:transparent;box-shadow:none}
+#menu .card[aria-pressed="true"] canvas{border-color:var(--fox);box-shadow:inset 0 0 0 1px var(--fox)}
+#menu .card .pill{position:absolute;top:10px;right:10px;font:9.5px var(--f-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--fox);background:none;border:0;padding:0;border-radius:0}
+#menu .card .meta{padding:0;display:grid;gap:2px}
+#menu .card .code{display:flex;align-items:baseline;gap:8px}
+#menu .card .code b{font:600 34px/1 var(--f-display);color:var(--bone);letter-spacing:.02em}
+#menu .card .code span{font:12px var(--f-mono);color:var(--cyan)}
+#menu .card .nm{font-size:14.5px;color:var(--bone);white-space:normal;overflow:visible;text-overflow:clip}
+#menu .card .sub{font:10.5px var(--f-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--stone)}
+
+/* setup = numbered dispatch manifest */
+#menu #setup{display:grid;grid-template-columns:1fr;gap:0;align-items:start}
+#menu #setup>div::before{display:none}
+#menu #setup .mblock{border-top:1px solid var(--hair);padding:16px 0 18px;display:grid;gap:10px;background:none;border-left:0;border-right:0;border-bottom:0;border-radius:0;position:static;margin:0}
+#menu #setup .mblock .mhead{display:flex;gap:12px;align-items:baseline}
+#menu #setup .mblock .mno{font:11px var(--f-mono);color:var(--fox);letter-spacing:.1em}
+#menu #setup .mblock .mtitle{font:600 13px var(--f-mono);letter-spacing:.22em;text-transform:uppercase;color:var(--bone)}
+#menu #setupWrap{margin-top:6px}
+#menu .field{display:grid;gap:8px}
+#menu .field>label,#menu .field>.lab,#menu .lab{font:500 10.5px var(--f-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--stone)}
+#menu .field small{color:var(--stone);font-size:11.5px}
+#menu .diagram{border:1px solid var(--hair);background:#081120;border-radius:0;overflow:hidden}
+#menu .diagram canvas{display:block;width:100%;height:auto}
+#menu .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;font:12px var(--f-mono)}
+#menu .kv dt{font:10px var(--f-mono);letter-spacing:.14em;text-transform:uppercase;color:var(--stone)}
+#menu .kv dd{margin:0;font:12px var(--f-mono);color:var(--bone)}
+
+/* runway + destination rows */
+#menu .rwlist{display:grid;grid-template-columns:none;gap:0}
+#menu .rwlist button{display:flex;gap:14px;align-items:baseline;width:100%;text-align:left;padding:9px 2px;border:0;border-bottom:1px solid var(--hair);border-radius:0;background:none;color:var(--stone)}
+#menu .rwlist button b{font:13px var(--f-mono);color:var(--bone);min-width:74px}
+#menu .rwlist button small{font:11px var(--f-mono);color:var(--stone)}
+#menu .rwlist button .ils{color:var(--cyan)}
+#menu .rwlist button[aria-pressed="true"]{border-color:var(--hair);background:none;color:var(--bone);box-shadow:inset 2px 0 0 var(--fox)}
+#menu #destRes button{cursor:pointer}
+
+/* segmented controls: text with one bone-filled selection */
+#menu .seg{display:flex;flex-wrap:wrap;gap:2px 18px;background:none;padding:0;border:0;border-radius:0}
+#menu .seg button{flex:0 1 auto;padding:8px 2px;font-size:13.5px;color:var(--stone);border:0;border-bottom:2px solid transparent;border-radius:0;min-height:40px;white-space:nowrap;background:none;box-shadow:none}
+#menu .seg button:hover{color:var(--bone)}
+#menu .seg button[aria-pressed="true"]{color:var(--inkbg);background:var(--bone);border-bottom-color:var(--bone);padding-left:10px;padding-right:10px;font-weight:700;box-shadow:none}
+#menu .toggle{display:flex;gap:10px;align-items:flex-start;font-size:12.5px;color:var(--stone);cursor:pointer}
+#menu .toggle input{accent-color:var(--fox);width:16px;height:16px;flex:none;margin-top:2px}
+#menu input[type="range"]{-webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;cursor:pointer;accent-color:auto}
+#menu input[type="range"]::-webkit-slider-runnable-track{height:1px;background:var(--hair2)}
+#menu input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--bone);margin-top:-6.5px;border:0}
+#menu input[type="range"]::-moz-range-track{height:1px;background:var(--hair2)}
+#menu input[type="range"]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--bone);border:0}
+#menu input[type="search"],#menu input.num,#menu select{background:rgba(0,0,0,.35);border:1px solid var(--hair2);border-radius:4px;color:var(--bone);font:13px var(--f-body);padding:9px 11px;user-select:text}
+#menu .chips{display:flex;gap:16px;flex-wrap:wrap}
+#menu .chip{font:11px var(--f-mono);letter-spacing:.08em;color:var(--stone);padding:6px 0;border:0;border-bottom:1px solid transparent;border-radius:0;background:none}
+#menu .chip:hover{color:var(--fox);border-bottom-color:var(--fox)}
+#menu .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+#menu .row4{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+
+/* the one filled button + B's live dispatch summary */
+#menu #flybar{position:sticky;bottom:-34px;margin:22px -34px -34px;padding:14px 34px 20px;background:rgba(5,8,14,.97);border-top:1px solid var(--hair);z-index:5}
+#menu #flysum{font:11.5px var(--f-mono);letter-spacing:.1em;color:var(--stone);text-transform:uppercase;margin-bottom:10px}
+#menu #flysum b{color:var(--bone);font-weight:400}
+#menu .go{display:inline-flex;align-items:center;justify-content:center;gap:10px;background:linear-gradient(90deg,var(--fox),var(--fox2));color:#1A0D03;font-weight:700;border-radius:4px;padding:12px 20px;font-size:15px;width:100%;box-shadow:none;letter-spacing:.04em;text-transform:none;border:0}
+#menu .go svg{transition:transform .3s}
+#menu .go:hover{filter:none}
+#menu .go:hover svg{transform:translateX(4px)}
+#menu #fly{height:56px;font-size:16.5px}
+#menu .go.ghost{background:none;border:1px solid var(--hair2);color:var(--bone);width:auto;font-weight:400;box-shadow:none}
+
+/* lists: editorial index with ghost numbers (challenges, routes, charter) */
+#menu .list{display:grid;gap:0;counter-reset:fxitem}
+#menu .item{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center;width:100%;text-align:left;padding:15px 2px 15px 64px;border:0;border-bottom:1px solid var(--hair);border-radius:0;background:none}
+#menu .item::before{counter-increment:fxitem;content:counter(fxitem,decimal-leading-zero);position:absolute;left:2px;top:14px;font:300 40px/1 var(--f-display);color:rgba(244,241,234,.13)}
+#menu .item:hover{border-color:var(--hair);background:none}
+#menu .item h3{margin:0 0 3px;font:600 21px/1.1 var(--f-display);letter-spacing:.03em;text-transform:uppercase;color:var(--bone)}
+#menu .item p{margin:0;color:var(--stone);font-size:12.5px}
+#menu .item .best{text-align:right;font:10.5px var(--f-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--stone)}
+#menu .item .best b{display:block;font:600 20px/1.1 var(--f-display);color:var(--bone);letter-spacing:.02em;margin-top:2px}
+
+/* charter dossiers: bigger names, quieter rows */
+#menu #chtrList .item{align-items:start;padding-top:18px;padding-bottom:18px}
+#menu #chtrList .item h3{font-size:28px}
+#menu #chtrStartSeg{display:grid;gap:0}
+#menu #chtrStartSeg button{display:block;width:100%;text-align:left;padding:13px 2px;border:0;border-bottom:1px solid var(--hair);font-size:16px;color:var(--bone);min-height:0}
+#menu #chtrStartSeg button small{display:block;font-size:12px;color:var(--stone);margin-top:2px}
+#menu #chtrStartSeg button[aria-pressed="true"]{background:none;color:var(--bone);box-shadow:inset 2px 0 0 var(--fox);padding-left:12px;border-bottom-color:var(--hair)}
+
+/* logbook: hairline ledger + cream-paper letters (C's warmth, contained) */
+#menu table.log{width:100%;border-collapse:collapse;font:12px var(--f-mono)}
+#menu table.log th{font:500 10px var(--f-mono);letter-spacing:.16em;text-transform:uppercase;color:var(--stone);text-align:left;padding:8px 6px;border-bottom:1px solid var(--hair2);font-weight:500}
+#menu table.log td{padding:9px 6px;border-bottom:1px solid var(--hair);color:var(--stone)}
+#menu table.log td.grade{color:var(--bone)}
+#menu .grade{font:800 16px var(--f-display);letter-spacing:.04em}
+#menu #logBody .sechead{margin-bottom:14px}
+#menu #logBody .sechead h3{font:600 22px/1 var(--f-display);text-transform:uppercase;letter-spacing:.03em;color:var(--bone);margin:0}
+#menu #logBody .sechead ~ div{background:var(--paper)!important;border:1px solid rgba(36,28,18,.18)!important;border-radius:2px!important;color:var(--inktx)}
+#menu #logBody .sechead ~ div > div{color:#7c5a33!important}
+#menu #logBody .sechead ~ div span{color:#8a6b45!important}
+#menu #logBody .sechead ~ div b{color:var(--inktx)}
+#menu #logBody .sechead ~ div p{color:var(--inktx)}
+
+/* settings: one hairline-ruled column */
+#menu .setgrid{display:grid;grid-template-columns:1fr;gap:0}
+#menu .setgrid>.field,#menu .setgrid>.toggle{border-top:1px solid var(--hair);padding:15px 0}
+#menu .setgrid>.field:first-child{border-top:0;padding-top:2px}
+#menu #livSeg{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+#menu #livSeg button{display:grid;gap:7px;justify-items:start;text-align:left;padding:0;border:0;border-bottom:0;border-radius:0;font-size:12px;color:var(--bone);background:none;min-height:0}
+#menu #livSeg button>span{width:100%!important;height:46px!important;border-radius:2px!important;margin:0!important;display:block!important;border:1px solid var(--hair2);vertical-align:baseline!important}
+#menu #livSeg button[aria-pressed="true"]{background:none;color:var(--bone);font-weight:400;padding-left:0;padding-right:0}
+#menu #livSeg button[aria-pressed="true"]>span{box-shadow:0 0 0 2px var(--inkbg),0 0 0 3.5px var(--fox)}
+#menu .padmap{display:grid;gap:4px;font:11.5px var(--f-mono);color:var(--stone)}
+
+/* controls ledger */
+#menu .keys{display:grid;grid-template-columns:1fr 1fr;gap:0 34px}
+#menu .keys div{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid var(--hair);font-size:12.5px;color:var(--stone)}
+#menu kbd{font:11px var(--f-mono);border:1px solid var(--hair2);border-bottom-width:2px;border-radius:4px;padding:1px 5px;color:var(--bone);background:none}
+
+/* start anywhere */
+#menu .wmap{flex:none;position:relative;border:1px solid var(--hair);border-radius:0;overflow:hidden;background:#081120}
+#menu .wmap canvas{display:block;width:100%;height:auto;cursor:crosshair}
+#menu #wmapInfo{position:absolute;left:10px;bottom:8px;font-size:11px;color:var(--cyan);background:rgba(0,0,0,.45);padding:4px 8px;border-radius:6px;pointer-events:none}
+
+@media (max-width:900px){
+  /* phone layout follows the preview's proven block flow (menu becomes a
+     normal page: rail, then sheet, then the sticky chapter nav) — the grid
+     variant let the sheet slide under the rail, so it is not used. */
+  body{overflow:auto}
+  #menu{position:relative;display:block;overflow:visible;height:auto}
+  #menu #topbar{padding:12px 16px 0}
+  #menu #topbar .statsline{display:none}
+  #menu #stage{display:block;padding:10px 16px 0;max-width:none}
+  #menu #rail{padding:12px 2px 18px;height:auto}
+  #menu #rail .wordmark{font-size:clamp(52px,15vw,72px)}
+  #menu #sheet{width:100%;max-width:none;height:auto;max-height:none;border-left:0;border-top:1px solid var(--hair);padding:22px 18px 26px;overflow:visible}
+  #menu #sheet .sec{overflow:visible}
+  #menu #nav{position:sticky;bottom:0;background:rgba(5,8,14,.96);padding:0 10px calc(10px + env(safe-area-inset-bottom,0px));z-index:30;overflow-x:auto}
+  #menu #nav button{flex:0 0 auto;padding:10px 12px 4px;min-height:44px}
+  #menu #nav button .no{display:none}
+  #menu #nav button b{font-size:14px;white-space:nowrap}
+  #menu #nav button small{display:none}
+  #menu .cards{grid-template-columns:1fr}
+  #menu .row4{grid-template-columns:1fr 1fr}
+  #menu .row2{grid-template-columns:1fr}
+  #menu .keys{grid-template-columns:1fr}
+  #menu #flybar{margin:18px -18px -26px;padding:12px 18px 16px;bottom:-26px}
+  #menu .sechead h2{font-size:32px}
+  #menu .heroIata{font-size:clamp(56px,17vw,84px)}
+}
+@media (prefers-reduced-motion:reduce){#menu *{animation:none!important}}
+
 </style>
 
 <canvas id="gl" tabindex="0"></canvas>
@@ -320,22 +584,18 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
 </svg>
 
 <div id="menu" hidden>
+  <div id="backdrop"><video autoplay muted loop playsinline poster="media/backdrop.png"><source src="media/backdrop.webm" type="video/webm"><source src="media/backdrop.mp4" type="video/mp4"></video></div>
+  <div id="scrim"></div>
+  <header id="topbar">
+    <div class="brandline"><svg width="30" height="30" viewBox="0 0 64 64" aria-hidden="true"><use href="#foxheart"/></svg><span class="brandname">FOXHEART SKIES</span></div>
+    <div class="statsline" id="topStats"></div>
+  </header>
+  <div id="stage">
   <aside id="rail" class="glass">
-    <div class="brand">
-      <svg width="56" height="56" viewBox="0 0 64 64" aria-hidden="true"><use href="#foxheart"/></svg>
-      <div class="wordmark">Foxheart<br>Skies<span>for Nicofoxheart</span></div>
-    </div>
+    <div class="eyebrow">For Nicofoxheart — Tampa, Florida</div>
+    <div class="wordmark">Foxheart<br>Skies<span>A warm, personal sim</span></div>
     <p class="tag">Fly a twin-jet airliner onto real runways, from Tampa to Incheon, with live sun, weather and night lighting.</p>
-    <nav id="nav">
-      <button data-sec="free" aria-current="true"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 14l8-2 4-9 2 1-2 8 7 1 1 2-8 1-3 6-2-1 1-5-7 1z"/></svg><b>Free Flight</b><small>Terminal, gate, runway, final or airborne — at any airport</small></button>
-      <button data-sec="challenge"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 20h16M7 20l3-14h4l3 14M12 6V3"/></svg><b>Landing Challenge</b><small>Scored touchdowns: rate, centerline, zone, speed</small></button>
-      <button data-sec="anywhere"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg><b>Start Anywhere</b><small>Any point on the planet, in the air</small></button>
-      <button data-sec="routes"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M6.5 16.5C10 12 9 9 13 8.5s4-1 4.5-1.5" stroke-dasharray="2 2.5"/></svg><b>Scenic Routes</b><small>Short hops between featured airports, time accel</small></button>
-      <button data-sec="charter"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 21s-7.5-4.6-9.5-9C1 8.5 3 5 6.5 5c2 0 3.5 1 4.5 2.5C12 6 13.5 5 15.5 5 19 5 21 8.5 20.5 12c-1 4.4-8.5 9-8.5 9z" transform="scale(0.92) translate(1,1)"/></svg><b>Private Charter</b><small>Named clients, the little jet, one flight at a time</small></button>
-      <button data-sec="logbook"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M5 3h11l3 3v15H5zM8 9h8M8 13h8M8 17h5"/></svg><b>Logbook</b><small>Your flights and best landings</small></button>
-      <button data-sec="settings"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1"/></svg><b>Settings</b><small>Graphics, controls, units, sound</small></button>
-      <button data-sec="controls"><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h1M10 10h1M14 10h1M18 10h0M7 14h10"/></svg><b>Controls</b><small>Keyboard, mouse yoke and gamepad</small></button>
-    </nav>
+    <p class="story">Every flight, somebody's story.</p>
     <div class="railfoot">
       <div class="padhint">Using an Xbox controller? Press any button on it to connect it.</div>
       <div class="stats"><div><b id="stA">–</b>airports</div><div><b id="stR">–</b>runways</div><div><b id="stN">–</b>navaids</div></div>
@@ -361,10 +621,10 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
             <div style="display:grid;gap:16px;min-width:0">
               <div class="field"><span class="lab">Runway</span><div class="rwlist" id="rwlist"></div></div>
               <div class="field"><span class="lab">Start</span><div class="seg" id="startSeg"><button data-v="terminal">In the terminal</button><button data-v="gate">Gate</button><button data-v="runway" aria-pressed="true">Runway</button><button data-v="final">10 nm final</button><button data-v="air">Airborne</button></div><label class="toggle"><input type="checkbox" id="coldDark"> Cold &amp; dark (gate or terminal): start the aircraft yourself from the overhead panel</label></div>
-              <div class="field"><label for="destQ">Destination</label><input id="destQ" type="search" placeholder="Automatic, or search ICAO, IATA, name or city" autocomplete="off" spellcheck="false" style="background:rgba(0,0,0,.35);border:1px solid var(--line2);border-radius:8px;color:var(--ink);font:13px var(--f-body);padding:9px 11px;user-select:text"><div id="destRes" class="rwlist" hidden></div><small id="destInfo" class="mono" style="color:var(--mute)"></small></div>
+              <div class="field"><span class="lab">Aircraft</span><div class="seg" id="typeSeg"></div><small style="color:var(--mute)" id="typeDesc">Your aircraft — applies on reload, and is saved on this device.</small></div>
+              <div class="field"><label for="destQ">Destination</label><input id="destQ" type="search" placeholder="Automatic, or search ICAO, IATA, name or city" autocomplete="off" spellcheck="false"><div id="destRes" class="rwlist" hidden></div><small id="destInfo" class="mono" style="color:var(--mute)"></small></div>
               <div class="field timeline"><label for="tod">Local time <span id="todv" class="mono" style="color:var(--ink);margin-left:6px"></span></label><input id="tod" type="range" min="0" max="1439" step="5" value="1080"><div class="chips" id="sunchips"></div></div>
               <div class="field"><span class="lab">Weather</span><div class="seg" id="wxSeg"><button data-v="clear" aria-pressed="true">Clear</button><button data-v="scattered">Scattered</button><button data-v="overcast">Overcast</button><button data-v="rain">Rain</button><button data-v="snow">Snow</button><button data-v="fog">Fog</button></div></div>
-              <div class="field"><span class="lab">Aircraft</span><div class="seg" id="typeSeg"></div><small style="color:var(--mute)" id="typeDesc">Your aircraft — applies on reload, and is saved on this device.</small></div>
               <div class="row2">
                 <div class="field"><label for="wdir">Wind from <span id="wdirv" class="mono" style="color:var(--ink)"></span></label><input id="wdir" type="range" min="0" max="355" step="5" value="270"></div>
                 <div class="field"><label for="wspd">Wind speed <span id="wspdv" class="mono" style="color:var(--ink)"></span></label><input id="wspd" type="range" min="0" max="35" step="1" value="6"></div>
@@ -407,7 +667,7 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
     <section class="sec" data-sec="charter" hidden>
       <div class="sechead"><h2>Private Charter</h2><span class="eyebrow">The PJ-1 · twelve club seats · they booked <i>you</i></span></div>
       <div class="secbody"><p class="note">No airline, no crowd of strangers — a handful of named clients, their occasion, and the little jet. No terminal either: the PJ-1 waits on the open apron, you start at the jet, walk the preflight, and meet your clients at the stairs as the bus brings them out. Fly them yourself, and their note will be waiting in the Charter Book at the back of your logbook.</p>
-      <div class="field"><span class="lab">Start</span><div class="seg" id="chtrStartSeg"><button data-v="terminal" aria-pressed="true">Clients shuttle in</button><button data-v="gate">Clients on the bus</button></div></div>
+      <div class="field"><span class="lab">Start</span><div class="seg" id="chtrStartSeg"><button data-v="terminal" aria-pressed="true">Clients shuttle in<small>You start at the jet on the open apron — the bus brings them out to the stairs.</small></button><button data-v="gate">Clients on the bus<small>Already aboard when you arrive — walk out, do the preflight, meet them at the door.</small></button></div></div>
       <div class="list" id="chtrList"></div></div>
     </section>
     <section class="sec" data-sec="logbook" hidden>
@@ -453,6 +713,17 @@ kbd{font:11px var(--f-mono);padding:2px 6px;border-radius:4px;border:1px solid v
       <div class="secbody"><div class="keys" id="keysA"></div></div>
     </section>
   </main>
+  </div>
+  <nav id="nav">
+    <button data-sec="free" aria-current="true"><span class="no">01</span><b><span class="lamp"></span>Free Flight</b><small>Terminal, gate, runway, final or airborne — at any airport</small></button>
+    <button data-sec="challenge"><span class="no">02</span><b><span class="lamp"></span>Landing Challenge</b><small>Scored touchdowns: rate, centerline, zone, speed</small></button>
+    <button data-sec="anywhere"><span class="no">03</span><b><span class="lamp"></span>Start Anywhere</b><small>Any point on the planet, in the air</small></button>
+    <button data-sec="routes"><span class="no">04</span><b><span class="lamp"></span>Scenic Routes</b><small>Short hops between featured airports, time accel</small></button>
+    <button data-sec="charter"><span class="no">05</span><b><span class="lamp"></span>Private Charter</b><small>Named clients, the little jet, one flight at a time</small></button>
+    <button data-sec="logbook"><span class="no">06</span><b><span class="lamp"></span>Logbook</b><small>Your flights and best landings</small></button>
+    <button data-sec="settings"><span class="no">07</span><b><span class="lamp"></span>Settings</b><small>Graphics, controls, units, sound</small></button>
+    <button data-sec="controls"><span class="no">08</span><b><span class="lamp"></span>Controls</b><small>Keyboard, mouse yoke and gamepad</small></button>
+  </nav>
 </div>
 
 <div id="flight" hidden>
