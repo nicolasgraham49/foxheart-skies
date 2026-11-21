@@ -25,9 +25,9 @@ export const LEAD_NAME = 'Ray';
 // the three conducted services: crewIds are GroundCrew SERVICES ids (groundcrew.js),
 // veh are Turnaround vehicle ids (env-turnaround.js); work = docked work seconds.
 const SEQ = [
-  { id: 'fuel', name: 'Fuel', crewIds: ['fuel'], veh: ['fuel'], work: 80, sub: 'hydrant dispenser · right wing' },
-  { id: 'bags', name: 'Baggage & cargo', crewIds: ['bags'], veh: ['belt1', 'belt2', 'cont', 'train'], work: 120, sub: 'belt loaders · ULD loader · baggage train' },
-  { id: 'cater', name: 'Catering', crewIds: ['cat1', 'cat2'], veh: ['cat1', 'cat2'], work: 65, sub: 'hi-lift trucks · doors R1 + R2' },
+  { id: 'fuel', name: 'Fuel', crewIds: ['fuel'], veh: ['fuel'], work: 80, fee: 160, sub: 'hydrant dispenser · right wing' },
+  { id: 'bags', name: 'Baggage & cargo', crewIds: ['bags'], veh: ['belt1', 'belt2', 'cont', 'train'], work: 120, fee: 220, sub: 'belt loaders · ULD loader · baggage train' },
+  { id: 'cater', name: 'Catering', crewIds: ['cat1', 'cat2'], veh: ['cat1', 'cat2'], work: 65, fee: 140, sub: 'hi-lift trucks · doors R1 + R2' },
 ];
 const COL = { working: '#55e08f', coming: '#ffb84d', leaving: '#66d7ea', done: '#8e99a8', away: '#4b5563', queued: '#ffb84d', held: '#e06c5f' };
 
@@ -48,6 +48,10 @@ const LINES = {
   pushDone: 'All services clear. Have a good flight, Captain — we’ll keep your stand.',
   pushEarly: 'Pushing with work undone — your call, Captain. Stand 7 keeps the rest warm.',
   brake: 'Parking brake first, Captain — then the ramp is yours.',
+  // [Home Field 1b] the priced second route (No Dead Air: a queued service always has a priced way out)
+  offer: (n, fee) => `${n} could come round the apron side — second route, $${fee} flat. Your call, Captain; the lane’s free eventually either way.`,
+  route: (n, fee) => `${n} — rolling round the apron side. $${fee} on the field’s tab.`,
+  routeRefused: n => `Fair enough — ${n} waits for the lane. Patience is free, Captain.`,
 };
 
 // KTPA's home stand for pickStand (main.js): gate 7, if it exists and is free.
@@ -85,10 +89,11 @@ function foxCanvas(size, withText) {
 }
 
 export class Stand7 {
-  constructor(crew, { toast = () => { }, scene = null, ground = null, openClassic = null } = {}) {
+  constructor(crew, { toast = () => { }, scene = null, ground = null, openClassic = null, onLoad = null } = {}) {
     this.crew = crew; this.toast = toast; this.scene = scene; this.ground = ground; this.openClassic = openClassic;
-    this.active = false; this.closed = false; this.seqDone = false; this.t = 0; this.lastAction = 0; this._savedAuto = null;
-    this.svc = {}; for (const def of SEQ) this.svc[def.id] = { def, st: 'away', held: false, paused: false, recalling: false, workT: 0, external: false };
+    this.onLoad = onLoad; // [Home Field 1b] the LOAD SHEET button on the Baggage & cargo row (wired by main.js)
+    this.active = false; this.closed = false; this.seqDone = false; this.t = 0; this.lastAction = 0; this._savedAuto = null; this.fees = 0;
+    this.svc = {}; for (const def of SEQ) this.svc[def.id] = { def, st: 'away', held: false, paused: false, recalling: false, workT: 0, external: false, alt: false, offered: false, offerT: 0 };
     this.queue = []; this.leadLine = ''; this._dress = []; this._acc = 1;
     // ---- panel DOM (the Ramp Sequence panel; same glass language as env-svcpanel.js)
     const root = document.createElement('div'); root.id = 'stand7Panel'; root.className = 'glass'; root.hidden = true;
@@ -111,15 +116,17 @@ export class Stand7 {
       el.innerHTML = `<i style="width:9px;height:9px;border-radius:50%;display:block"></i>
         <span><span data-n></span><br><small data-s></small>
         <span data-bar style="display:block;height:3px;border-radius:2px;background:rgba(255,255,255,.08);margin-top:4px;overflow:hidden"><span data-fill style="display:block;height:100%;width:0%;background:#55e08f"></span></span></span>
-        <span style="display:flex;gap:5px;align-items:center">
+        <span style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
           <button data-act="up" style="${btn}" title="Re-sequence: move up the queue">▲</button><button data-act="dn" style="${btn}" title="Re-sequence: move down the queue">▼</button>
-          <button data-act="hold" style="${btn}">HOLD</button><button data-act="main" style="${btn}"></button></span>`;
+          <button data-act="hold" style="${btn}">HOLD</button><button data-act="main" style="${btn}"></button><button data-act="route" style="${btn}" title="Priced second route: come round the apron side, now"></button>${def.id === 'bags' ? `<button data-act="load" style="${btn}" title="The load sheet: place the ULDs, watch the needle, sign">LOAD SHEET</button>` : ''}</span>`;
       el.querySelector('[data-act="main"]').onclick = () => this.mainAction(def.id);
       el.querySelector('[data-act="hold"]').onclick = () => this.holdAction(def.id);
       el.querySelector('[data-act="up"]').onclick = () => this.move(def.id, -1);
       el.querySelector('[data-act="dn"]').onclick = () => this.move(def.id, 1);
+      el.querySelector('[data-act="route"]').onclick = () => this.secondRoute(def.id);
+      const loadBtn = el.querySelector('[data-act="load"]'); if (loadBtn) loadBtn.onclick = () => { if (this.onLoad) this.onLoad(); };
       rowsEl.appendChild(el);
-      this.rows[def.id] = { el, dot: el.querySelector('i'), name: el.querySelector('[data-n]'), sub: el.querySelector('[data-s]'), fill: el.querySelector('[data-fill]'), bar: el.querySelector('[data-bar]'), main: el.querySelector('[data-act="main"]'), hold: el.querySelector('[data-act="hold"]'), up: el.querySelector('[data-act="up"]'), dn: el.querySelector('[data-act="dn"]') };
+      this.rows[def.id] = { el, dot: el.querySelector('i'), name: el.querySelector('[data-n]'), sub: el.querySelector('[data-s]'), fill: el.querySelector('[data-fill]'), bar: el.querySelector('[data-bar]'), main: el.querySelector('[data-act="main"]'), hold: el.querySelector('[data-act="hold"]'), up: el.querySelector('[data-act="up"]'), dn: el.querySelector('[data-act="dn"]'), route: el.querySelector('[data-act="route"]'), load: loadBtn };
     }
   }
   get open() { return !this.el.hidden; }
@@ -130,8 +137,8 @@ export class Stand7 {
   // ------------------------------------------------------------ arm / disarm
   preArm() { if (this._savedAuto == null) this._savedAuto = this.crew.autoServices; this.crew.autoServices = false; }
   arm({ standB = null, stand = null, tod = 1080, onFoot = false } = {}) {
-    this.active = true; this.closed = false; this.seqDone = false; this.t = 0; this.lastAction = 0; this.queue = []; this._dispatchedOnce = false;
-    for (const id in this.svc) Object.assign(this.svc[id], { st: 'away', held: false, paused: false, recalling: false, workT: 0, external: false });
+    this.active = true; this.closed = false; this.seqDone = false; this.t = 0; this.lastAction = 0; this.queue = []; this._dispatchedOnce = false; this.fees = 0;
+    for (const id in this.svc) Object.assign(this.svc[id], { st: 'away', held: false, paused: false, recalling: false, workT: 0, external: false, alt: false, offered: false, offerT: 0 });
     this._q('banner').hidden = true;
     if (standB && stand && this.scene && this.ground) { this._buildCorner(standB, stand); this._buildNeighbours(standB, stand); }
     const g = LINES.greet(tod); this.say(g); this.toast(LEAD_NAME + ': ' + g, 7000);
@@ -150,20 +157,28 @@ export class Stand7 {
   turn() { return this.crew.turn; }
   vstates(def) { const t = this.turn(); return def.veh.map(id => t.vstate(t.V[id])); }
   laneHolder() {
-    for (const def of SEQ) { const s = this.svc[def.id]; if (s.st === 'entering' || s.st === 'leaving') return def; }
+    for (const def of SEQ) { const s = this.svc[def.id]; if (!s.alt && (s.st === 'entering' || s.st === 'leaving')) return def; } // [1b] a second-route service travels the apron side — it never owns the lane
     // a finished or dismissed service's trucks still own the lane while they drive off
-    if (this.turn() && this.turn().mode) for (const def of SEQ) { const s = this.svc[def.id]; if ((s.st === 'done' || s.st === 'working') && this.vstates(def).some(v => v === 'leaving')) return def; }
+    if (this.turn() && this.turn().mode) for (const def of SEQ) { const s = this.svc[def.id]; if (!s.alt && (s.st === 'done' || s.st === 'working') && this.vstates(def).some(v => v === 'leaving')) return def; }
     return null;
   }
-  dispatch(def, auto = false) {
+  dispatch(def, auto = false, alt = false) {
     const s = this.svc[def.id]; let ok = true, msg = '';
     for (const cid of def.crewIds) { const r = this.crew.callService(cid); if (r && !r.ok) { ok = false; msg = r.msg; } }
     if (!ok) { this.say(LINES.brake); if (msg) this.toast(msg); return false; }
-    s.st = 'entering'; s.recalling = false; this.lastAction = this.t;
+    s.st = 'entering'; s.recalling = false; s.alt = !!alt; this.lastAction = this.t;
     const qi = this.queue.indexOf(def.id); if (qi >= 0) this.queue.splice(qi, 1);
-    if (auto) this.say(LINES.laneFree(def.name));
+    if (alt) this.say(LINES.route(def.name, def.fee));
+    else if (auto) this.say(LINES.laneFree(def.name));
     else { this.say(!this._dispatchedOnce ? LINES.firstDispatch : LINES.dispatch(def.name)); this._dispatchedOnce = true; }
     return true;
+  }
+  // [Home Field 1b] the priced second route: a queued service comes round the apron
+  // side right now, for a flat fee shown before it is paid. Refusing costs the wait.
+  secondRoute(id) {
+    const s = this.svc[id], def = s.def; if (!s || s.st !== 'queued') return;
+    if (this.dispatch(def, false, true)) { this.fees += def.fee; this.lastAction = this.t; }
+    this.refresh();
   }
   mainAction(id) {
     const s = this.svc[id], def = s.def; this.lastAction = this.t;
@@ -182,7 +197,7 @@ export class Stand7 {
   }
   holdAction(id) {
     const s = this.svc[id], def = s.def; this.lastAction = this.t;
-    if (s.st === 'queued') { s.held = !s.held; this.say(s.held ? LINES.hold(def.name) : LINES.unhold(def.name)); }
+    if (s.st === 'queued') { s.held = !s.held; this.say(s.held && s.offered ? LINES.routeRefused(def.name) : s.held ? LINES.hold(def.name) : LINES.unhold(def.name)); } // [1b] holding a service with a priced route on the table is the refusal — Ray notes it, once, without a grudge
     else if (s.st === 'working') { s.paused = !s.paused; this.say(s.paused ? LINES.pauseWork(def.name) : LINES.resumeWork(def.name)); }
     this.refresh();
   }
@@ -218,6 +233,14 @@ export class Stand7 {
       const next = this.queue.find(qid => !this.svc[qid].held);
       if (next) this.dispatch(this.svc[next].def, true);
     }
+    // [Home Field 1b] No Dead Air, priced: a service still queued behind a held lane
+    // after a few seconds gets Ray's second-route offer — once per queueing. The
+    // offer never expires and refusing it costs nothing but the wait.
+    for (const def of SEQ) {
+      const s = this.svc[def.id];
+      if (s.st !== 'queued') { s.offered = false; s.offerT = 0; continue; }
+      if (!s.offered && !s.held && this.laneHolder()) { s.offerT += dt; if (s.offerT >= 6) { s.offered = true; this.say(LINES.offer(def.name, def.fee)); } }
+    }
     // No Dead Air: a decision at least every ~45 s, or Ray asks for one (a line, never a penalty)
     const busy = SEQ.some(d => { const st = this.svc[d.id].st; return st === 'entering' || st === 'working' || st === 'leaving'; });
     if (!this.seqDone && !busy && !this.queue.some(q => !this.svc[q].held) && this.t - this.lastAction >= 45) { this.say(LINES.nudge); this.lastAction = this.t; }
@@ -238,7 +261,7 @@ export class Stand7 {
       let label = '', col = COL.away;
       if (s.st === 'away') label = 'NOT CALLED';
       else if (s.st === 'queued') { const n = this.queue.indexOf(def.id) + 1; label = s.held ? `HELD BY YOU · #${n} IN QUEUE` : `HELD AT STAGING · #${n} IN QUEUE`; col = s.held ? COL.held : COL.queued; }
-      else if (s.st === 'entering') { label = 'ON THE LANE · DRIVING IN'; col = COL.coming; }
+      else if (s.st === 'entering') { label = s.alt ? 'VIA THE APRON · DRIVING IN' : 'ON THE LANE · DRIVING IN'; col = COL.coming; }
       else if (s.st === 'working') { label = s.paused ? 'WORKING · HELD AT THE AIRCRAFT' : `WORKING · ${Math.max(0, Math.ceil(def.work - s.workT))}s`; col = COL.working; }
       else if (s.st === 'leaving') { label = 'CLEARING THE LANE'; col = COL.leaving; }
       else if (s.st === 'done') { label = 'DONE ✓'; col = COL.done; }
@@ -259,13 +282,15 @@ export class Stand7 {
       const canSeq = s.st === 'queued' && this.queue.length > 1;
       r.up.style.display = r.dn.style.display = canSeq ? '' : 'none';
       r.up.disabled = this.queue.indexOf(def.id) <= 0; r.dn.disabled = this.queue.indexOf(def.id) >= this.queue.length - 1;
+      // [1b] the priced second route is always on a queued service's row: hold, re-sequence, or pay — a decision, never dead air
+      if (r.route) { r.route.style.display = s.st === 'queued' ? '' : 'none'; r.route.textContent = `2ND ROUTE $${def.fee}`; }
     }
     this._q('tally').textContent = doneN + ' of 3 complete';
     if (this.leadLine && this._q('lead').textContent !== this.leadLine) this._q('lead').textContent = this.leadLine;
   }
   state() {
-    const o = { active: this.active, closed: this.closed, seqDone: this.seqDone, t: +this.t.toFixed(1), lead: this.leadLine, queue: this.queue.slice(), lane: (this.laneHolder() || {}).id || null, panelOpen: this.open, auto: this.crew.autoServices, dressed: this._dress.length, services: {} };
-    for (const def of SEQ) { const s = this.svc[def.id]; o.services[def.id] = { st: s.st, held: s.held, paused: s.paused, workT: +s.workT.toFixed(1), veh: this.turn() && this.turn().mode ? this.vstates(def) : [] }; }
+    const o = { active: this.active, closed: this.closed, seqDone: this.seqDone, t: +this.t.toFixed(1), lead: this.leadLine, queue: this.queue.slice(), lane: (this.laneHolder() || {}).id || null, panelOpen: this.open, auto: this.crew.autoServices, dressed: this._dress.length, fees: this.fees, services: {} };
+    for (const def of SEQ) { const s = this.svc[def.id]; o.services[def.id] = { st: s.st, held: s.held, paused: s.paused, alt: s.alt, offered: s.offered, workT: +s.workT.toFixed(1), veh: this.turn() && this.turn().mode ? this.vstates(def) : [] }; }
     return o;
   }
 
