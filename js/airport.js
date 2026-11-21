@@ -430,7 +430,12 @@ export function buildAirport(apt, opts) {
     const standP = along(s, dep / 2 - 45);
     const st = { x: standP.x, z: standP.z, s, gate: i, outHdg: (Math.atan2(nx, -nz) * 180 / Math.PI + 360) % 360, inHdg: (Math.atan2(-nx, nz) * 180 / Math.PI + 360) % 360, used: false };
     stands.push(st);
-    if (full && sceneryN < sceneryCap && R() < 0.72 && i % 7 !== 3) { sceneryN++; st.used = true; const p = { x: standP.x - nx * 2, z: standP.z - nz * 2, rot: Math.atan2(nx, nz), liv: (R() * TRAFFIC_LIVERIES.length) | 0, var: pickTrafficVariant(R()), s: apt.large && R() < 0.3 ? 1.35 : 1 }; st.parkS = p.s; parked.push(p); }
+    // [Home Field 1a] KTPA stand 7 is the captain's home stand: scenery never parks
+    // there, and its neighbours (6 and 8) always dress the field so the home corner
+    // reads alive from the first frame. R() is consumed exactly as before, so every
+    // other airport's scenery stream is untouched.
+    const homeRow = apt.icao === 'KTPA' && (i === 6 || i === 8);
+    if (full && sceneryN < sceneryCap && ((R() < 0.72 && i % 7 !== 3) || homeRow) && !(apt.icao === 'KTPA' && i === 7)) { sceneryN++; st.used = true; const p = { x: standP.x - nx * 2, z: standP.z - nz * 2, rot: Math.atan2(nx, nz), liv: (R() * TRAFFIC_LIVERIES.length) | 0, var: pickTrafficVariant(R()), s: apt.large && R() < 0.3 ? 1.35 : 1 }; st.parkS = p.s; parked.push(p); }
   }
   if (full && parked.length) {
     // parked fleet: one InstancedMesh trio (body / livery parts / glass) per airframe variant;
