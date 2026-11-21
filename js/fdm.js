@@ -46,6 +46,7 @@ export class FDM {
     this.gearDown = o.gear ?? true; this.gearPos = this.gearDown ? 1 : 0;
     this.speedbrake = 0; this.groundSpoilers = 0; this.spoilersArmed = true; this.reverser = 0; this.revCmd = false;
     this.brake = 0; this.parkBrake = o.parkBrake ?? false; this.autobrake = 0; this.steer = 0; this.trim = 0; this.ih = 0;
+    this.cgCm = 0; this.burnFactor = 1; // [Home Field 1b] the signed load sheet writes here: a constant pitch-moment coefficient from the load's CG offset, and the trim-drag fuel factor. Standard load = 0 / 1, exactly as before.
     this.in = { pitch: 0, roll: 0, yaw: 0 };
     this.de = 0; this.da = 0; this.dr = 0; this.qInt = 0; this.gammaHold = null; this.phiHold = 0; this.pitchHold = null;
     this.onGround = !!o.onGround; this.wow = [false, false, false]; this.airTime = this.onGround ? 0 : 100; this.gndTime = 0;
@@ -122,7 +123,7 @@ export class FDM {
       const tie = this.reverser > 0.1 ? -ti * 0.42 * this.reverser : ti; T += tie; Tasym += i ? -tie : tie;
       if (run) this.egt[i] += ((380 + this.n1[i] * 5.6) - this.egt[i]) * Math.min(1, dt * 0.8);
     }
-    this.fuel = Math.max(0, this.fuel - ((this.engRun[0] ? this.n1[0] : 0) + (this.engRun[1] ? this.n1[1] : 0)) * 0.0095 * (this.spec.thrust / 120000) * dt);
+    this.fuel = Math.max(0, this.fuel - ((this.engRun[0] ? this.n1[0] : 0) + (this.engRun[1] ? this.n1[1] : 0)) * 0.0095 * (this.spec.thrust / 120000) * (this.burnFactor || 1) * dt); // [Home Field 1b] burnFactor is the signed load's trim drag (1 = standard load)
     this.reverser = clamp(this.reverser + (this.revCmd ? 1 : -1) * dt / 2, 0, 1);
     F_.addScaledVector(fwd, T);
     F_.y -= this.mass * G;
@@ -130,7 +131,7 @@ export class FDM {
     const p = -this.w.z, qr = this.w.x, r = -this.w.y;
     const Vm = Math.max(V, 25);
     this.controlLaw(dt, e, alpha, beta, V, qbar, agl);
-    let Cm = 0.035 - 1.8 * alpha - 1.6 * this.de - 1.9 * this.ih - 30 * (qr * CBAR / (2 * Vm)) - 0.07 * ff - 0.02 * spoil;
+    let Cm = 0.035 - 1.8 * alpha - 1.6 * this.de - 1.9 * this.ih - 30 * (qr * CBAR / (2 * Vm)) - 0.07 * ff - 0.02 * spoil + (this.cgCm || 0); // [Home Field 1b] + the signed load's CG moment: nose-heavy pulls the nose down, tail-heavy lifts it — the law trims it out and the stab sits where the signature put it
     if (alpha > aS) Cm -= 1.2 * (alpha - aS);
     let Cl = -0.09 * beta + 0.11 * this.da - 0.5 * (p * B / (2 * Vm)) + 0.08 * (r * B / (2 * Vm));
     let Cn = 0.11 * beta + 0.07 * this.dr - 0.2 * (r * B / (2 * Vm)) - 0.006 * this.da;
