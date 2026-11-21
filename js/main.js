@@ -39,6 +39,7 @@ import * as StairsBus from './stairsbus.js'; // [Stairs + bus] PJ-1 charter ops:
 import { GFX, setMsaaActive } from './gfx.js';
 import { PeopleHD } from './ppl-core.js';
 import { ServicePanel } from './env-svcpanel.js';
+import { Stand7, homeStand } from './env-stand7.js'; // [Home Field 1a] Stand 7 at KTPA: the conducted ramp sequence
 import { buildCabin, applyCabinType } from './interiors.js';
 import { TYPES, currentType, savedType, saveType, applyType, setFlightPax } from './ac-types.js';
 import { rng } from './terrain.js';
@@ -171,7 +172,10 @@ function toggleFootCam() { foot.setCamMode(foot.thirdPerson ? 'first' : 'third')
 const crew = new GroundCrew(scene); // tug, chocks, cones, GPU and ramp crew at the stand
 crew.autoServices = settings.autoTurn ?? true; // ground services: automatic turnaround, or call / dismiss each one (I / GND / PA panel)
 const svcPanel = ServicePanel(crew, { toast, onAuto: v => { settings.autoTurn = v; store.set('settings', settings); } });
-function toggleSvc(v) { const o = v ?? !svcPanel.open; if (o) { if (radioOpen) toggleRadio(false); if (paOpen) togglePA(false); } svcPanel.toggle(o); }
+const stand7 = new Stand7(crew, { toast, scene, ground, openClassic: () => svcPanel.toggle(true) }); // [Home Field 1a]
+function toggleSvc(v) { // [Home Field 1a] at Stand 7 the GND key opens the Ramp Sequence panel instead (the classic panel stays reachable from its footer)
+  if (stand7.active && !svcPanel.open) { const o = v ?? !stand7.open; if (o) { if (radioOpen) toggleRadio(false); if (paOpen) togglePA(false); } stand7.toggle(o); return; }
+  const o = v ?? !svcPanel.open; if (o) { if (radioOpen) toggleRadio(false); if (paOpen) togglePA(false); } svcPanel.toggle(o); }
 const aids = new LandingAids(scene); // PAPI lights beside the touchdown zone
 const pa = new PA(audio);
 // one speech queue for PA, ATC, ATIS, chatter and callouts, with subtitles and a PA-live indicator
@@ -414,7 +418,12 @@ async function startFlight(cfg) {
   Walkaround.reset(); // [Walk-around preflight] and no preflight route or gate carried over
   StairsBus.reset(); // [Stairs + bus] and no stair truck, bus or walker carried over
   if (!(cfg.start === 'gate' || cfg.start === 'terminal')) { W.stand = null; W.standB = null; }
+  // [Home Field 1a] a KTPA airliner departure from Stand 7 is conducted by the captain:
+  // the automatic turnaround steps aside (manual services) and the Ramp Sequence arms.
+  const homeDep = !cfg.menu && (cfg.start === 'gate' || cfg.start === 'terminal') && A.icao === 'KTPA' && !(cfg.mode === 'charter' && cfg.contract && TYPE.id === 'pjet') && !!W.stand && W.stand.gateName === '7';
+  stand7.disarm(); if (homeDep) stand7.preArm();
   crew.clear(); if (!cfg.menu && W.stand) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.atStand(aircraft, ground); if (!(cfg.mode === 'charter' && cfg.contract && TYPE.id === 'pjet')) W.stand.jb?.userData?.setDocked?.(true); } // [Stairs + bus] the PJ-1 never docks a bridge
+  if (homeDep) stand7.arm({ standB: W.standB, stand: W.stand, tod: W.tod, onFoot: cfg.start === 'terminal' });
   // at a gate the engines are off (APU running, or everything off for cold & dark); runway and air starts keep them running
   const atGate = cfg.start === 'gate' || cfg.start === 'terminal', cold = !!cfg.cold && atGate;
   sys.reset(cold ? 'cold' : atGate && !cfg.menu ? 'gate' : 'run'); fails.reset(); fails.random = cfg.menu ? 'off' : settings.failRand || 'off'; if (cfg.fail && !cfg.menu) fails.trigger(cfg.fail, { eng: 0 }); rescue.clear(); Object.assign(W, { evac: false, emerStop: false, rescueT: 0, foam: false, braced: false, emergPA: false, bellyT: 0, souls: TYPE.id === 'fox' ? 120 + ((Math.random() * 50) | 0) + 6 : TYPE.cabin.pax + 5 + ((Math.random() * 10) | 0) }); W.ndRange = null;
@@ -457,7 +466,8 @@ async function startFlight(cfg) {
   return true;
 }
 // ---------------------------------------------------------------- gates, pushback, taxi routes, on foot, ATC context
-function pickStand(b) { const all = b.b.stands; all.forEach((s, i) => { s.gateName = String(i + 1); }); const free = all.filter(s => !s.used); const st = free[(free.length / 2) | 0] || all[(all.length / 2) | 0]; if (st) st.used = true; return st; } // [Traffic] reserve the stand the moment it is picked: AI traffic's freeStand() skips used stands, so a traffic arrival can never be routed into the captain's stand while he taxis in (placeAtStand re-marks it on park — idempotent)
+function pickStand(b) { const home = homeStand(b); if (home) return home; // [Home Field 1a] KTPA departures and arrivals take the home stand, gate 7, when it is free
+  const all = b.b.stands; all.forEach((s, i) => { s.gateName = String(i + 1); }); const free = all.filter(s => !s.used); const st = free[(free.length / 2) | 0] || all[(all.length / 2) | 0]; if (st) st.used = true; return st; } // [Traffic] reserve the stand the moment it is picked: AI traffic's freeStand() skips used stands, so a traffic arrival can never be routed into the captain's stand while he taxis in (placeAtStand re-marks it on park — idempotent)
 function placeAtStand(b, st) {
   const fr = b.b.frame; fdm.reset({ x: b.x + st.x - fr.nx * 2, y: b.elev - DIM.wheelY - 0.22, z: b.z + st.z - fr.nz * 2, hdg: st.inHdg, speed: 0, gear: true, flaps: 0, tl: 0, onGround: true, parkBrake: true, spdSel: 150, altSel: 5000 });
   st.used = true; W.stand = st; W.standB = b; if (st.jb) st.jb.userData.forPlayer = true; if (!st.gateName) b.b.stands.forEach((s, i) => s.gateName = String(i + 1));
@@ -665,7 +675,7 @@ function callBoardingGroup(g) {
 function boardingStep(dt) { // dt is sim seconds; called from cabinStep every frame
   const S = W.boarding; if (!S || W.menuMode || !W.started) return;
   if (!W.signedIn && captainAirside()) captainSignedIn(); // [Nothing starts until sign-in] airside ⇒ signed in (see captainAirside)
-  if (S.phase === 'pending') { if (crew.autoServices && W.signedIn) { S.t += dt; if (S.t > 15) beginBoarding(); } return; }
+  if (S.phase === 'pending') { if ((crew.autoServices || stand7.active) && W.signedIn) { S.t += dt; if (S.t > 15) beginBoarding(); } return; } // [HOME FIELD 1a] at Stand 7 the captain conducts the services by hand (autoServices held off), but boarding keeps its normal clock — the sequence panel replaces the conductor, not the cabin
   if (S.phase !== 'boarding') return;
   const c = cabinObj(); if (!c) return;
   const info = c.boardingInfo();
@@ -963,7 +973,7 @@ addEventListener('keydown', e => {
     return;
   }
   // an open panel is modal for number keys and Esc
-  if (svcPanel.open && e.code === 'Escape') { svcPanel.toggle(false); return; }
+  if ((svcPanel.open || stand7.open) && e.code === 'Escape') { svcPanel.toggle(false); stand7.toggle(false); return; }
   if (e.code === 'KeyI' && !W.onFoot && !W.menuMode) { toggleSvc(); return; }
   if ((radioOpen || paOpen) && e.code === 'Escape') { if (radioOpen) toggleRadio(false); if (paOpen) togglePA(false); return; }
   if (radioOpen && /^(Digit|Numpad)\d$/.test(e.code)) { const n = +e.code.slice(-1); const o = n ? atc.options()[n - 1] : null; if (o) atc.choose(o.id); return; }
@@ -1029,7 +1039,7 @@ let padTick = 0, padUIActive = false, navEl = null, navIdx = 0, padHelpOn = fals
 function padPoll(dt) { if (pad._tick === padTick) return pad.gp; pad._tick = padTick; return pad.poll(dt); }
 function padRoot() {
   const vis = s => { const e = $(s); return e && !e.hidden ? e : null; };
-  return vis('#result') || vis('#help') || vis('#pause') || (paOpen ? $('#pa') : null) || (svcPanel.open ? svcPanel.el : null) || (radioOpen ? $('#radio') : null) || (W.menuMode ? vis('#menu') : null);
+  return vis('#result') || vis('#help') || vis('#pause') || (paOpen ? $('#pa') : null) || (svcPanel.open ? svcPanel.el : null) || (stand7.open ? stand7.el : null) || (radioOpen ? $('#radio') : null) || (W.menuMode ? vis('#menu') : null);
 }
 function setNav(el) { if (navEl === el) return; if (navEl) navEl.classList.remove('padfocus'); navEl = el; if (el) { el.classList.add('padfocus'); try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { } } }
 function navStep(els, cur, d) {
@@ -1390,6 +1400,7 @@ function simulate(dtReal) {
   else if (W.autoTaxi) autoTaxiStep(simDt);
   else for (let i = 0; i < steps; i++) { fdm.step(h, env); autoConfig(h); }
   if (crew.state !== 'off') { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.update(simDt, aircraft, fdm, ground); }
+  stand7.update(simDt); // [Home Field 1a] the conducted sequence ticks with the sim (no-op unless armed)
   atc.update(simDt); fails.update(simDt); emergencyStep(simDt); updateComfort(simDt); sys.update(simDt, fdm, { gpu: gpuConnected(), oat: 24 }); autoStartStep(simDt);
   W.simTime += simDt;
   if (W.timeAccel > 1) { W.tod = (W.tod + simDt / 60) % 1440; if ((W.todT = (W.todT || 0) + simDt) > 30) { W.todT = 0; setTimeOfDay(W.tod); } }
@@ -1868,7 +1879,7 @@ function ffSync() { const ff = $('#ffPanel'); if (!ff) return; const show = W.mo
   const t = $('#ffTod'); if (t) { t.value = Math.round(W.tod / 5) * 5; $('#ffTodv').textContent = fmtTime(W.tod); }
   $$('#ffWx button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === W.wx))); }
 function togglePause() { if (!W.started || W.menuMode) return; const p = $('#pause'); p.hidden = !p.hidden; W.paused = !p.hidden; if (!p.hidden) ffSync(); }
-function toMenu() { foot.dispose(); disposeFlightCabin(); if (paOpen) togglePA(false); svcPanel.toggle(false); W.onFoot = false; $('#foot').hidden = true; $('#radio').hidden = true; radioOpen = false; showTaxi(null); W.push = null; W.autoTaxi = null; crew.clear(); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { } $('#pause').hidden = true; W.paused = false; $('#flight').hidden = true; $('#menu').hidden = false; W.menuMode = true; startMenuScene(); }
+function toMenu() { foot.dispose(); disposeFlightCabin(); if (paOpen) togglePA(false); svcPanel.toggle(false); stand7.disarm(); W.onFoot = false; $('#foot').hidden = true; $('#radio').hidden = true; radioOpen = false; showTaxi(null); W.push = null; W.autoTaxi = null; crew.clear(); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { } $('#pause').hidden = true; W.paused = false; $('#flight').hidden = true; $('#menu').hidden = false; W.menuMode = true; startMenuScene(); }
 
 // ---- menu
 const featured = () => World.featured.map(i => World.byIcao.get(i)).filter(Boolean);
@@ -2173,6 +2184,7 @@ window.__sim = {
   crewTalk: () => CrewTalk.state(), // [Crew conversations] roster positions/phases, open card, interphone beats
   walkaround: () => Walkaround.state(), // [Walk-around preflight] route, gate, open card
   stairsbus: () => StairsBus.state(), // [Stairs + bus] bus/stairs/walker state for tests
+  stand7: () => stand7.state(), // [Home Field 1a] the conducted ramp sequence at KTPA Stand 7
   taxiLineVis: () => !!(taxiLine && taxiLine.visible), // [Playtest fixes Nov 14] test hook: is the magenta taxi route line rendering?
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
