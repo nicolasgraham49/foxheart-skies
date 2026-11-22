@@ -179,6 +179,7 @@ export class ATC {
   setup(o) {
     this.o = o; this.dep = o.dep; this.arr = o.arr || o.dep; this.stopAtis(); this.log = []; this.queue = []; this.tx = null; this.gapT = 0;
     this.hold = false; this.rb = null; this.ho = null; this.alt = null; this.hdgA = null; this.spdA = null; this.flags = {}; this.heard = {}; this.contacted = new Set(); this.personas = {}; this.lastInstr = null; this.taxiRoute = null; this.exitName = null; this.minAgl = 1e9; this.chatT = 14; this.chatLog = []; this.phT = 0; this.divertApt = null; this.divertedFrom = null;
+    this.amendApt = null; this.amendedFrom = null; this.amendPick = null; this.offerState = 'armed'; this.offerApt = null; // [Era Four 1a · Amend] the re-plan verb's state + the one scripted offer (Quiet Rule)
     let sq; do { sq = String(2 + (Math.random() * 5 | 0)) + [0, 0, 0].map(() => Math.random() * 8 | 0).join(''); } while (/^(2000|7000|1200)$/.test(sq)); this.squawk = sq;
     const dep = this.dep, arr = this.arr, d = gcNm(dep.lat, dep.lon, arr.lat, arr.lon), crs = gcBrg(dep.lat, dep.lon, arr.lat, arr.lon);
     let cr = Math.max(8000, Math.min(37000, Math.round(d * 1.4 / 10) * 1000)); if (((cr / 1000) % 2 === 1) !== (crs < 180)) cr += cr >= 37000 ? -1000 : 1000; // semicircular rule: eastbound odd, westbound even
@@ -584,6 +585,21 @@ export class ATC {
       if (this.divertApt) add('canceldiv', this.curK(), `Cancel diversion — continue to ${this.city(this.divertedFrom || this.arr)}`, false, false);
       else { const dv = c.divert && c.divert(); if (dv && dv.apt && dv.apt !== this.arr) add('divert', this.curK(), `Divert to ${this.city(dv.apt)} (${dv.apt.icao}) — nearest suitable${dv.distNm != null ? ', ' + Math.round(dv.distNm) + ' NM' : ''}`, false, false); }
     }
+    // [Era Four 1a · Amend] the captain's own re-plan verb, beside the diversion:
+    // amending is routine authorship, not an emergency. The candidate list, the one
+    // scripted offer's answers, and the plain verb — all pilot-initiated, all free.
+    if (!s.onGround && !this.flags.emer && !this.rb && !this.ho && !this.waiting()) {
+      if (this.amendPick) {
+        for (const cd of this.amendPick) add('amendto_' + cd.apt.icao, this.curK(), `Amend destination to ${this.city(cd.apt)} (${cd.apt.icao})${cd.distNm != null ? ' — ' + Math.round(cd.distNm) + ' NM' : ''}`, false, false);
+        add('amend_back', this.curK(), `Back — keep ${this.city(this.arr)}`, false, false);
+      } else if (this.offerState === 'pending' && this.offerApt && !this.amendApt && !this.divertApt) {
+        add('offer_accept', 'CTR', `Take the offer — amend to ${this.city(this.offerApt)} (${this.offerApt.icao})`, false, false);
+        add('offer_decline', 'CTR', 'Decline — continue as filed', false, false);
+        add('offer_quiet', 'CTR', 'Quiet — no more offers this flight', false, false);
+      } else if (!this.divertApt && !['to_app', 'app', 'to_twr_arr', 'land_clr', 'twr_continue', 'go_around'].includes(p)) {
+        add('amend', this.curK(), this.amendApt ? `Amend destination again (now ${this.city(this.arr)})…` : 'Amend destination…', false, false);
+      }
+    }
     if (this.lastInstr && this.t - this.lastInstr.t < 150 && !this.waiting()) add('sayagain', this.lastInstr.kind, 'Say again', false, false);
     // emergencies always come LAST in the list (number keys of normal calls never shift onto them). With a real failure they are offered
     // directly; without one they sit behind an 'Emergency…' entry that needs a second, deliberate confirm (opened menu times out after 20 s)
@@ -598,6 +614,7 @@ export class ATC {
   // ---------------------------------------------------------------- pilot choice → transmission(s) and the controller's reply
   choose(id) {
     const c = this.o?.ctx; if (!c) return; const CS = this.CSm();
+    if (id && id.startsWith('amendto_')) return this.confirmAmend(id.slice('amendto_'.length)); // [Era Four 1a] a picked amend candidate
     switch (id) {
       case 'atis': this.tune('ATIS'); return;
       case 'sayagain': { const L = this.lastInstr; if (!L) return; const lgS = this.pilotLangFor(this.fac(L.kind).apt), CPSa = this.CPL(lgS); this.me(L.kind, this.tagL(lgS === 'es' ? M('Repita, ', CPSa, '.') : lgS === 'ko' ? M('다시 말씀해 주십시오, ', CPSa, '.') : lgS === 'ja' ? M('もう一度お願いします、', CPSa, '。') : M('Say again, ', CS, '.'), lgS)); this.atc(L.kind, L.m, 1.3, null, { reply: true }); return; }
@@ -616,6 +633,11 @@ export class ATC {
       case 'cancel': return this.cancelEmer();
       case 'divert': return this.requestDivert();
       case 'canceldiv': return this.cancelDivert();
+      case 'amend': return this.requestAmendPick();
+      case 'amend_back': this.amendPick = null; this.emit(); return;
+      case 'offer_accept': { const A = this.offerApt; this.offerState = 'done'; this.offerApt = null; if (A) this.requestAmend(A); this.emit(); return; }
+      case 'offer_decline': this.offerState = 'done'; this.offerApt = null; this.me(this.curK(), M('Staying with the plan, thank you, ', CS, '.')); this.emit(); return; // declining leaves no trace — no record, no repeat
+      case 'offer_quiet': this.offerState = 'quiet'; this.offerApt = null; this.emit(); return; // the Quiet Rule: silencing is free and is never recorded
       case 'ils': { const re = c.arrEnd(), lgI2 = this.pilotLangFor(this.arr), CPI = this.CPL(lgI2), RI = this.rwyL(re.ident, lgI2); this.me('APP', this.tagL(lgI2 === 'es' ? M(this.fac('APP').name, ', ', CPI, ', solicito aproximación I L S a la pista ', this.rwyEsM(re.ident), '.') : lgI2 === 'ko' ? M(this.fac('APP').name, ', ', CPI, ', I L S 활주로 ', RI, ' 접근을 요청합니다.') : lgI2 === 'ja' ? M(this.fac('APP').name, '、', CPI, '、I L S 滑走路 ', RI, ' アプローチをリクエストします。') : M(this.fac('APP').name, ', ', CS, ', request the I L S runway ', this.rwyM(re.ident), '.'), lgI2)); this.atc('APP', M(CS, ', roger, expect vectors for the I L S runway ', this.rwyM(re.ident), '.'), 1.6, null, { reply: true }); this.flags.ilsReq = true; return; }
     }
   }
@@ -848,6 +870,10 @@ export class ATC {
       if (!this.flags.sector && this.ctrApt === this.dep && this.dep !== this.arr && s.distArrNm < distDep && this.fac('CTR', this.arr).name !== this.fac('CTR', this.dep).name) { this.flags.sector = true; this.atc('CTR', M(CS, ', ', this.contactM('CTR', this.arr), '.'), 0.5, () => this.setPhase('to_ctr'), { ho: { to: 'CTR', from: 'CTR', apt: this.arr } }); return; }
       if (!this.flags.desc && s.distArrNm < this.todNm(s) && s.altFt > this.bottom + 800) { this.descend(0.6, false); return; }
       if ((this.flags.desc || s.altFt < this.bottom + 800) && (s.distArrNm < 40 || (s.altFt < this.bottom + 600 && s.distArrNm < 60))) { this.atc('CTR', M(CS, ', ', this.contactM('APP', this.arr), '.'), 0.5, () => this.setPhase('to_app'), { ho: { to: 'APP', from: 'CTR' } }); return; }
+      // [Era Four 1a · the Quiet Rule] the one scripted offer: settled cruise only,
+      // well out from the destination, nothing else pending (follow() reaches here
+      // only on a quiet frequency). Seeded on the Tampa–Miami corridor in 1a.
+      if (this.offerState === 'armed' && this.dep && this.dep.icao === 'KTPA' && this.arr && this.arr.icao === 'KMIA' && !this.amendApt && !this.divertApt && !this.amendPick && !this.flags.desc && this.t - this.phT > 45 && s.distArrNm > 55 && s.altFt > this.bottom + 1500) this.fireOffer();
     }
     // approach: vectors, then the ILS clearance; tower handoff once established
     if (p === 'app' && !this.rb) {
@@ -1013,6 +1039,71 @@ export class ATC {
     this.rb = null; this.ho = { to: 'CTR', from: 'CTR', apt: orig, t: this.t, n: 0, skipBye: true, quiet: true }; this.ctrApt = orig;
     Object.assign(this.flags, { appClr: false, desc: false, vecT: 0, advise: false, gaCmd: false, twrCall: false, vacate: false, sector: true });
     this.setPhase('to_ctr');
+  }
+  // ---------------------------------------------------------------- [Era Four 1a · Amend] the re-plan verb: the divert pipeline generalized
+  // from emergency tool to routine authorship. The captain picks a new destination
+  // while airborne; the arrival switches through the same ctx.setArr the divert
+  // uses, the enroute flow re-arms exactly like a cancelled divert, and ATC's
+  // answer is a routine re-clearance — amending is NOT an emergency and never
+  // sounds like one. The filed destination is remembered (amendedFrom) for the
+  // ND ghost line and the logbook's planned-vs-flown record; nothing is graded.
+  requestAmendPick() {
+    const c = this.o?.ctx; if (!c) return; const s = this.ctxS();
+    if (this.flags.emer || this.divertApt) { this.note('Amend: not while a diversion is running.'); return; }
+    if (s.onGround) { this.note('Amend is for when you are airborne.'); return; }
+    if (this.rb || this.ho || this.waiting()) { this.note('Amend: finish the current ATC call first.'); return; }
+    const cands = c.amendCands ? c.amendCands() : [];
+    if (!cands.length) { this.note('No suitable airport to amend to within reach.'); return; }
+    this.amendPick = cands; this.emit();
+  }
+  confirmAmend(icao) {
+    const hit = (this.amendPick || []).find(x => x.apt && x.apt.icao === icao);
+    this.amendPick = null;
+    if (!hit) { this.emit(); return; }
+    this.requestAmend(hit.apt);
+  }
+  requestAmend(A) {
+    const c = this.o?.ctx; if (!c || !A) return; const s = this.ctxS();
+    if (this.flags.emer || this.divertApt) { this.note('Amend: not while a diversion is running.'); return; }
+    if (s.onGround) { this.note('Amend is for when you are airborne.'); return; }
+    if (this.rb || this.ho || this.waiting()) { this.note('Amend: finish the current ATC call first.'); return; }
+    if (A === this.arr) { this.note(this.city(A) + ' is already your destination.'); return; }
+    if (this.offerState === 'pending' || this.offerState === 'sent') { this.offerState = 'done'; this.offerApt = null; } // a manual amend answers the offer by itself
+    const CS = this.CSm(), CPS = this.CSp(), k = this.curK(), F = this.fac(k), lgP = this.pilotLangFor(F.apt), CPP = this.CPL(lgP);
+    this.me(k, this.tagL(lgP === 'es' ? M(F.name, ', ', CPS, ', solicito cambiar el destino a ', this.city(A), '.') : lgP === 'ko' ? M(F.name, ', ', CPP, ', 목적지를 ', this.city(A), '로 변경 요청합니다.') : lgP === 'ja' ? M(F.name, '、', CPP, '、目的地を', this.city(A), 'に変更リクエストします。') : M(F.name, ', ', CS, ', request to amend our destination to ', this.city(A), '.'), lgP));
+    this.applyAmend(A);
+  }
+  applyAmend(A) { // state switch + routine re-clearance (mirrors restoreDivert's re-arm, pointed at the new destination)
+    const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), CPS = this.CSp();
+    if (!this.amendedFrom) this.amendedFrom = this.arr; // the filed destination, remembered from the first amendment on
+    this.amendApt = A === this.amendedFrom ? null : A; // amending back to the filed destination clears the flag; the record keeps the history
+    c.setArr && c.setArr(A); this.arr = A;
+    if (c.amendShown) c.amendShown(A, this.amendedFrom); // main.js: ghost line on the ND, the record entry, the cabin PA (commercial only)
+    this.appAlt = Math.max(2000, r100(A.elevFt + 3000));
+    this.bottom = Math.min(this.cruise, Math.round((A.elevFt + (this.ta(A) >= 10000 ? 11000 : 7000)) / 1000) * 1000);
+    this.rb = null; this.ho = { to: 'CTR', from: 'CTR', apt: A, t: this.t, n: 0, skipBye: true, quiet: true }; this.ctrApt = A;
+    Object.assign(this.flags, { appClr: false, desc: false, vecT: 0, advise: false, gaCmd: false, twrCall: false, vacate: false, sector: true });
+    this.setPhase('to_ctr');
+    const brg = Math.round(gcBrg(s.lat, s.lon, A.lat, A.lon) / 5) * 5 || 360;
+    const fix = c.fixNear && c.fixNear(A);
+    this.atc('CTR', M(CS, ', amended clearance approved, direct ', fix ? [fix.id, twyS(fix.id)] : this.city(A), ' when ready, expect the I L S at ', this.city(A), '.'), 1.2, null,
+      { reply: true, rb: { label: 'amended to ' + A.icao, m: M('Amended to ', this.city(A), ', direct when ready, ', CS, '.'), mEs: M('Destino cambiado a ', this.city(A), ', directo cuando estemos listos, ', CPS, '.'), fcu: { hdg: brg }, then: () => this.assignHdg(null) } });
+  }
+  // [Era Four 1a · the Quiet Rule] exactly one scripted offer per flight, on the
+  // Tampa–Miami corridor in this slice: Center relays a company suggestion during
+  // settled cruise (follow() only calls this on a quiet frequency). Accepting runs
+  // the full amend exchange; declining leaves no trace; QUIET silences offers for
+  // the rest of the flight, costs nothing, and is recorded nowhere.
+  fireOffer() {
+    const c = this.o.ctx, CS = this.CSm();
+    const charter = !!(c.isCharter && c.isCharter());
+    const A = c.aptByIcao && c.aptByIcao(charter ? 'KORL' : 'KSFB');
+    if (!A || A === this.arr) { this.offerState = 'done'; return; }
+    this.offerApt = A; this.offerState = 'sent';
+    const msg = charter
+      ? M(CS, ', company relay for you. Your client\'s meeting has moved to Orlando — ', this.city(A), ' is ready when you are. Amend if you wish, or stay with the plan; entirely your call.')
+      : M(CS, ', company message. Miami arrivals are backing up; company offers ', this.city(A), ' instead — a gate and coaches for your passengers are arranged. Amend if you wish, or stay with Miami; entirely your call.');
+    this.atc('CTR', msg, 0.8, () => { if (this.offerState === 'sent' && !this.amendApt && !this.divertApt) { this.offerState = 'pending'; this.emit(); } });
   }
   cancelEmer() {
     const c = this.o.ctx, s = this.ctxS(), CS = this.CSm(), k = this.curK(), F = this.fac(k), may = this.flags.emer === 'mayday';
