@@ -72,7 +72,7 @@ export const SHORT = { KTPA: 'Tampa', KMIA: 'Miami', RKSI: 'Incheon', KLAX: 'Los
 export const REGION_CS = { US: ['Sunfin', 'Pelican', 'Coral', 'Bayhawk', 'Skylark', 'Manatee', 'Seabird', 'Palmetto', 'Osprey', 'Redtail'], KR: ['Hanbit', 'Mirae', 'Arirang', 'Haneul', 'Blue Crane', 'Seorak'], JP: ['Sakura Wing', 'Kestrel', 'Hikari', 'Tsubame'], PA: ['Canal', 'Quetzal', 'Isthmus', 'Toucan', 'Pacifico'], GB: ['Thames', 'Kestrel', 'Albion', 'Speedlink'], AE: ['Falcon', 'Oasis', 'Dune'], SG: ['Merlion', 'Orchid', 'Straits'], default: ['Skylark', 'Kestrel', 'Seabird', 'Osprey', 'Nimbus', 'Aurora'] };
 export const DEST_DEFAULT = { KTPA: 'KMIA', KMIA: 'KTPA', RKSI: 'RJTT', RKSS: 'RJTT', RJTT: 'RKSS', KLAX: 'KSFO', KSFO: 'KLAX', MPTO: 'KMIA', KJFK: 'EGLL', EGLL: 'KJFK', OMDB: 'EGLL', WSSS: 'RKSI' };
 // [data key, fallback key, simulated base MHz, unit word]; frequencies come from the airport data where it has them (else marked *)
-const FAC = { ATIS: ['A', null, 127.85, 'Information'], DEL: ['C', null, 121.9, 'Delivery'], GND: ['G', null, 121.75, 'Ground'], TWR: ['T', null, 118.7, 'Tower'], DEP: ['D', 'P', 124.35, 'Departure'], APP: ['P', 'D', 119.25, 'Approach'], CTR: [null, null, 132.45, 'Center'] };
+const FAC = { ATIS: ['A', null, 127.85, 'Information'], DEL: ['C', null, 121.9, 'Delivery'], GND: ['G', null, 121.75, 'Ground'], TWR: ['T', null, 118.7, 'Tower'], DEP: ['D', 'P', 124.35, 'Departure'], APP: ['P', 'D', 119.25, 'Approach'], CTR: [null, null, 132.45, 'Center'], AIR: [null, null, 123.45, 'Air to Air'] }; // [Era Four · FINGERS S1] 123.45 — "fingers", the air-to-air frequency; pinned exact in facility() below
 const CENTER_CC = new Set(['US', 'CA']); // area control is "Center" there, "Control" elsewhere (London Control, Incheon Control)
 const TA = { US: 18000, CA: 18000, MX: 18500, KR: 14000, JP: 14000, AU: 10000, NZ: 13000, SG: 11000, AE: 13000, GB: 6000, IE: 5000, FR: 5000, DE: 5000, NL: 3000, ES: 6000, IT: 6000 }; // transition altitudes
 const VOICE = { ATIS: { rate: 1.0, pitch: 0.9 }, DEL: { rate: 1.06, pitch: 1.16 }, GND: { rate: 1.1, pitch: 0.8 }, TWR: { rate: 1.16, pitch: 1.22 }, DEP: { rate: 1.12, pitch: 0.74 }, APP: { rate: 1.08, pitch: 1.02 }, CTR: { rate: 1.04, pitch: 0.88 }, ME: { rate: 1.08, pitch: 0.9 } };
@@ -90,6 +90,7 @@ const ARR_TWR = new Set(['to_twr_arr', 'land_clr', 'twr_continue', 'go_around'])
 
 export function facility(apt, kind) {
   const [k1, k2, base, word0] = FAC[kind]; const f = apt.freq || {};
+  if (kind === 'AIR') return { kind, mhz: base, real: false, name: word0, apt }; // [FINGERS S1] 123.45 never hash-jitters — it is the one frequency every pilot shares
   const real = k1 ? (f[k1] ?? (k2 ? f[k2] : undefined)) : undefined;
   let h = 0; for (const c of apt.icao + kind) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   const mhz = real ?? +(base + ((h % 9) - 4) * 0.025).toFixed(3);
