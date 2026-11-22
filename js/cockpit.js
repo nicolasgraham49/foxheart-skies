@@ -141,6 +141,14 @@ export class Displays {
         c.fillStyle = kind === 'arr' ? MAG : kind === 'dep' ? CYAN : 'rgba(235,235,235,0.75)';
         c.beginPath(); c.arc(x, y, kind ? 4.5 : 3, 0, 7); c.fill();
         if ((kind || a.large) && labelled < 14 && tryLabel(a.icao, x + 7, y + 3, c.fillStyle, 11)) labelled++; } }
+    // [Era Four 1a · Amend] the filed route, kept as a ghost under the live one:
+    // a dashed dim line to the original destination with a hollow diamond — the
+    // plan that was changed, still visible, never judged.
+    if (S.nav && S.navPts && S.navPts.ghost) { const G = S.navPts.ghost; const [gx, gy] = P(G.x, G.z);
+      c.strokeStyle = 'rgba(200,205,210,0.45)'; c.lineWidth = 1.5; c.setLineDash([7, 7]); c.beginPath();
+      if (S.navPts.dep) { const [ax0, ay0] = P(S.navPts.dep.x, S.navPts.dep.z); c.moveTo(ax0, ay0); } else c.moveTo(cx, cy);
+      c.lineTo(gx, gy); c.stroke(); c.setLineDash([]);
+      if (Math.hypot(gx - cx, gy - cy) <= R) { c.strokeStyle = 'rgba(200,205,210,0.85)'; c.lineWidth = 1.5; c.save(); c.translate(gx, gy); c.rotate(Math.PI / 4); c.strokeRect(-6, -6, 12, 12); c.restore(); if (S.nav.ghost) tryLabel(S.nav.ghost.icao, gx + 11, gy + 17, 'rgba(200,205,210,0.9)', 12); } }
     // flight-plan line: departure -> destination (navmap.js). The flown part
     // is dimmed white over the green; the destination gets a magenta diamond.
     if (S.nav && S.navPts && S.navPts.arr) { const A = S.navPts.dep, B = S.navPts.arr; const [bx, by] = P(B.x, B.z);
@@ -208,6 +216,7 @@ export class Displays {
       c.fillStyle = GRN; c.font = `15px ${MONO}`; c.fillText(n.remainNm.toFixed(n.remainNm < 20 ? 1 : 0) + ' NM · ' + Math.round(n.progress * 100) + '%', 500, ry + 22);
       c.fillStyle = WHT; c.fillText('ETE ' + fmtEte(n.eteMin) + (n.etaClockMin != null ? ' · ETA ' + fmtClock(n.etaClockMin) : ''), 500, ry + 44);
       if (n.divert) { c.fillStyle = AMB; c.fillText('DIVERT ' + n.divert.icao + ' ' + n.divert.distNm.toFixed(0) + ' NM', 500, ry + 66); }
+      if (n.ghost) { c.fillStyle = 'rgba(210,215,220,0.9)'; c.fillText('AMENDED · WAS ' + n.ghost.icao, 500, ry + (n.divert ? 88 : 66)); }
     } else if (!S.ils && S.route && S.route[S.ap.wp]) { const w = S.route[S.ap.wp]; c.fillStyle = WHT; c.font = `15px ${MONO}`; c.fillText(w.name, 500, 26); c.fillStyle = GRN; c.fillText((Math.hypot(w.x - f.pos.x, w.z - f.pos.z) / 1852).toFixed(1) + ' NM', 500, 46); }
     c.fillStyle = CYAN; c.fillText(range + ' NM', 500, 498); c.fillStyle = WHT; c.textAlign = 'left'; c.fillText('ARC  TRUE', 12, 498);
   }
