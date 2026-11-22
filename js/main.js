@@ -21,7 +21,8 @@ import { Systems } from './systems.js';
 import { Pad, BTN, ACTIONS, glyph, btnName } from './gamepad.js';
 import { Audio } from './audio.js';
 import { Traffic } from './traffic.js';
-import { ATC, facility, DEST_DEFAULT, SHORT } from './atc.js';
+import { ATC, facility, DEST_DEFAULT, SHORT, REGION_CS } from './atc.js';
+import { FingersEngine, AIR_FACILITY, FRAG, seedPilot } from './env-fingers.js'; // [Era Four · FINGERS S1] free-talk radio on 123.45
 import { OnFoot } from './onfoot.js';
 import { PA, PA_LINES, PA_EMERG } from './pa.js';
 import { Failures, FAILS } from './failures.js';
@@ -456,6 +457,7 @@ async function startFlight(cfg) {
     atc.auto = settings.atcAuto || false;
     atc.setup({ start: (any || cfg.start === 'air') ? 'route' : cfg.start, dep: A, arr: cfg.start === 'final' ? A : W.dest, depEnd: E, gate: String(W.stand?.gateName || 7), ctx: atcCtx }); // [Free Flight upgrade] an airborne spawn is enroute, like a route start
     atc.setHold(cfg.start === 'terminal'); // [Nothing starts until sign-in] the frequency stays silent until the captain signs in (captainSignedIn releases it)
+    fingers = new FingersEngine(fingersHost(), { chattiness: 'company', csWords: REGION_CS.US }); W.fingT = 0; // [FINGERS S1] one engine per flight; "Company" is the approved chattiness default
     renderRadio();
     setView(cfg.view || (cfg.start === 'final' ? 'cockpit' : 'chase'));
     showNote(A);
@@ -825,21 +827,90 @@ const atcCtx = {
   exitSide() { const E = atcCtx.arrEnd(); const b = W.built.find(x => x.apt === atc.arr); const net = b?.b.taxiNet.find(t => t.r.a === E || t.r.b === E); if (!net) return 'right'; return (net.r.a === E) === (net.sd > 0) ? 'right' : 'left'; },
   atGate() { const st = W.arrStand; if (!st || !W.primary) return false; return Math.hypot(W.primary.x + st.x - fdm.pos.x, W.primary.z + st.z - fdm.pos.z) < 60 && Math.hypot(fdm.vel.x, fdm.vel.z) < 2; },
 };
+// ---------------------------------------------------------------- [Era Four · FINGERS S1] free-talk radio host adapter
+// The engine (js/env-fingers.js) is dependency-free; everything sim-shaped
+// reaches it through this adapter over atcCtx. Pilot lines ride
+// atc.other('AIR', …) so voices hash per callsign like ambient chatter and
+// pumpTx serializes them behind ATC (ATC always wins the speaker — the
+// engine's tick holds replies while atcBusy()). The captain's typed lines go
+// straight into atc.log as ME — NOT atc.me(), so a typed line never drops
+// chatter or triggers a facility switch.
+let fingers = null;
+const COMPASS8 = ['north', 'northeast', 'east', 'southeast', 'south', 'southwest', 'west', 'northwest'];
+const compassPt = deg => COMPASS8[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+const DIGW = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'niner'];
+const spokenNum = n => String(Math.round(Math.abs(n))).split('').map(c => DIGW[+c]).join(' ');
+function fingersHost() {
+  return {
+    traffic: () => atcCtx.traffic().map(a => { const trk = a.dir ? (Math.atan2(a.dir.x, -a.dir.z) * R2D + 360) % 360 : null; return { ...a,
+      fromDir: a.kind === 'arr' && trk != null ? compassPt(trk + 180) : undefined, // his true inbound bearing, reversed: where he is coming FROM
+      toDir: a.kind === 'dep' && trk != null ? compassPt(trk) : undefined,
+      // busyNearField (spec §2.1: too busy to chat), calibrated to this sim's
+      // traffic lifecycle — traffic.js arrivals fly ONE 16 km final (s from
+      // -16000 m) and departures despawn at h 1200 m, so the plan's 10 NM /
+      // 1,500 ft absolutes would mark every aircraft busy for its entire
+      // life. The sim's own runwayUse conventions are the honest scale:
+      // an arrival is busy on SHORT final (s > -6000, ≈3 NM), a departure
+      // while holding or in initial climb (hold > 0 or h < 250 m).
+      busyNearField: a.kind === 'arr' ? (a.s != null && a.s > -6000) : (a.kind === 'dep' && a.phase === 'air' && ((a.hold || 0) > 0 || (a.h || 0) < 250)) }; }),
+    state: () => atcCtx.state(),
+    weather: () => { const w = atcCtx.weather(); return { kind: W.wx, ride: W.gust > 2.5 ? 'chop' : 'smooth', windD: w.dir + ' at ' + w.kt, windS: spokenNum(w.dir) + ' at ' + spokenNum(w.kt) }; },
+    me: () => ({ csD: atc.cs, csS: atc.csS, typeS: (currentType()?.name || 'jet').replace(/-style$/, ''), destCity: atc.arr?.city, origCity: atc.dep?.city }),
+    arrCity: () => atc.arr?.city, depCity: () => atc.dep?.city,
+    geo: () => { const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z); const near = nearestAirports(ll.lat, ll.lon, 70000, 1)[0]; return near ? (SHORT[near.icao] || near.city) : null; },
+    tod: () => W.tod, quiet: () => atc.offerState === 'quiet',
+    atcBusy: () => !!(atc.tx || atc.queue.length),
+    emit: ev => { if (ev.who === 'ME') { atc.log.push({ who: 'ME', fac: atc.cs, text: ev.d, t: atc.t }); if (atc.log.length > 80) atc.log.shift(); atc.emit(); }
+      else if (ev.who === 'PILOT') atc.other('AIR', ev.cs, { d: ev.d, s: ev.s });
+      else atc.note(ev.d); },
+  };
+}
 // radio panel
 let radioOpen = false;
 function renderRadio() {
   const r = $('#radio'); if (!r) return;
   const t = atc.tuned; $('#rFreq').textContent = t ? t.mhz.toFixed(t.mhz * 100 % 5 ? 3 : 2) + (t.real ? '' : '*') : '---.--'; $('#rName').textContent = t ? t.name.toUpperCase() : '';
   const A = atc.apt ? atc.apt() : null;
-  $('#rFacs').innerHTML = A ? ['ATIS', 'DEL', 'GND', 'TWR', 'DEP', 'CTR', 'APP'].map(k => { const f = k === 'CTR' ? atc.fac('CTR') : facility(A, k); return `<button class="rfac" data-k="${k}" aria-pressed="${t && t.kind === k}"><b>${k}</b><span>${f.mhz.toFixed(f.mhz * 100 % 5 ? 3 : 2)}${f.real ? '' : '*'}</span></button>`; }).join('') : '';
-  $$('#rFacs .rfac').forEach(b => b.onclick = () => { atc.tune(b.dataset.k); canvas.focus(); });
+  const airN = fingers ? fingers.inRange().length : 0, airDim = !fingers || fingers.sterile(); // [FINGERS S1] the AIR row: count badge from the engine, dimmed under the sterile line
+  $('#rFacs').innerHTML = (A ? ['ATIS', 'DEL', 'GND', 'TWR', 'DEP', 'CTR', 'APP'].map(k => { const f = k === 'CTR' ? atc.fac('CTR') : facility(A, k); return `<button class="rfac" data-k="${k}" aria-pressed="${t && t.kind === k}"><b>${k}</b><span>${f.mhz.toFixed(f.mhz * 100 % 5 ? 3 : 2)}${f.real ? '' : '*'}</span></button>`; }).join('') : '')
+    + `<button class="rfac${airDim ? ' rdim' : ''}" data-k="AIR" aria-pressed="${t && t.kind === 'AIR'}"><b>AIR${airN ? ' · ' + airN : ''}</b><span>${AIR_FACILITY.mhz.toFixed(2)}*</span></button>`;
+  $$('#rFacs .rfac').forEach(b => b.onclick = () => { if (b.dataset.k !== 'AIR' && fingers) fingers.endThread(); atc.tune(b.dataset.k); canvas.focus(); });
   $('#rLog').innerHTML = atc.log.slice(-9).map(l => `<div class="rl ${l.who === 'ME' ? 'me' : l.other ? 'oth' : ''}"><b>${l.who === 'ME' ? 'YOU' : l.fac.toUpperCase()}</b> ${l.text}</div>`).join('') || '<div class="rl"><b>RADIO</b> Pick a call below. Frequencies marked * are simulated; the rest are from the airport data.</div>';
   const lg = $('#rLog'); lg.scrollTop = lg.scrollHeight;
-  const opts = atc.options(); $('#rOpts').innerHTML = opts.length ? opts.map((o, i) => `<button class="ropt" data-id="${o.id}"><kbd>${i + 1}</kbd><span>${o.label}</span><small>${o.kind} ${o.freq}</small></button>`).join('') : '<div class="rnone">Nothing to say right now. Fly the aircraft; ATC will call you.</div>';
-  $$('#rOpts .ropt').forEach(b => b.onclick = () => { atc.choose(b.dataset.id); canvas.focus(); });
+  if (t && t.kind === 'AIR' && fingers) renderAirOpts(); // [FINGERS S1] on fingers, the options area is the sky
+  else { const opts = atc.options(); $('#rOpts').innerHTML = opts.length ? opts.map((o, i) => `<button class="ropt" data-id="${o.id}"><kbd>${i + 1}</kbd><span>${o.label}</span><small>${o.kind} ${o.freq}</small></button>`).join('') : '<div class="rnone">Nothing to say right now. Fly the aircraft; ATC will call you.</div>';
+  $$('#rOpts .ropt').forEach(b => b.onclick = () => { atc.choose(b.dataset.id); canvas.focus(); }); }
   { const ra = $('#rAuto'), rs = $('#rSpeak'); if (ra) ra.checked = atc.auto; if (rs) rs.checked = atc.speakMe; }
   updateDivertBtn();
   // (spoken lines are shown by the shared subtitle bar, in sync with the voice)
+}
+// [FINGERS S1] the AIR options area: sterile note / in-range hail list / an open
+// thread's quick-lines (the scripted floor), plus the free-text input row.
+// The input's value + focus survive re-renders (atc.emit fires constantly);
+// Enter transmits via engine.say(), Esc returns focus to the aircraft, and
+// the global key handler already suspends sim hotkeys while an INPUT has focus.
+function renderAirOpts() {
+  const box = $('#rOpts'); if (!box || !fingers) return;
+  const old = $('#rSay'), keep = old ? { v: old.value, f: document.activeElement === old } : null;
+  const sterile = fingers.sterile(), snap = fingers.snapshot();
+  let h = '';
+  if (sterile) h += `<div class="rnone">${FRAG.sterileNote}</div>`;
+  if (fingers.state === 'open' || fingers.state === 'hail' || fingers.state === 'standby') {
+    if (snap.partner) h += `<div class="rnone">On fingers with ${snap.partner.cs} — ${snap.partner.name}, flying ${snap.partner.temp === 'quiet' ? 'a quiet frequency' : 'the same sky'}. Tune away and the thread closes, no ceremony.</div>`;
+    h += fingers.quickLines().map((q, i) => `<button class="ropt" data-q="${i}"><kbd>${i + 1}</kbd><span>${q}</span><small>AIR 123.45</small></button>`).join('');
+  } else {
+    const list = fingers.inRange();
+    h += list.length ? list.map((a, i) => { const p = seedPilot(a, REGION_CS.US); return `<button class="ropt" data-hail="${i}"><kbd>${i + 1}</kbd><span>Hail ${p.cs} · ${a.type ? a.type[1] : 'jet'}</span><small>${Math.max(1, Math.round(a.distNm))} NM · ${a.clock || '12'} o'clock</small></button>`; }).join('')
+      : '<div class="rnone">No one in range on fingers. The sky is quiet up here.</div>';
+  }
+  h += `<div class="rinputrow"><input id="rSay" type="text" autocomplete="off" spellcheck="false" placeholder="Type on fingers — Enter to transmit, Esc to fly"><button class="ropt rsend" id="rSend">TX</button></div>`;
+  box.innerHTML = h;
+  $$('#rOpts [data-hail]').forEach(b => b.onclick = () => { fingers.hail(fingers.inRange()[+b.dataset.hail]); renderRadio(); });
+  $$('#rOpts [data-q]').forEach(b => b.onclick = () => { fingers.say(fingers.quickLines()[+b.dataset.q]); renderRadio(); });
+  const inp = $('#rSay'), send = () => { const v = inp.value.trim(); if (v) { fingers.say(v); inp.value = ''; } renderRadio(); };
+  $('#rSend').onclick = () => { send(); inp.focus(); };
+  inp.addEventListener('keydown', ev => { ev.stopPropagation(); if (ev.key === 'Enter') send(); else if (ev.key === 'Escape') { inp.blur(); canvas.focus(); } });
+  if (keep) { inp.value = keep.v; if (keep.f) { inp.focus(); try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch (e) { } } }
 }
 atc.on(() => renderRadio()); atc.onNote = t => toast(t, 4000);
 function paKey(n) { if (n === 0) setSigns(!W.signs.belt, W.signs.smoke); else { const l = PA_LINES[n - 1]; if (l) paSay(l.id); } }
@@ -1001,7 +1072,7 @@ addEventListener('keydown', e => {
   if ((svcPanel.open || stand7.open || sig.open) && e.code === 'Escape') { svcPanel.toggle(false); stand7.toggle(false); sig.toggle(false); return; }
   if (e.code === 'KeyI' && !W.onFoot && !W.menuMode) { toggleSvc(); return; }
   if ((radioOpen || paOpen) && e.code === 'Escape') { if (radioOpen) toggleRadio(false); if (paOpen) togglePA(false); return; }
-  if (radioOpen && /^(Digit|Numpad)\d$/.test(e.code)) { const n = +e.code.slice(-1); const o = n ? atc.options()[n - 1] : null; if (o) atc.choose(o.id); return; }
+  if (radioOpen && /^(Digit|Numpad)\d$/.test(e.code)) { const n = +e.code.slice(-1); if (n && atc.tuned?.kind === 'AIR') { const b = $$('#rOpts .ropt')[n - 1]; if (b) b.click(); return; } const o = n ? atc.options()[n - 1] : null; if (o) atc.choose(o.id); return; } // [FINGERS S1] on AIR, number keys work the hail/quick-line buttons, never ATC options
   if (paOpen && /^(Digit|Numpad)\d$/.test(e.code)) { paKey(+e.code.slice(-1)); return; }
   if (W.view === 'cockpit' && /^Digit[089]$/.test(e.code)) { quickLook(+e.code.slice(5)); return; }
   if (/^Digit[089]$/.test(e.code)) return; // quick looks only exist on the flight deck
@@ -1427,6 +1498,8 @@ function simulate(dtReal) {
   if (crew.state !== 'off') { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.update(simDt, aircraft, fdm, ground); }
   stand7.update(simDt); sig.update(simDt); // [Home Field 1a + 1b] the conducted sequence and the load sheet tick with the sim (no-ops unless armed)
   atc.update(simDt); fails.update(simDt); emergencyStep(simDt); updateComfort(simDt); sys.update(simDt, fdm, { gpu: gpuConnected(), oat: 24 }); autoStartStep(simDt);
+  if (fingers) { if (atc.tuned && atc.tuned.kind !== 'AIR' && fingers.state !== 'idle') fingers.endThread(); // [FINGERS S1] tuning away closes the thread without ceremony
+    W.fingT = (W.fingT || 0) + simDt; if (W.fingT >= 0.5) { const d = W.fingT; W.fingT = 0; fingers.tick(d); if (radioOpen) renderRadio(); } } // the engine ticks at ~2 Hz beside ATC — event-driven, zero per-frame cost
   W.simTime += simDt;
   if (W.timeAccel > 1) { W.tod = (W.tod + simDt / 60) % 1440; if ((W.todT = (W.todT || 0) + simDt) > 30) { W.todT = 0; setTimeOfDay(W.tod); } }
   handleEvents();
@@ -2233,6 +2306,10 @@ window.__sim = {
     const base = o.hall ? Math.atan2(-t.zAxis.x, -t.zAxis.z) : 0; if (o.yaw != null) foot.yaw = base + o.yaw; if (o.pitch != null) foot.pitch = o.pitch; foot.bodyYaw = o.body != null ? base + o.body : foot.yaw; if (o.dist) foot.camDist = o.dist;
     foot.vel.set(0, 0, 0); foot.camE = 9; for (let i = 0; i < (o.steps ?? 12); i++) foot.update(1 / 30, { fwd: o.fwd || 0, side: 0, run: !!o.run, dyaw: 0, dpitch: 0 }, sky.exposure); return { ...this.footCam(), tag: foot.zoneTag(), cam: camera.position.toArray().map(v => +v.toFixed(2)) }; },
   radio(v) { toggleRadio(v); return atc.options().map(o => o.id); },
+  fingersState() { return fingers ? fingers.snapshot() : null; }, // [FINGERS S1] harness hooks: state, the in-range list, hail + free-typed say
+  fingersList() { return fingers ? fingers.inRange().map(a => ({ cs: a.cs || null, kind: a.kind, phase: a.phase, type: a.type && a.type[0], distNm: +a.distNm.toFixed(1), clock: a.clock, dAltFt: Math.round(a.dAltFt), busy: !!a.busyNearField })) : []; },
+  fingersHail(i = 0) { if (!fingers) return null; const a = fingers.inRange()[i]; return a ? fingers.hail(a) : { ok: false, why: 'no-range' }; },
+  fingersSay(t) { return fingers ? fingers.say(t) : null; },
   say(id) { atc.choose(id); }, fd() { const dev = W.ils ? ilsDeviation(W.ils, fdm.pos) : null; return fdGuide(fdm, W.ils, dev, fdm.euler()); }, coach() { const d = W.ils && ilsDeviation(W.ils, fdm.pos); return { text: '', cls: '', hidden: true, papi: aids.papiText(), papiState: aids.papiState.slice(), gsDots: d && +d.gsDots.toFixed(2), locDots: d && +d.locDots.toFixed(2), nm: d && +(d.thrDist / NM).toFixed(2), boxes: 0 }; }, startPushback() { startPushback(); }, pushDone() { return !!(W.push && W.push.done); }, crewState: () => atcCtx.crewState(), atcState() { return { phase: atc.phase, log: atc.log.map(l => (l.who === 'ME' ? 'ME: ' : l.fac + ': ') + l.text), opts: atc.options().map(o => o.id), errors: atc.errors, push: W.push && { done: W.push.done } }; },
   traffic, sys, speech, startEngines, padHud() { updatePadHUD(true); }, atcCtx, W, fdm, toggleRadio, fails, rescue, evacuate, fail(id, o) { return fails.trigger(id, o); }, rescueStep(sec) { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); for (let i = 0; i < sec * 10; i++) rescue.update(0.1, aircraft, { scrape: 0, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: true }); return rescue.trucks.map(t => ({ parked: t.parked, d: Math.round(t.obj.position.distanceTo(fdm.pos)) })); }, warnings() { return W.S ? W.S.warnings : null; },
   air(o) { // test: put the aircraft in the air (o: { agl, kt, hdg, x, z, ap }) relative to the departure runway when x/z are omitted
