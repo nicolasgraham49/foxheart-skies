@@ -74,6 +74,14 @@ export const PA_LINES = [
     en: () => 'Ladies and gentlemen, we will shortly be coming through the cabin to collect any rubbish. Please pass any trays, cups and wrappers out to the aisle, and let us know if there is anything else we can take for you. Thank you.',
     es: () => 'Señoras y señores, en breve pasaremos por la cabina para recoger la basura. Por favor entreguen las bandejas, los vasos y los envoltorios hacia el pasillo, y avísennos si hay algo más que podamos llevarnos. Gracias.',
     ko: () => '손님 여러분, 잠시 후 기내를 돌며 쓰레기를 수거하겠습니다. 쟁반과 컵, 포장지는 통로 쪽으로 건네 주시고, 그 밖에 치울 것이 있으면 말씀해 주십시오. 감사합니다.' },
+  // [Era Four 1a · Amend] the captain's calm word to the cabin when a commercial
+  // flight's destination is amended in the air — a change of plan, never an alarm.
+  // c.d already names the NEW destination (paContext reads atc.arr). Appended last
+  // so the numbered PA menu keeps every existing line's key.
+  { id: 'amend', who: 'captain', label: 'Change of destination', boost: 2,
+    en: c => `Ladies and gentlemen, this is your captain. A small change of plan today: we will be landing in ${c.d} instead of our original destination. Everything is perfectly normal — the crew will look after you on the ground, and connections will be rebooked for anyone who needs one. Thank you for your understanding, and thank you for flying with us.`,
+    es: c => `Señoras y señores, les habla su capitán. Hoy tenemos un pequeño cambio de plan: aterrizaremos en ${c.dEs} en lugar de nuestro destino original. Todo es perfectamente normal; la tripulación les atenderá en tierra y se reorganizarán las conexiones para quien lo necesite. Gracias por su comprensión y por volar con nosotros.`,
+    ko: c => `손님 여러분, 기장입니다. 오늘은 작은 계획 변경이 있습니다. 원래 목적지 대신 ${c.dKo}에 착륙하겠습니다. 모든 것이 정상이며, 지상에서 승무원이 안내해 드리고 연결편이 필요한 분들은 재예약을 도와드리겠습니다. 이해해 주셔서 감사합니다.` },
 ];
 // emergency lines (not in the numbered menu): the captain's briefing, brace, evacuate, oxygen masks
 export const PA_EMERG = [
