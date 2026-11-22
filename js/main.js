@@ -414,7 +414,7 @@ async function startFlight(cfg) {
   if (cfg.start !== 'route') { W.route = null; }
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any || cfg.start === 'air'; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
-  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); W.signedIn = cfg.start !== 'terminal'; // [Nothing starts until sign-in] only a terminal (on-foot) departure waits for its captain — every other start is live from the first frame, as before
+  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); W.amend = null; nav.setGhost(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); W.signedIn = cfg.start !== 'terminal'; // [Nothing starts until sign-in] only a terminal (on-foot) departure waits for its captain — every other start is live from the first frame, as before
   Stories.reset(); // [Stories era] a new flight starts with no story armed
   CrewTalk.reset(); // [Crew conversations] and no crew conversation or interphone state carried over
   Charter.reset(); // [Private charter] and no charter encounter or card carried over
@@ -720,10 +720,16 @@ function parkAtGate(st) {
 function finishTrip() {
   if (W.tripDone) return; W.tripDone = true; try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { }
   const s = lastScore; const from = W.cfg.apt, to = W.primary.apt;
-  const log = store.get('log', []); log.unshift({ date: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: W.charter ? 'charter' : 'trip', apt: from.icao + '→' + to.icao, rwy: s?.rwy || '-', fpm: s?.fpm ?? '-', score: s?.score ?? '-', grade: s?.grade || '-', wx: W.wx, tod: fmtTime(W.tod) }); store.set('log', log.slice(0, 200));
+  const entry = { date: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: W.charter ? 'charter' : 'trip', apt: from.icao + '→' + to.icao, rwy: s?.rwy || '-', fpm: s?.fpm ?? '-', score: s?.score ?? '-', grade: s?.grade || '-', wx: W.wx, tod: fmtTime(W.tod) };
+  // [Era Four 1a · Amend] planned vs flown, recorded factually and never graded:
+  // the filed route, the route as flown, and each amendment's time. Arriving at
+  // the amended destination earns the Trust Record's one binary line.
+  if (W.amend && W.amend.list.length) { entry.planned = from.icao + '→' + W.amend.filed.icao; entry.flown = entry.apt; entry.amends = W.amend.list.map(a => a.to + ' @ ' + fmtTime(a.tod)); if (to.icao === W.amend.list[W.amend.list.length - 1].to) entry.trustAmend = true; }
+  const log = store.get('log', []); log.unshift(entry); store.set('log', log.slice(0, 200));
   const storyLetter = Stories.completeTrip({ from: from.icao, to: to.icao }); // [Stories era] their letter lands with the trip (route as actually flown — a divert writes the divert field)
   const charterNote = W.charter ? Charter.completeTrip({ from: from.icao, to: to.icao, score: s?.score ?? null, grade: s?.grade || null, fpm: s?.fpm ?? null }) : null; // [Private charter] the clients' note lands with the trip, the landing recorded as their satisfaction
-  $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">${W.charter ? 'Your charter is in the logbook' : 'Flight 412 is in the logbook'}${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. ${W.charter ? 'Thank you for looking after them, captain.' : 'Thanks for flying Nicofoxheart Air.'}</p>${storyLetter ? '<p style="color:var(--fox2);margin:8px 0 0">✉ A letter is waiting in your logbook.</p>' : ''}${charterNote ? '<p style="color:var(--fox2);margin:8px 0 0">✦ Your clients left a note in the Charter Book.</p>' : ''}<div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
+  const amendLine = entry.planned ? `<p style="color:var(--mute);margin:8px 0 0">Filed ${entry.planned} · flown ${entry.flown} — amended in the air (${entry.amends.join(', ')}).</p>` : ''; // [Era Four 1a] planned vs flown, stated plainly
+  $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">${W.charter ? 'Your charter is in the logbook' : 'Flight 412 is in the logbook'}${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. ${W.charter ? 'Thank you for looking after them, captain.' : 'Thanks for flying Nicofoxheart Air.'}</p>${amendLine}${storyLetter ? '<p style="color:var(--fox2);margin:8px 0 0">✉ A letter is waiting in your logbook.</p>' : ''}${charterNote ? '<p style="color:var(--fox2);margin:8px 0 0">✦ Your clients left a note in the Charter Book.</p>' : ''}<div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
   $('#result').hidden = false; $('#rMenu').onclick = () => { $('#result').hidden = true; toMenu(); }; $('#rCont').onclick = () => { $('#result').hidden = true; W.tripDone = false; };
 }
 function nearestFreeStand(maxD) { const b = W.primary; if (!b || !b.full) return null; if (W.charter) { const rs = charterRemoteStand(b); if (!rs) return null; const d = Math.hypot(b.x + rs.x - fdm.pos.x, b.z + rs.z - fdm.pos.z); return d < maxD ? rs : null; } // [Charter apron] a charter flight parks at its remote stand, never a gate
@@ -774,6 +780,22 @@ const atcCtx = {
   divert() { const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z); const c = nearestSuitable(ll.lat, ll.lon); return c ? { apt: c.apt, distNm: c.distNm, rwyM: c.rwyM } : { apt: atc.arr || atc.dep }; },
   divertShown(A) { W.divertApt = A || null; nav.setDivert(A || null); updateDivertBtn(); }, // ATC lights / clears the amber divert target on the ND + HUD strip
   setArr(A) { atc.arr = A; W.dest = A; if (W.ils && W.ils.apt !== A) { W.ils = fdm.ap.ils = null; } },
+  // [Era Four 1a · Amend] the re-plan verb's session hooks, mirroring divertShown:
+  // candidates for the pick list (nearest suitable fields, the divert standard —
+  // longest paved runway >= 1,900 m — with the filed destination always offered
+  // first once an amendment is live, so the captain can amend back), the moment
+  // an amendment lands (ghost line + record + the cabin PA), and small lookups.
+  amendCands() { const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z); const list = [];
+    for (const a of World.airports) { let L = 0; for (const r of a.runways) if ((r.surface === 'A' || r.surface === 'C') && r.lengthFt * FT > L) L = r.lengthFt * FT; if (L < 1900 || a === atc.arr) continue; list.push({ apt: a, distNm: haversine(ll.lat, ll.lon, a.lat, a.lon) / NM }); }
+    list.sort((x, y) => x.distNm - y.distNm); const top = list.slice(0, 5);
+    if (atc.amendedFrom && atc.amendedFrom !== atc.arr && !top.some(x => x.apt === atc.amendedFrom)) top.unshift({ apt: atc.amendedFrom, distNm: haversine(ll.lat, ll.lon, atc.amendedFrom.lat, atc.amendedFrom.lon) / NM });
+    return top; },
+  amendShown(A, filed) { if (!W.amend) W.amend = { filed, list: [] }; const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z);
+    W.amend.list.push({ to: A.icao, tod: W.tod, lat: +ll.lat.toFixed(3), lon: +ll.lon.toFixed(3) });
+    nav.setGhost(A === filed ? null : filed); // the original route stays on the ND as a ghost until the plan matches it again
+    if (!W.charter) paSay('amend'); }, // commercial amends acknowledge the passengers — one calm line; charter amends freely, no PA
+  aptByIcao: icao => World.byIcao.get(icao) || null,
+  isCharter: () => !!W.charter,
   rescue: () => rescueDispatch(),
   weather() { const A = atc.apt(); const temp = Math.round(({ desert: 31, tropical: 29, subtropical: 26, mediterranean: 21, temperate: 13, 'temperate-green': 12, boreal: 4 })[climateFor(A.lat, A.lon)] ?? 18) - (W.wx === 'rain' ? 3 : 0);
     return { kind: W.wx, dir: W.windFrom, kt: W.windKt, gust: W.gust > 2.5, vis: sky.weather.vis, temp, utcMin: W.tod - tzFor(A) * 60, localMin: W.tod }; },
@@ -1294,9 +1316,9 @@ function updateNavStrip(S) {
   el.hidden = !show; if (!show) { _nsKey = ''; return; }
   const metric = settings.units === 'metric';
   const dist = metric ? Math.round(n.remainNm * 1.852) + ' km' : n.remainNm.toFixed(n.remainNm < 20 ? 1 : 0) + ' NM';
-  const key = [n.dep ? n.dep.icao : '', n.arr.icao, dist, fmtEte(n.eteMin), n.etaClockMin, Math.round(n.progress * 100), Math.round(n.gsKt / 5), n.divert ? n.divert.icao : ''].join('|');
+  const key = [n.dep ? n.dep.icao : '', n.arr.icao, dist, fmtEte(n.eteMin), n.etaClockMin, Math.round(n.progress * 100), Math.round(n.gsKt / 5), n.divert ? n.divert.icao : '', n.ghost ? n.ghost.icao : ''].join('|');
   if (key === _nsKey) return; _nsKey = key;
-  el.innerHTML = `<div class="nsrow"><b>${n.dep ? n.dep.icao : '····'} → ${n.arr.icao}</b><span>${dist} to go</span><span>${Math.round(n.progress * 100)}%</span></div><div class="nsbar"><i style="width:${Math.round(n.progress * 100)}%"></i></div><div class="nsrow dim"><span>ETE ${fmtEte(n.eteMin)}</span><span>ETA ${fmtClock(n.etaClockMin)}</span><span>GS ${Math.round(n.gsKt)} kt</span>${n.divert ? `<span class="dv">DIVERT ${n.divert.icao} ${n.divert.distNm.toFixed(0)} NM</span>` : ''}</div>`;
+  el.innerHTML = `<div class="nsrow"><b>${n.dep ? n.dep.icao : '····'} → ${n.arr.icao}</b><span>${dist} to go</span><span>${Math.round(n.progress * 100)}%</span></div><div class="nsbar"><i style="width:${Math.round(n.progress * 100)}%"></i></div><div class="nsrow dim"><span>ETE ${fmtEte(n.eteMin)}</span><span>ETA ${fmtClock(n.etaClockMin)}</span><span>GS ${Math.round(n.gsKt)} kt</span>${n.divert ? `<span class="dv">DIVERT ${n.divert.icao} ${n.divert.distNm.toFixed(0)} NM</span>` : ''}${n.ghost ? `<span>AMENDED · filed ${n.ghost.icao}</span>` : ''}</div>`;
 }
 const _v = new THREE.Vector3(), _q = new THREE.Quaternion(), _e = new THREE.Euler();
 function updateCamera(dt) {
@@ -1365,7 +1387,7 @@ function snapshot() {
     const fin = W.cfg.start === 'final';
     nav.setFlight(fin ? (W.dest || W.cfg.apt) : (W.cfg.apt || null), fin ? (W.cfg.apt || null) : (W.dest || null));
     navInfo = nav.update(ll.lat, ll.lon, Math.hypot(fdm.vel.x, fdm.vel.z) / KT, W.tod);
-    if (navInfo) { const P = a => a ? { x: W.geo.x(a.lon), z: W.geo.z(a.lat) } : null; navPts = { dep: P(navInfo.dep), arr: P(navInfo.arr), divert: P(navInfo.divert) }; }
+    if (navInfo) { const P = a => a ? { x: W.geo.x(a.lon), z: W.geo.z(a.lat) } : null; navPts = { dep: P(navInfo.dep), arr: P(navInfo.arr), divert: P(navInfo.divert), ghost: P(navInfo.ghost) }; }
     navApts = navAptsAround(ll.lat, ll.lon);
   }
   // ND auto range: the old altitude steps, widened so the destination is
@@ -1420,7 +1442,7 @@ function simulate(dtReal) {
   }
   if (FLY_ANYWHERE) streamStep(simDt); // airports, city blocks and the floating origin follow the aircraft (no rebuild, no edge)
   else { const dO = Math.hypot(fdm.pos.x, fdm.pos.z); // pre-streaming origin management
-    if (W.route && W.cfg?.route) { const dest = W.cfg.route.toApt, ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z), dd = haversine(ll.lat, ll.lon, dest.lat, dest.lon); if (dd < 40000 && W.primary?.apt !== dest) rebase(dest.lat, dest.lon, dest); else if (dO > 85000) rebase(ll.lat, ll.lon, null); }
+    if (W.route && W.cfg?.route) { const dest = W.dest || W.cfg.route.toApt, ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z), dd = haversine(ll.lat, ll.lon, dest.lat, dest.lon); if (dd < 40000 && W.primary?.apt !== dest) rebase(dest.lat, dest.lon, dest); else if (dO > 85000) rebase(ll.lat, ll.lon, null); } // [Era Four 1a] the rebase follows the LIVE destination (W.dest, kept current by setArr) — an amended or diverted route flight rebuilds at the field it will actually land at; identical to before while the plan is un-amended (W.dest starts as the filed toApt)
     else if (dO > 120000) { const ll = W.geo.toLatLon(fdm.pos.x, fdm.pos.z); rebase(ll.lat, ll.lon, nearestAirports(ll.lat, ll.lon, 30000, 1)[0] || null); } }
   traffic.update(simDt, W.simTime, fdm.pos, ATM.uNight.value > 0.5);
   if (W.phase === 'takeoff' && !fdm.onGround && fdm.pos.y - (fdm.gnd?.h || 0) > 300) W.phase = 'climb';
@@ -2110,7 +2132,7 @@ function renderLog() {
   const letters = Stories.lettersHtml(); // [Stories era] the Letters section lives under the flights table
   const charterBook = Charter.charterBookHtml(); // [Private charter] and the Charter Book under that (its own storage — Clear logbook never touches it, like the Letters)
   if (!log.length && !letters && !charterBook) { body.innerHTML = '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>'; return; }
-  body.innerHTML = (!log.length ? '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' : '') + (log.length ? `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>`).join('')}</tbody></table></div>` : '') + letters + charterBook;
+  body.innerHTML = (!log.length ? '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' : '') + (log.length ? `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>${l.planned ? `<tr class="amendrow"><td colspan="8" style="color:var(--mute)">Planned ${l.planned} · Flown ${l.flown} · amended in the air (${(l.amends || []).join(', ')})${l.trustAmend ? ' · Trust: amended in the air, arrived as amended' : ''}</td></tr>` : ''}`).join('')}</tbody></table></div>` : '') + letters + charterBook;
 }
 async function go(cfg) {
   $('#menu').hidden = true; $('#flight').hidden = false; W.menuMode = false; W.paused = false;
@@ -2189,6 +2211,7 @@ window.__sim = {
   stairsbus: () => StairsBus.state(), // [Stairs + bus] bus/stairs/walker state for tests
   stand7: () => stand7.state(), // [Home Field 1a] the conducted ramp sequence at KTPA Stand 7
   signature: () => sig.state(), // [Home Field 1b] the load sheet: units, needle, signature, Trust stamps, FDM binding
+  amend: () => ({ amendApt: atc.amendApt?.icao || null, amendedFrom: atc.amendedFrom?.icao || null, pick: atc.amendPick ? atc.amendPick.map(x => x.apt.icao) : null, offerState: atc.offerState, offerApt: atc.offerApt?.icao || null, ghost: nav.ghost?.icao || null, record: W.amend ? { filed: W.amend.filed.icao, list: W.amend.list.map(a => ({ ...a })) } : null }), // [Era Four 1a] amend state + offer state + the planned-vs-flown record, for the harness
   taxiLineVis: () => !!(taxiLine && taxiLine.visible), // [Playtest fixes Nov 14] test hook: is the magenta taxi route line rendering?
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
