@@ -27,7 +27,7 @@ function bearingTo(lat1, lon1, lat2, lon2) { // initial great-circle bearing, de
 }
 
 export class NavPlan {
-  constructor() { this.dep = null; this.arr = null; this.divert = null; this.totalNm = 0; this.gsKt = 0; this.info = null; }
+  constructor() { this.dep = null; this.arr = null; this.divert = null; this.ghost = null; this.totalNm = 0; this.gsKt = 0; this.info = null; }
   setFlight(dep, arr) {
     dep = dep || null; arr = arr || null;
     if (arr && dep && arr.icao === dep.icao && !(this.divert && this.divert.icao === arr.icao)) arr = null; // a flight to itself has no plan — unless it is a divert back to the departure airport, which is a real plan
@@ -37,6 +37,9 @@ export class NavPlan {
     this.info = null;
   }
   setDivert(apt) { this.divert = apt || null; } // future divert pass: target airport object or null
+  // [Era Four 1a · Amend] the ORIGINAL filed destination, kept on the map as a ghost
+  // while an amended destination is being flown to. Data only — the ND draws it dim.
+  setGhost(apt) { this.ghost = apt || null; }
   // Called per display snapshot (~12-20 Hz). gs smoothing is a fixed-step EMA
   // (time constant ~2 s of snapshots) so the ETA doesn't jitter with gusts.
   update(lat, lon, gsKt, todMin) {
@@ -45,9 +48,11 @@ export class NavPlan {
     const remainNm = haversine(lat, lon, this.arr.lat, this.arr.lon) / NM;
     const eteMin = this.gsKt >= GS_MIN_KT ? remainNm / this.gsKt * 60 : null;
     const dv = this.divert ? { icao: this.divert.icao, lat: this.divert.lat, lon: this.divert.lon, distNm: haversine(lat, lon, this.divert.lat, this.divert.lon) / NM, brg: bearingTo(lat, lon, this.divert.lat, this.divert.lon) } : null;
+    const gh = this.ghost ? { icao: this.ghost.icao, lat: this.ghost.lat, lon: this.ghost.lon } : null;
     this.info = {
       dep: this.dep ? { icao: this.dep.icao, lat: this.dep.lat, lon: this.dep.lon } : null,
       arr: { icao: this.arr.icao, lat: this.arr.lat, lon: this.arr.lon },
+      ghost: gh,
       totalNm: this.totalNm, remainNm,
       progress: this.totalNm > 1 ? clamp01(1 - remainNm / this.totalNm) : (remainNm < 1 ? 1 : 0),
       gsKt: this.gsKt, eteMin, etaClockMin: eteMin == null ? null : todMin + eteMin,
