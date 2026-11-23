@@ -273,12 +273,8 @@ export class Terrain {
   constructor(scene, quality) {
     this.scene = scene; this.quality = quality;
     this.masks = new Masks(quality);
-    const N = quality === 'low' ? 160 : quality === 'medium' ? 200 : 256, R = 165000, a = 6.6; // (Part B, paused: 300000 / 7.3 reaches the cruise horizon with the same near spacing)
-    const g = new THREE.BufferGeometry(); const pos = new Float32Array((N + 1) * (N + 1) * 3); const idx = [];
-    const warp = t => R * Math.sinh(a * t) / Math.sinh(a);
-    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) { const k = (j * (N + 1) + i) * 3; pos[k] = warp(i / N * 2 - 1); pos[k + 1] = 0; pos[k + 2] = warp(j / N * 2 - 1); }
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const A = j * (N + 1) + i, B = A + 1, C = A + N + 1, D = C + 1; idx.push(A, C, B, B, C, D); }
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(idx);
+    this._gridN = quality === 'low' ? 160 : quality === 'medium' ? 200 : 256;
+    const g = this._grid(165000, 6.6); // pre-streaming disc; setPlanet widens it to 300000 / 7.3 (the cruise horizon, same near spacing)
     this.uniforms = {
       ...ATM, uNear: { value: null }, uWide: { value: null }, uNearR: { value: new THREE.Vector4() }, uWideR: { value: new THREE.Vector4() },
       uBase: { value: 0 }, uNoiseAmp: { value: 30 }, uApt: { value: Array.from({ length: NAPT }, () => new THREE.Vector4(0, 0, 0, 0)) }, uAptElev: { value: new Array(NAPT).fill(0) },
@@ -292,8 +288,16 @@ export class Terrain {
     scene.add(this.mesh);
     this.apts = []; this.base = 0; this.noiseAmp = 30; this._m = [0, 0, 0]; this._p = [0, 0, 0, 0]; this.planet = null; this.clim = null;
   }
+  // sinh-warped ground disc: dense at the centre, reaching R at the rim
+  _grid(R, a) { const N = this._gridN; const g = new THREE.BufferGeometry(); const pos = new Float32Array((N + 1) * (N + 1) * 3); const idx = [];
+    const warp = t => R * Math.sinh(a * t) / Math.sinh(a);
+    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) { const k = (j * (N + 1) + i) * 3; pos[k] = warp(i / N * 2 - 1); pos[k + 1] = 0; pos[k + 2] = warp(j / N * 2 - 1); }
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const A = j * (N + 1) + i, B = A + 1, C = A + N + 1, D = C + 1; idx.push(A, C, B, B, C, D); }
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3)); g.setIndex(idx); return g; }
   // the whole-world fields (wld-planet.js): sea, mountain belts and base elevation everywhere, so there is no edge to the world
-  setPlanet(P) { this.planet = P || null; this.masks.fast = !!P; const u = this.uniforms; u.uPlanet.value = P ? P.tex : null; u.uPBase.value = P ? P.baseTex : null; u.uPlanetOn.value = P ? 1 : 0; }
+  setPlanet(P) { this.planet = P || null; this.masks.fast = !!P; const u = this.uniforms; u.uPlanet.value = P ? P.tex : null; u.uPBase.value = P ? P.baseTex : null; u.uPlanetOn.value = P ? 1 : 0;
+    // [Era Four 1b] with the planet on, the ground disc widens to the cruise horizon (300 km / 7.3 — same near spacing as 165 km / 6.6); off, it narrows back to the pre-streaming disc
+    const wide = !!P; if (wide !== !!this._gridWide) { this._gridWide = wide; const g = this._grid(...(wide ? [300000, 7.3] : [165000, 6.6])); this.mesh.geometry.dispose(); this.mesh.geometry = g; } }
   // airport flatten / dry-land zones (max 4, local frame) without rebuilding the masks
   setZones(aptZones) { this.apts = aptZones.slice(0, NAPT); const u = this.uniforms; for (let i = 0; i < NAPT; i++) { const a = this.apts[i]; u.uApt.value[i].set(a ? a.x : 0, a ? a.z : 0, a ? a.r : 0, a ? a.elev : 0); } }
   // ground colours by climate; sec > 0 blends over that many seconds (tick) so a long flight changes climate without a pop
