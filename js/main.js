@@ -283,7 +283,8 @@ function airportHull(b) {
 // airports within loadR are built one per tick (light detail, full detail within fullR or for the destination), far ones are
 // disposed, city blocks are rebuilt in time slices when low, and the floating origin re-centres on the aircraft every
 // shiftR so long flights keep float precision (everything world-space is re-derived from lat/lon; noise stays anchored).
-const FLY_ANYWHERE = settings.anywhere === true; // Part B PAUSED: off unless a test sets settings.anywhere; off = the pre-streaming world (built once per flight + rebase on long flights, no planet, no 'Start anywhere')
+const FLY_ANYWHERE = settings.anywhere !== false; // [Era Four 1b — The Stream] ON for real flights (Part B resumed): the planet renders everywhere, airports stream around the aircraft in flight, the floating origin carries long legs. settings.anywhere === false remains a test escape hatch (the pre-streaming world: built once per flight + rebase on long flights, no planet)
+const START_ANYWHERE = false; // Nov 3 ruling, upheld by the Era Four verdict: the 'Start anywhere' menu spawn stays OFF permanently — no teleporting from menus, ever. Freedom is earned in the air; the stream above turns on in flight, not from a menu.
 const STREAM = { loadR: 50000, max: 8, fullR: 16000, dropR: 80000, shiftR: 60000, t: 0, shifts: 0, loads: 0, drops: 0, ms: 0 };
 function builtEntry(A, full) {
   const t0 = performance.now(), g = airportGeometry(A); const b = buildAirport(A, { quality: settings.quality, wet: W.wet, full });
@@ -386,7 +387,7 @@ async function startFlight(cfg) {
     else if (any) { pos = new THREE.Vector3(W.geo.x(cfg.lon), 0, W.geo.z(cfg.lat)); hdg = cfg.hdg ?? 90; alt = Math.max((cfg.altFt ?? 15000) * FT, ground(pos.x, pos.z).h + 2000 * FT); }
     else if (cfg.start === 'air') { // [Free Flight: sandbox + living world] airborne spawn at the chosen airport: 30 nm out on the
       // departure centreline at cruise altitude, AP holding a heading for the destination — the Free Flight
-      // mode's own spawn-anywhere (the global Part B FLY_ANYWHERE switch stays OFF; this is just a start kind).
+      // mode's own airborne spawn (a start kind of Free Flight, unrelated to the 'Start anywhere' menu, which stays OFF).
       const d = 30 * NM; pos = W.ils.thr.clone().addScaledVector(dir, -d);
       const D = cfg.toApt || (cfg.dest && World.byIcao.get(cfg.dest)) || autoDest(A); const T = (D && D !== A) ? D : A;
       const ll = W.geo.toLatLon(pos.x, pos.z), dLon = (T.lon - ll.lon) * D2R;
@@ -2071,8 +2072,9 @@ function buildMenu() {
   tod.oninput = upd; wd.oninput = upd; ws.oninput = upd; upd();
   $('#fly').onclick = () => { audio.start(); const g = airportGeometry(sel.apt); go({ apt: sel.apt, end: sel.end, start: sel.start, dest: sel.dest && sel.dest !== sel.apt ? sel.dest.icao : undefined, tod: +tod.value, wx: sel.wx || 'clear', windFrom: +wd.value, windKt: +ws.value, gusts: $('#gusts').checked, mode: 'free', cold: $('#coldDark').checked }); };
   // start anywhere: world map (procedural land, airport dots), position, altitude, heading, speed; starts airborne on autopilot
-  $('#nav button[data-sec=anywhere]').hidden = !FLY_ANYWHERE;
-  if (FLY_ANYWHERE) { const cv = $('#wmap'), any = { lat: 45.5, lon: -35 }, num = id => $('#' + id); let wx = 'clear';
+  // [Era Four 1b] gated on START_ANYWHERE (permanently false), NOT on the streaming switch: the menu spawn stays dark even though the stream is on
+  $('#nav button[data-sec=anywhere]').hidden = !START_ANYWHERE;
+  if (START_ANYWHERE) { const cv = $('#wmap'), any = { lat: 45.5, lon: -35 }, num = id => $('#' + id); let wx = 'clear';
     const redraw = () => { try { drawWorldMap(cv, { mark: any, hdg: +num('anyHdg').value }); } catch (e) { return; } const A = nearestAnywhere(any.lat, any.lon), s = terrain.planet ? terrain.planet.sample(any.lat, any.lon) : null;
       $('#wmapInfo').textContent = `${fmtLL(any.lat, any.lon)} · ${s ? (s[0] > 0.5 ? 'open sea' : s[2] > 0.25 ? 'mountains' : 'land') : ''} · nearest airport ${A ? A.icao + ' · ' + Math.round(haversine(any.lat, any.lon, A.lat, A.lon) / NM) + ' nm' : '—'}`; };
     const setLL = (la, lo) => { any.lat = Math.max(-80, Math.min(80, la)); any.lon = ((lo + 540) % 360) - 180; num('anyLat').value = any.lat.toFixed(2); num('anyLon').value = any.lon.toFixed(2); redraw(); };
