@@ -140,7 +140,10 @@ function onHullMatrix(z, th, sink = 0.02) { const p = skin(z, th), n = skinN(z, 
 function hullDetails(hi) {
   const paint = [], metal = [], dark = [];
   const ants = [[-6.6, 0, 0.42, 0.33, 0.22], [8.6, 0, 0.42, 0.33, 0.22], [-12.4, 0, 0.17, 0.12, 0.06], [-10.2, 0, 0.12, 0.1, 0.05], [-12.0, PI, 0.17, 0.12, 0.06], [-9.6, PI + 0.16, 0.13, 0.1, 0.05], [-9.6, PI - 0.16, 0.13, 0.1, 0.05], [9.2, PI, 0.42, 0.3, 0.2], [-5.2, PI, 0.12, 0.08, 0.04]];
-  for (const [z, th, L, H, sw] of ants) paint.push(pv(blade(L, H, sw, 0.022).applyMatrix4(onHullMatrix(z - L / 2, th)), [0.9, 0.91, 0.92]));
+  // [Scale fix Nov 23] the stations are fox-absolute: on the little PJ-1 hull (nose -10.8) the
+  // -12.4 / -12.0 blades landed ~1.8 m AHEAD of the nose, floating in clear air and inflating the
+  // jet's measured length to 23.6 m vs its 21.2 m spec. Skip any station outside the installed hull.
+  for (const [z, th, L, H, sw] of ants) { if (z < NOSE_Z + 0.5 || z > TAIL_Z - 0.5) continue; paint.push(pv(blade(L, H, sw, 0.022).applyMatrix4(onHullMatrix(z - L / 2, th)), [0.9, 0.91, 0.92])); }
   // GPS / satcom domes on the crown
   for (const [z, th] of [[-3.0, 0.07], [-3.0, -0.07], [-1.5, 0]]) { const g = new THREE.SphereGeometry(0.09, 10, 5, 0, PI * 2, 0, PI / 2); g.scale(1, 0.35, 1.5); paint.push(pv(g.applyMatrix4(onHullMatrix(z, th, 0.0)), [0.86, 0.87, 0.88])); }
   // pitot probes (L-shaped: blade mast + forward tube), AoA vanes, TAT probe

@@ -46,6 +46,7 @@ export class Rescue {
   constructor(scene) {
     this.scene = scene; this.g = new THREE.Group(); this.g.visible = false; scene.add(this.g); this.trucks = []; this.t = 0; this.evac = null;
     this.sparks = new Particles(scene, { n: 260, color: 0xffb347, size: 0.35, g: -9.8, drag: 0.6, alpha: 1, add: true });
+    this.flames = new Particles(scene, { n: 200, color: 0xff7a1a, size: 2.4, g: 2.2, drag: 0.5, alpha: 0.95, add: true }); // [Era Four · Hard landings] real flames at a burning engine, under the smoke
     this.smoke = new Particles(scene, { n: 220, color: 0x2a2a2c, size: 5.5, g: 1.2, drag: 0.35, alpha: 0.55 });
     this.foam = new Particles(scene, { n: 360, color: 0xf4f7fa, size: 1.3, g: -9.8, drag: 0.15, alpha: 0.85 });
   }
@@ -63,14 +64,18 @@ export class Rescue {
     const slots = [[-26, -4, 'L'], [26, -4, 'R'], [9, -42, 'N']]; // aircraft frame (x right, z forward negative): abeam each engine, and off the nose
     slots.forEach(([x, z, k], i) => { const obj = this.makeTruck(); const p = from.clone().add(_v.set((i - 1) * 9, 0, i * 6)); obj.position.copy(p); this.trucks.push({ obj, slot: new THREE.Vector3(x, 0, z), k, delay: i * 2.5, v: 0, hdg: 0, parked: false }); });
   }
-  clear() { for (const t of this.trucks) this.g.remove(t.obj); this.trucks = []; this.g.visible = false; this.sparks.clear(); this.smoke.clear(); this.foam.clear(); this.clearEvac(); this.fire = false; }
+  clear() { for (const t of this.trucks) this.g.remove(t.obj); this.trucks = []; this.g.visible = false; this.sparks.clear(); this.flames.clear(); this.smoke.clear(); this.foam.clear(); this.clearEvac(); this.fire = false; }
+  // [Era Four · Hard landings] the destructive tier's first second: a fireball
+  // burst at the airframe — flames and smoke thrown outward, then the ordinary
+  // fire/smoke emitters take over.
+  burst(ac) { ac.updateMatrixWorld(true); for (let k = 0; k < 110; k++) { _v.set((Math.random() - 0.5) * 9, -2.4 + Math.random() * 1.5, -6 + Math.random() * 12).applyMatrix4(ac.matrixWorld); _w.set((Math.random() - 0.5) * 14, 3 + Math.random() * 7, (Math.random() - 0.5) * 14); this.flames.emit(_v, _w, 3, 1.6); if (k % 2) this.smoke.emit(_v, _w, 3, 7); } this.live = 1; }
   // per frame. ac: aircraft Object3D; s: { scrape (m/s), fire: [bool,bool], ground(x,z) → {h}, foamOn }
   update(dt, ac, s) {
     this.t += dt; const L = Math.floor(this.t * 6) % 2; if (this.mats) { this.mats.red.emissiveIntensity = L ? 3 : 0.15; this.mats.blue.emissiveIntensity = L ? 0.15 : 3; }
     // sparks along the belly and nacelles while sliding
     if (s.scrape > 2) { const n = Math.min(14, Math.ceil(s.scrape / 4)); for (let k = 0; k < n; k++) { const pr = k % 3 === 0 ? [0, -2.1, -2 + Math.random() * 8] : [(k % 2 ? 5.75 : -5.75), -3.0, -5 + Math.random() * 2]; _v.set(pr[0], pr[1], pr[2]).applyMatrix4(ac.matrixWorld); _w.set(0, 0, 1).applyQuaternion(ac.quaternion).multiplyScalar(s.scrape * 0.4); _w.y = 2 + Math.random() * 3; this.sparks.emit(_v, _w, 6, 0.6); } }
-    // smoke from a burning engine (or after a belly slide)
-    for (let i = 0; i < 2; i++) if (s.fire[i] || (s.smoulder && Math.random() < 0.3)) { _v.set(i ? 5.75 : -5.75, -2.6, -3).applyMatrix4(ac.matrixWorld); _w.set(0, 2.5, 0); if (Math.random() < 0.6) this.smoke.emit(_v, _w, 2.5, 6); }
+    // flames + smoke from a burning engine (smoke alone after a belly slide / hard-landing damage)
+    for (let i = 0; i < 2; i++) if (s.fire[i] || (s.smoulder && Math.random() < 0.3)) { _v.set(i ? 5.75 : -5.75, -2.6, -3).applyMatrix4(ac.matrixWorld); _w.set(0, 2.5, 0); if (Math.random() < 0.6) this.smoke.emit(_v, _w, 2.5, 6); if (s.fire[i]) for (let k = 0; k < 3; k++) { _w.set((Math.random() - 0.5) * 2, 2.2 + Math.random() * 2, (Math.random() - 0.5) * 2); this.flames.emit(_v, _w, 1.5, 0.9); } }
     // trucks: drive to their slot, park facing the aircraft, foam the engines
     for (const t of this.trucks) {
       if (t.delay > 0) { t.delay -= dt; continue; }
@@ -80,7 +85,7 @@ export class Rescue {
       o.position.x -= Math.sin(t.hdg) * t.v * dt; o.position.z -= Math.cos(t.hdg) * t.v * dt; o.position.y = s.ground(o.position.x, o.position.z).h; o.rotation.set(0, t.hdg, 0); t.parked = d < 4 && t.v < 0.5;
       if (t.parked && (s.fire[0] || s.fire[1] || s.foamOn) && t.k !== 'N') { const i = t.k === 'L' ? 0 : 1; _v.set(0, 3.45, -3.5).applyMatrix4(o.matrixWorld); _w.set(i ? 5.75 : -5.75, -2.6, -4).applyMatrix4(ac.matrixWorld).sub(_v); const dist = _w.length(); _w.normalize().multiplyScalar(Math.min(32, 9 + dist * 0.9)); _w.y += dist * 0.28; for (let k = 0; k < 3; k++) this.foam.emit(_v, _w, 1.6, 1.4); }
     }
-    this.sparks.update(dt); this.smoke.update(dt); this.foam.update(dt); this.updateEvac(dt, ac, s);
+    this.sparks.update(dt); this.flames.update(dt); this.smoke.update(dt); this.foam.update(dt); this.updateEvac(dt, ac, s);
   }
   // evacuation: four slides off the doors, passengers run out to an assembly point upwind
   evacuate(ac, belly) {

@@ -51,7 +51,7 @@ export class FDM {
     this.de = 0; this.da = 0; this.dr = 0; this.qInt = 0; this.gammaHold = null; this.phiHold = 0; this.pitchHold = null;
     this.onGround = !!o.onGround; this.wow = [false, false, false]; this.airTime = this.onGround ? 0 : 100; this.gndTime = 0;
     this.ap = { on: false, athr: false, lat: 'HDG', vert: 'ALT', spd: o.spdSel ?? 150, hdg: o.hdg || 0, alt: o.altSel ?? 5000, vs: 0, ils: null, appr: false, locArmed: false, gsArmed: false, route: null, wp: 0, retard: false, flare: false, rollout: false };
-    this.events = []; this.td = null; this.crashed = null; this.stall = 0; this.tailStrike = false; this.alpha = 0; this.beta = 0; this.nz = 1;
+    this.events = []; this.td = null; this.crashed = null; this.hardImpact = 0; this.gearDamage = 0; // [Era Four · Hard landings] worst gear-contact sink (m/s) + damage tier written by main.js this.stall = 0; this.tailStrike = false; this.alpha = 0; this.beta = 0; this.nz = 1;
     this.windV = V3(); this.gust = V3(); this.time = 0; this.ra = this.onGround ? 0 : 1e4; this.lastVs = 0; this.maxG = 1; this.calls = {};
     this._iasPrev = 0; this.accel = 0;
     this.fail = { thr: [1, 1], flapJam: null, flapMax: 4, gearJam: 0, gravity: false, hyd: false, noAP: false, vappAdd: 0 }; this.rudTrim = 0; this.autoTrim = true; this.belly = null; this.scrape = 0; // failures (failures.js)
@@ -219,7 +219,12 @@ export class FDM {
         this.crash(g.water ? 'Crashed into the water' : j >= 4 ? 'Wingtip struck the ground' : j >= 2 ? 'Engine struck the ground' : 'Crashed'); return;
       }
     }
-    if (any && this.vel.y < -6.5) this.crash('Hard landing beyond structural limits');
+    // [Era Four · Hard landings] a gear touchdown past the old structural limit is NOT a
+    // crash any more: the impact is recorded and main.js runs the damage outcome
+    // (bent/collapsed gear, smoke, fire, ARFF, trip ends in place). The airframe
+    // absorbs a truly destructive arrival instead of bouncing back into the sky.
+    if (any && this.vel.y < (this.hardImpact || 0)) this.hardImpact = this.vel.y;
+    if (any && this.vel.y < -11) this.vel.y = -2;
   }
   crash(why) { if (this.crashed) return; this.crashed = why; this.vel.set(0, 0, 0); this.w.set(0, 0, 0); this.events.push({ t: 'crash', v: why }); }
 

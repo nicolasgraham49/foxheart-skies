@@ -224,7 +224,47 @@ function rescueDispatch() { if (!W.started || W.menuMode) return; const b = W.pr
   aircraft.updateMatrixWorld(true); rescue.dispatch(from, sys.fire[0].on || sys.fire[1].on); if (!W.rescueT) { W.rescueT = W.simTime; toast('Airport fire and rescue are on their way.', 4000); } }
 function emergencyStep(dt) { // scraping noise on a belly slide; the rescue services roll once an emergency landing has stopped
   if (fdm.scrape > 3) { W.scrT = (W.scrT || 0) - dt; if (W.scrT <= 0) { W.scrT = 0.3; audio.noiseHit(0.45, 2600 + Math.random() * 900, 800, Math.min(0.22, fdm.scrape / 110)); } }
-  if (fdm.onGround && fdm.td && !W.emerStop && Math.hypot(fdm.vel.x, fdm.vel.z) < 3 * KT && (fdm.belly || sys.fire[0].on || sys.fire[1].on || atc.flags.emer)) { W.emerStop = true; rescueDispatch(); if (fdm.belly) { Object.assign(sys.sw, { master1: false, master2: false }); foSay('We have stopped. Engines are off. Evacuate the aircraft?'); } }
+  if (fdm.onGround && fdm.td && !W.emerStop && Math.hypot(fdm.vel.x, fdm.vel.z) < 3 * KT && (fdm.belly || sys.fire[0].on || sys.fire[1].on || atc.flags.emer || W.damage)) { W.emerStop = true; rescueDispatch(); if (fdm.belly) { Object.assign(sys.sw, { master1: false, master2: false }); foSay('We have stopped. Engines are off. Evacuate the aircraft?'); } }
+}
+// ---------------------------------------------------------------- [Era Four · Hard landings]
+// Owner directive (Nov 23): "this is not a kids game, I need some umph." A hard
+// landing is no longer a popup and a shrug — it damages the jet, scaled by the
+// touchdown sink rate the score path already computes, and the emergency
+// services come to the aircraft where it stopped. There is NO hard-landing
+// dialog: the FDM's old 'Hard landing beyond structural limits' crash (which
+// fed showCrash) is gone from fdm.js, and a damaged arrival never shows the
+// #result overlay — the landing is still scored and logged exactly as before
+// (showScore), and the trip still closes through finishTrip's bookkeeping,
+// in place, with the response on scene.
+//   tier 1 · HARD        > 600 fpm — bent gear, smoke, she sits crooked and
+//                          cannot taxi; ARFF rolls and stages around her.
+//   tier 2 · SEVERE      > 850 fpm — gear collapsed, ENG 1 FIRE through the
+//                          existing failures system (flames + smoke, foam),
+//                          engines shut down at the stop, evacuation, ARFF.
+//   tier 3 · DESTRUCTIVE > 1150 fpm — both engines burning, explosion burst
+//                          on impact, wreck tilt, evacuation, ARFF.
+function hardTierFor(fpm) { return fpm > 1150 ? 3 : fpm > 850 ? 2 : fpm > 600 ? 1 : 0; }
+function applyHardLanding(fpm) {
+  const tier = hardTierFor(fpm); if (!tier || W.damage) return;
+  const D = W.damage = { tier, fpm, gear: tier === 1 ? 'bent' : 'collapsed', smoke: true, fire: tier >= 2, exploded: tier === 3, dispatched: false, stopped: false, ended: false, stopT: 0, endAt: 0, t: W.simTime };
+  fdm.gearDamage = tier;
+  aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true);
+  if (tier === 3) { rescue.burst(aircraft); audio.thump(1); pad.rumble(1, 1, 900); }
+  if (D.fire) { if (!fails.has('fire1')) fails.trigger('fire', { eng: 0 }); if (tier === 3 && !fails.has('fire2')) fails.trigger('fire', { eng: 1 }); W.foam = true; }
+  rescueDispatch(); D.dispatched = rescue.trucks.length > 0;
+  toast(tier === 3 ? 'Impact — she is down and burning. Fire crews are rolling.' : tier === 2 ? 'Severe landing — gear collapsed, engine fire. Emergency services are rolling.' : 'Hard landing — the gear is bent and she is smoking. Fire crews are rolling.', 6000);
+}
+function damageStep(dt) { // a damaged jet cannot taxi to a gate: brakes bite, the
+  // fire tiers shut down at the stop, the evacuation runs, and once the
+  // response has staged (or a long grace has passed) the trip closes IN PLACE
+  // through finishTrip — no gate, no jet bridge, no walk-out.
+  const D = W.damage; if (!D) return;
+  if (fdm.onGround) { fdm.brake = Math.max(fdm.brake, D.tier === 1 ? 0.5 : 1); if (D.tier >= 2) fdm.tl = Math.min(fdm.tl, 0.05); }
+  if (!D.dispatched && fdm.onGround) { rescueDispatch(); D.dispatched = rescue.trucks.length > 0; }
+  const gs = Math.hypot(fdm.vel.x, fdm.vel.z) / KT;
+  if (fdm.onGround && gs < 2) { D.stopT += dt; fdm.parkBrake = true; if (D.tier >= 2) fdm.engRun = [false, false]; } else D.stopT = 0;
+  if (!D.ended && D.stopT > 2 && W.scored) { D.ended = true; D.stopped = true; if (D.tier >= 2 && !W.evac) evacuate(); D.endAt = W.simTime + 90; }
+  if (D.ended && !W.tripDone && ((rescue.trucks.length && rescue.trucks.every(t => t.parked)) || W.simTime > D.endAt)) finishTrip();
 }
 function evacuate() { if (W.evac) return; W.evac = true; Object.assign(sys.sw, { master1: false, master2: false }); fdm.engRun = [false, false]; fdm.parkBrake = true; paSay('evac'); aircraft.updateMatrixWorld(true); rescue.evacuate(aircraft, !!fdm.belly); rescueDispatch(); W.foam = true; toast('Evacuation: slides are inflating and passengers are leaving the aircraft.', 6000); }
 let taxiLine = null;
@@ -278,6 +318,28 @@ function airportHull(b) {
   const cx = H.reduce((s, p) => s + p[0], 0) / H.length, cz = H.reduce((s, p) => s + p[1], 0) / H.length;
   return H.map(p => { const dx = p[0] - cx, dz = p[1] - cz, d = Math.hypot(dx, dz) || 1; return [p[0] + dx / d * 60, p[1] + dz / d * 60]; });
 }
+// [Era Four 1c · owner defect] the hood (near-tile houses) keep-out is BOOT state:
+// setupHood/hood.setup ran once in buildWorld, so HOOD.hull, HOOD.cities and the
+// blocked closure all describe the boot airport in the boot frame. shiftOrigin
+// re-frames terrain, the far City and roads but never the hood — at a streamed
+// field the carve simply does not exist (probe at KGNV: hood.ctx.blocked()
+// false on every ring out to 2,000 m around the centre; 2,581 houses inside
+// 20 s of dwell, 155 instances within 100 m of the parked jet). Re-aim the hood
+// at the CURRENT primary in the CURRENT frame — hull from the primary's own
+// site, discs from aptZones() for the other built fields, exactly buildWorld's
+// construction — whenever the frame shifts or the primary changes. hood.setup()
+// clears every tile, so blocks already grown under a stale carve are wiped and
+// regenerate under the new one.
+function refreshHoodCarve(lat, lon, force) {
+  if (!W.originLL && !force) return;
+  if (!force && W._hoodFor === W.primary) return;
+  setupHood(lat, lon, W.primary?.apt);
+  const hull = airportHull(W.primary), pc = W.primary ? { x: W.primary.x + W.primary.geom.cx, z: W.primary.z + W.primary.geom.cz } : null;
+  const zones = aptZones(); // the primary is fenced by its hull; the other built fields keep their discs — unless the primary has no site hull, then its disc fences it too
+  const others = zones.filter(a => !pc || Math.hypot(a.x - pc.x, a.z - pc.z) > 50 || !hull || hull.length < 3);
+  hood.setup({ heightAt: (x, z) => terrain.heightAt(x, z), blocked: (x, z) => hullDist(x, z) > -24 || others.some(a => Math.hypot(x - a.x, z - a.z) < a.r + 300) || roads.near(x, z) < 16 });
+  W._hoodFor = W.primary;
+}
 // ---------------------------------------------------------------- world streaming: free flight anywhere
 // The planet (wld-planet.js) gives sea, mountains and base elevation everywhere; around the aircraft the world streams:
 // airports within loadR are built one per tick (light detail, full detail within fullR or for the destination), far ones are
@@ -317,6 +379,7 @@ function shiftOriginNow(ll) {
   terrainAround(ll.lat, ll.lon, true);
   city.job = null; if (W.cityLL) city.group.position.set(ng.x(W.cityLL.lon), 0, ng.z(W.cityLL.lat)); STREAM.cityDue = true; // a half-built city was in the old frame: start again
   W.originLL = { lat: ll.lat, lon: ll.lon }; STREAM.shifts++; sky.envAge = 1e9;
+  refreshHoodCarve(ll.lat, ll.lon, true); // [Era Four 1c · owner defect] the hood keep-out is frame state too: re-aim it at the new frame's primary or streamed fields lose their airport carve entirely
 }
 function streamStep(dt) {
   if (!W.started || W.menuMode || W.onFoot) return;
@@ -336,16 +399,54 @@ function streamStep(dt) {
   else { const up = W.built.find(e => !e.full && haversine(ll.lat, ll.lon, e.apt.lat, e.apt.lon) < STREAM.fullR); if (up) { const i = W.built.indexOf(up), wasP = W.primary === up; dropAirport(up, true); W.built[i] = builtEntry(up.apt, true); if (wasP) W.primary = W.built[i]; STREAM.zonesDue = true; } }
   if (STREAM.zonesDue) { STREAM.zonesDue = false; terrain.setZones(aptZones()); terrain.aptObjs = W.built.map(b => b.apt); }
   // the destination becomes the primary airport once close (ground, gates, AI traffic, tower view)
-  const de = W.dest && W.built.find(b => b.apt === W.dest); if (de && de !== W.primary && dDest < 45000) { W.primary = de; const act = activeRunwayEnd(de); traffic.setup(de.apt, V3(de.x, de.elev, de.z), de.geom.ends, act, de); }
+  const de = W.dest && W.built.find(b => b.apt === W.dest); if (de && de !== W.primary && dDest < 45000) { W.primary = de; const act = activeRunwayEnd(de); traffic.setup(de.apt, V3(de.x, de.elev, de.z), de.geom.ends, act, de); refreshHoodCarve(W.originLL.lat, W.originLL.lon); } // [Era Four 1c · owner defect] a new primary re-aims the hood carve at it
   // city blocks around the aircraft when low (time-sliced, the old ones stay until the new set is ready)
   const cd = city.at ? Math.hypot(fdm.pos.x - city.at.x - city.group.position.x, fdm.pos.z - city.at.z - city.group.position.z) : 1e9;
   if (!city.job && agl < 4500 && (STREAM.cityDue || cd > 7000)) { STREAM.cityDue = false; city.start(terrain, W.geo, fdm.pos.x, fdm.pos.z, aptZones()); }
+  arrivalAnointCheck(); // [Era Four 1c] a committed descent at a non-target field anoints it as the arrival
 }
 function ground(x, z) {
   for (const b of W.built) { const dx = x - b.x - b.geom.cx, dz = z - b.z - b.geom.cz; if (dx * dx + dz * dz < b.r * b.r) { const t = terrain.masks.sample(x, z, _m); return { h: b.elev, water: t[0] > 0.6, apt: b }; } }
   return terrain.heightAt(x, z);
 }
 const _m = [0, 0, 0];
+// ---------------------------------------------------------------- [Era Four 1c · Arrive Anywhere] arrival anointment
+// Rule 2: any runway is a legal arrival. The arrival lifecycle is re-founded on
+// a moving primary: when the captain commits to a built field that is NOT the
+// current arrival target, that field is anointed — promoted to full detail,
+// made W.primary (traffic follows), and ATC is silently re-aimed through
+// atc.arriveHere (no transmissions, no amend record). Planned-vs-flown is
+// recorded in W.unplanned only when no amend/divert already explains the
+// arrival; it is never judged, never scored against the plan.
+function anointArrival(b) {
+  if (!b || !b.apt) return false; const A = b.apt;
+  if (!b.full) { // promote a light build to full detail, reusing streamStep's upgrade pattern
+    const i = W.built.indexOf(b); if (i >= 0) { const wasP = W.primary === b; dropAirport(b, true); const nb = builtEntry(A, true); W.built[i] = nb; if (wasP) W.primary = nb; b = nb; STREAM.zonesDue = true; }
+  }
+  if (W.primary !== b) { W.primary = b; const act = activeRunwayEnd(b) || b.geom.ends[0]; traffic.setup(b.apt, V3(b.x, b.elev, b.z), b.geom.ends, act, b); } // [Era Four 1c] narrow fields (every runway < 25 m wide) have no active end by the wide-runway rule — fall back to the first end, as startFlight does
+  W.arrivalApt = A;
+  refreshHoodCarve(W.originLL.lat, W.originLL.lon); // [Era Four 1c · owner defect] the anointed field becomes the primary: its own fence now carves the town out of its footprint before the captain parks
+  if (atc.arr === A) { atc.arriveHere(A); return true; } // already the target: primary/traffic fixed above; arriveHere only repairs the ground phase if the jet is down (never re-records, never re-arms twice)
+  const filed = atc.arr;
+  const explained = (atc.divertApt && atc.divertApt === A) || (W.amend && W.amend.list.length && W.amend.list[W.amend.list.length - 1].to === A.icao);
+  if (!explained) { if (!W.unplanned || W.unplanned.apt !== A.icao) W.unplanned = { filed: (W.unplanned && W.unplanned.filed) || (filed ? filed.icao : null), apt: A.icao }; }
+  if (W.unplanned && W.unplanned.apt === W.unplanned.filed) W.unplanned = null; // [Era Four 1c] the captain came back to the filed field after all — planned and flown agree, so there is nothing unplanned to record
+  atc.arriveHere(A);
+  return true;
+}
+// Approach anointment (airborne): on the stream tick, a built field other than
+// the arrival target within ~7 km, below ~1,000 ft AGL, descending, gear down,
+// is a committed arrival — anoint it. The guards keep cruise, high flybys and
+// the filed/amended/divert destination itself from ever firing it.
+function arrivalAnointCheck() {
+  if (!W.started || W.menuMode || W.onFoot || fdm.onGround || fdm.td || !atc.arr) return; // [Era Four 1c] once a touchdown has happened the arrival is decided — a bounce on the rollout must not re-anoint a neighbouring field; the touchdown anointment owns it from there
+  let best = null, bd = 7000;
+  for (const b of W.built) { if (b.apt === atc.arr) continue; const d = Math.hypot(fdm.pos.x - b.x, fdm.pos.z - b.z); if (d < bd) { bd = d; best = b; } }
+  if (!best) return;
+  const aglFt = (fdm.pos.y - ground(fdm.pos.x, fdm.pos.z).h) / FT;
+  if (aglFt > 1000 || fdm.vel.y > -1 || !fdm.gearDown) return;
+  anointArrival(best);
+}
 
 function setTimeOfDay(min) {
   W.tod = ((min % 1440) + 1440) % 1440; const A = W.primary?.apt || W.apt; if (!A) return;
@@ -369,7 +470,13 @@ const PHASE = { gate: 'gate', runway: 'takeoff', final: 'approach' };
 let _paxKey = 'std'; // [Private charter] which manifest the cabin/terminal builders currently carry ('std' = the type's own)
 async function startFlight(cfg) {
   W.cfg = cfg; W.mode = cfg.mode || 'free'; W.menuMode = !!cfg.menu;
-  const A = cfg.apt; const g = airportGeometry(A);
+  const A = cfg.apt;
+  // [Era Four 1d] the implicit positioning courtesy: a real menu flight departing
+  // somewhere other than where the jet sits IS the positioning — stated once in
+  // the logbook, never scored, never judged. Challenges are exempt (they are
+  // scenarios, not the captain's aeroplane), and the menu scene is not a flight.
+  if (!cfg.menu && cfg.mode !== 'challenge') { const P = getPos(); if (P && P.icao !== A.icao) recordPositioning(P.icao, A.icao); }
+  const g = airportGeometry(A);
   let E = g.ends.find(e => e.ident === cfg.end) || g.ends[0];
   showLoad(true, 'Building ' + A.icao + ' and surroundings…');
   await new Promise(r => setTimeout(r, 30));
@@ -416,7 +523,8 @@ async function startFlight(cfg) {
   if (cfg.start !== 'route') { W.route = null; }
   fdm.ap.autoConfig = cfg.start === 'final' || cfg.start === 'route' || any || cfg.start === 'air'; W.dct = null;
   setTimeOfDay(cfg.tod ?? 1080);
-  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); W.amend = null; nav.setGhost(null); showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); W.signedIn = cfg.start !== 'terminal'; // [Nothing starts until sign-in] only a terminal (on-foot) departure waits for its captain — every other start is live from the first frame, as before
+  W.lastTD = null; W.scored = false; W.callLog = []; W.timeAccel = 1; W.offersQuiet = false; W.descending = false; W.push = null; W.autoTaxi = null; W.parkedAt = null; W.tripDone = false; W._tripArm = true; W.divertApt = null; nav.setDivert(null); W.amend = null; nav.setGhost(null); W.unplanned = null; W.arrivalApt = null; W._synthStand = null; W.damage = null; // [Era Four 1e] radio-quiet is a per-flight setting: every flight starts with offers allowed · [Era Four 1c] no unplanned-arrival record, arrival field or synthesized stand carries into a new flight · [Hard landings] and no damage state either
+  showTaxi(null); foot.dispose(); disposeFlightCabin(); W.onFoot = false; $('#foot').hidden = true; W.signs = { belt: true, smoke: true }; W.cabPhase = 'boarding'; W.boarding = null; W.brief = null; W._svcSeen = null; W._beltAutoOff = false; W._cruiseLvlT = 0; Object.assign(CC, { v: 78, cd: {}, warnT: 0, hints: {} }); paLog.length = 0; if (paOpen) togglePA(false); W.signedIn = cfg.start !== 'terminal'; // [Nothing starts until sign-in] only a terminal (on-foot) departure waits for its captain — every other start is live from the first frame, as before
   Stories.reset(); // [Stories era] a new flight starts with no story armed
   CrewTalk.reset(); // [Crew conversations] and no crew conversation or interphone state carried over
   Charter.reset(); // [Private charter] and no charter encounter or card carried over
@@ -513,13 +621,20 @@ function exitConn() { // the runway exit ahead of the aircraft on the landing ro
 }
 function onRunwayOf(il) { if (!il || !fdm.onGround) return false; const d = ilsDeviation(il, fdm.pos); return Math.abs(d.cross) < Math.max(15, (il.width || 45) / 2 + 2) && d.thrDist < 15 && d.thrDist > -(il.length || 2500) - 15; }
 function taxiInRoute() {
-  const b = W.primary; const p = fdm.pos; let best = null, bd = 1e12;
+  const b = W.primary; const p = fdm.pos;
+  // [Era Four 1c] an 'air'-class field may have no taxiNet at all: instead of
+  // crashing on taxiNet[0], route directly to the stand the parking scan gives
+  // (a real stand, or the synthesized apron stand derived from the field's own
+  // geometry — its placed apron, else abeam the main runway).
+  if (!b || !b.b.taxiNet.length) { const st = b ? (nearestFreeStand(1e6) || W.arrStand) : null; if (!st) return { via: [], gate: 'Apron', pts: [p.clone()], stand: null }; W.arrStand = st; const sp = V3(b.x + st.x, b.elev + 0.6, b.z + st.z); return { via: [], gate: st.gateName || 'Apron', pts: [p.clone().setY(sp.y), sp], stand: st }; }
+  let best = null, bd = 1e12;
   for (const net of b.b.taxiNet) { const r = net.r; const vx = p.x - b.x - r.a.x, vz = p.z - b.z - r.a.z; const s = vx * r.dir.x + vz * r.dir.z; const d = Math.abs(-vx * r.dir.z + vz * r.dir.x); if (s > -100 && s < r.L + 100 && d < bd) { bd = d; best = { net, s }; } }
   if (!best) best = { net: b.b.taxiNet[0], s: 0 };
   const { net, s } = best; const fwdSign = Math.sign(fdm.vel.x * net.r.dir.x + fdm.vel.z * net.r.dir.z) || 1;
   const conn = net.conns.filter(c => (c.s - s) * fwdSign > 30).sort((p, q) => Math.abs(p.s - s) - Math.abs(q.s - s))[0] || net.conns.slice().sort((p, q) => Math.abs(p.s - s) - Math.abs(q.s - s))[0];
+  if (!conn) { const st0 = nearestFreeStand(1e6) || W.arrStand; if (!st0) return { via: [], gate: 'Apron', pts: [p.clone()], stand: null }; W.arrStand = st0; const sp0 = V3(b.x + st0.x, b.elev + 0.6, b.z + st0.z); return { via: [], gate: st0.gateName || 'Apron', pts: [p.clone().setY(b.elev + 0.6), sp0], stand: st0 }; } // [Era Four 1c] a net with no usable exit connector routes direct, like the empty-net case
   const link = net.links.slice().sort((p, q) => Math.abs(p.s - conn.s) - Math.abs(q.s - conn.s))[0];
-  const st = W.charter ? (charterRemoteStand(b) || pickStand(b)) : pickStand(b); W.arrStand = st; const fr = b.b.frame; // [Charter apron] a charter arrival is routed to its remote stand, never a gate
+  const st = W.charter ? (charterRemoteStand(b) || pickStand(b)) : (b.b.stands.length ? pickStand(b) : nearestFreeStand(1e6)); if (!st) return { via: [], gate: 'Apron', pts: [p.clone()], stand: null }; W.arrStand = st; const fr = b.b.frame; // [Charter apron] a charter arrival is routed to its remote stand, never a gate — [Era Four 1c] a stand-less field falls back to the synthesized apron stand
   const W3 = q => V3(b.x + q.x, b.elev + 0.6, b.z + q.z);
   const standPt = V3(b.x + st.x + fr.nx * 30, b.elev + 0.6, b.z + st.z + fr.nz * 30);
   const pts = [p.clone().setY(b.elev + 0.6), W3(conn.a), W3(conn.b)]; if (link) pts.push(W3(net.P(link.s)), W3(link.a), W3(link.b)); pts.push(standPt, V3(b.x + st.x, b.elev + 0.6, b.z + st.z));
@@ -715,10 +830,16 @@ function parkAtGate(st) {
   // shut down at the gate: APU on, engines off, beacon off; the purser welcomes everyone, then the seat belt sign goes off
   Object.assign(sys.sw, { master1: false, master2: false, apuMaster: true, apuBleed: true, beacon: false }); sys.apuN = 100; sys.apuFlap = 1; W.autoStart = null;
   setTimeout(() => { if (W.parkedAt === st) paSay('arrival'); }, 1500); setTimeout(() => { if (W.parkedAt === st) setSigns(false, W.signs.smoke); }, 9000); aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true);
-  foot.build({ mode: 'arr', apt: b.apt, b, stand: st, dest: W.cfg.apt, featured: featured(), apron: !!W.charter }); foot.hideInteriors(false); // [Charter apron] a charter arrival builds the apron session — the captain steps off onto the apron
+  // [Era Four 1c] the apron arrival generalizes the charter branch: a charter
+  // flight, a remote stand, or ANY field whose ground class is not 'full'
+  // arrives the Era Two way — stairs + bus on the apron, no jet bridge, no
+  // fake terminal lifecycle. 'full' fields with an airliner keep the gate
+  // path exactly as before.
+  const apronArr = !!W.charter || !!st.remote || (b.b.ground && b.b.ground.cls !== 'full');
+  foot.build({ mode: 'arr', apt: b.apt, b, stand: st, dest: W.cfg.apt, featured: featured(), apron: apronArr }); foot.hideInteriors(false); // [Charter apron] a charter arrival builds the apron session — the captain steps off onto the apron
   crew.atStand(aircraft, ground, true);
-  if (W.charter) StairsBus.setupArrival(scene, aircraft, ground(aircraft.position.x, aircraft.position.z).h, W.charter.n); else st.jb?.userData?.setDocked?.(true); // [Stairs + bus] a charter arrival gets the stairs + bus, not the bridge
-  toast(W.charter ? 'Parked on the apron at ' + b.apt.icao + '. Press Enter to stand up and walk out with your clients.' : 'Parked at gate ' + st.gateName + '. Press Enter to stand up and walk out with the passengers.', 6000); // [Charter apron]
+  if (apronArr) StairsBus.setupArrival(scene, aircraft, ground(aircraft.position.x, aircraft.position.z).h, W.charter ? W.charter.n : (TYPE.cabin.pax || 0)); else st.jb?.userData?.setDocked?.(true); // [Stairs + bus] an apron arrival gets the stairs + bus, not the bridge
+  toast(apronArr ? 'Parked on the apron at ' + b.apt.icao + '. Press Enter to stand up and walk out with ' + (W.charter ? 'your clients.' : 'the passengers.') : 'Parked at gate ' + st.gateName + '. Press Enter to stand up and walk out with the passengers.', 6000); // [Charter apron] — [Era Four 1c] apron wording at any non-full field
 }
 function finishTrip() {
   if (W.tripDone) return; W.tripDone = true; try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { }
@@ -728,15 +849,45 @@ function finishTrip() {
   // the filed route, the route as flown, and each amendment's time. Arriving at
   // the amended destination earns the Trust Record's one binary line.
   if (W.amend && W.amend.list.length) { entry.planned = from.icao + '→' + W.amend.filed.icao; entry.flown = entry.apt; entry.amends = W.amend.list.map(a => a.to + ' @ ' + fmtTime(a.tod)); if (to.icao === W.amend.list[W.amend.list.length - 1].to) entry.trustAmend = true; }
+  // [Era Four 1c] an unplanned arrival (no amend, no divert — the captain
+  // simply landed somewhere else) records planned-vs-flown the same factual
+  // way, flagged unplanned, with NO trust line and NO grading: the plan is
+  // recorded, never judged.
+  else if (W.unplanned && W.unplanned.filed && W.unplanned.filed !== to.icao) { entry.planned = from.icao + '→' + W.unplanned.filed; entry.flown = entry.apt; entry.unplanned = true; }
+  if (W.damage) { entry.damage = W.damage.tier === 3 ? 'destructive' : W.damage.tier === 2 ? 'severe' : 'hard'; entry.fire = !!W.damage.fire; } // [Hard landings] the trip entry records the damaged arrival factually, like planned-vs-flown
   const log = store.get('log', []); log.unshift(entry); store.set('log', log.slice(0, 200));
+  writePos(to.icao); // [Era Four 1d] the jet IS at the arrival field now — walk-out and damaged ended-in-place alike, both endings flow through here
   const storyLetter = Stories.completeTrip({ from: from.icao, to: to.icao }); // [Stories era] their letter lands with the trip (route as actually flown — a divert writes the divert field)
   const charterNote = W.charter ? Charter.completeTrip({ from: from.icao, to: to.icao, score: s?.score ?? null, grade: s?.grade || null, fpm: s?.fpm ?? null }) : null; // [Private charter] the clients' note lands with the trip, the landing recorded as their satisfaction
-  const amendLine = entry.planned ? `<p style="color:var(--mute);margin:8px 0 0">Filed ${entry.planned} · flown ${entry.flown} — amended in the air (${entry.amends.join(', ')}).</p>` : ''; // [Era Four 1a] planned vs flown, stated plainly
+  const amendLine = entry.amends ? `<p style="color:var(--mute);margin:8px 0 0">Filed ${entry.planned} · flown ${entry.flown} — amended in the air (${entry.amends.join(', ')}).</p>` : entry.unplanned ? `<p style="color:var(--mute);margin:8px 0 0">Filed ${entry.planned} · flown ${entry.flown} — landed where the day took you.</p>` : ''; // [Era Four 1a] planned vs flown, stated plainly — [Era Four 1c] the unplanned line states the same facts with no amend language
   $('#resultBox').innerHTML = `<span class="eyebrow">Trip complete · ${from.icao} → ${to.icao}</span><h2>Welcome to ${SHORT[to.icao] || to.city}</h2><p style="color:var(--mute);margin:0">${W.charter ? 'Your charter is in the logbook' : 'Flight 412 is in the logbook'}${s ? ` with a ${s.grade} landing (${s.score}/100, ${s.fpm} fpm)` : ''}. ${W.charter ? 'Thank you for looking after them, captain.' : 'Thanks for flying Nicofoxheart Air.'}</p>${amendLine}${storyLetter ? '<p style="color:var(--fox2);margin:8px 0 0">✉ A letter is waiting in your logbook.</p>' : ''}${charterNote ? '<p style="color:var(--fox2);margin:8px 0 0">✦ Your clients left a note in the Charter Book.</p>' : ''}<div class="btnrow"><button class="go" id="rMenu">Main menu</button><button class="go ghost" id="rCont">Keep exploring</button></div>`;
+  // [Hard landings] a damaged arrival ends in place with the response on scene:
+  // the bookkeeping above (logbook, Stories, Charter) all still lands, but NO
+  // dialog is shown — the captain stays with the aircraft and the crews.
+  if (W.damage) { $('#result').hidden = true; toast(W.damage.fire ? 'The trip ends here — fire crews have her. The landing is in your logbook.' : 'The trip ends here — she is going nowhere on that gear. The landing is in your logbook.', 7000); return; }
   $('#result').hidden = false; $('#rMenu').onclick = () => { $('#result').hidden = true; toMenu(); }; $('#rCont').onclick = () => { $('#result').hidden = true; W.tripDone = false; };
 }
-function nearestFreeStand(maxD) { const b = W.primary; if (!b || !b.full) return null; if (W.charter) { const rs = charterRemoteStand(b); if (!rs) return null; const d = Math.hypot(b.x + rs.x - fdm.pos.x, b.z + rs.z - fdm.pos.z); return d < maxD ? rs : null; } // [Charter apron] a charter flight parks at its remote stand, never a gate
-  let best = null, bd = maxD; for (const st of b.b.stands) { if (st.used && st !== W.arrStand) continue; const d = Math.hypot(b.x + st.x - fdm.pos.x, b.z + st.z - fdm.pos.z); if (d < bd) { bd = d; best = st; } } return best; }
+function nearestFreeStand(maxD) { const b = W.primary; if (!b) return null;
+  // [Era Four 1c] graceful degrade at a field with no usable stands: an apron
+  // stand derived from the field's OWN geometry (never a snapshot of wherever
+  // the jet happened to stop — [owner defect] a stop-point stand can sit in
+  // the generated town; an airport-derived spot cannot). When the primary is
+  // not full-detail, or has no stands at all, and the aircraft is on the
+  // ground after a touchdown inside the field's ground zone, the spot is the
+  // build's placed apron when it placed one, else abeam the main runway on
+  // the apron side, offset clear of the strip, inside the footprint (cached
+  // on W so every caller — prompt, park, taxi-in — agrees on the same object).
+  const synth = () => { if (!fdm.onGround || !fdm.td) return null; const g0 = ground(fdm.pos.x, fdm.pos.z); if (!g0.apt || g0.apt !== b) return null;
+    if (W._synthStand && W._synthStand._for === b) return W._synthStand;
+    const g = b.geom; if (!g || !g.runways || !g.runways.length) return null;
+    const main = [...g.runways].sort((p, q) => q.L - p.L)[0], hdgOf = (dx, dz) => (Math.atan2(dx, -dz) * 180 / Math.PI + 360) % 360;
+    let sx, sz, sh;
+    if (b.b && b.b.ground && b.b.ground.placed && g.apron) { sx = g.apron.x; sz = g.apron.z; sh = hdgOf(g.apron.dx, g.apron.dz); } // the build placed a real apron site clear of every strip — park on it
+    else { const nx = -main.dir.z, nz = main.dir.x, side = Math.sign((g.apron.x - main.cx) * nx + (g.apron.z - main.cz) * nz) || 1, off = main.W / 2 + 110; sx = main.cx + nx * off * side; sz = main.cz + nz * off * side; sh = hdgOf(main.dir.x, main.dir.z); } // abeam the main runway, apron side, 110 m clear of the strip edge
+    const st = { x: sx, z: sz, s: 0, gate: 'Apron', gateName: 'Apron', outHdg: sh, inHdg: sh, used: true, jb: null, remote: true, synth: true, _for: b }; W._synthStand = st; return st; };
+  if (!b.full) return synth();
+  if (W.charter) { const rs = charterRemoteStand(b); if (rs) { const d = Math.hypot(b.x + rs.x - fdm.pos.x, b.z + rs.z - fdm.pos.z); return d < maxD ? rs : null; } return synth(); } // [Charter apron] a charter flight parks at its remote stand, never a gate — [Era Four 1c] with no anchor stand, park where you stopped
+  let best = null, bd = maxD; for (const st of b.b.stands) { if (st.used && st !== W.arrStand) continue; const d = Math.hypot(b.x + st.x - fdm.pos.x, b.z + st.z - fdm.pos.z); if (d < bd) { bd = d; best = st; } } return best || (b.b.stands.length ? null : synth()); }
 // The nearest airport this jet can actually land at, from the whole world data (every airport object
 // carries its runway lengths — no need to be built or streamed in first, so a mid-ocean emergency still
 // finds the real nearest field). Suitable = longest PAVED runway >= 1,900 m, the game's own landing floor
@@ -755,6 +906,33 @@ function nearestSuitable(lat, lon) {
   }
   const out = best ? { apt: best, distNm: bd / NM, rwyM: Math.round(brwy) } : null;
   _suitMemo = { key, out }; return out;
+}
+// [Era Four 1e · The Sky Offers] the honest reach: how far the fuel actually in
+// the tanks carries this aeroplane from here. Pure display arithmetic on the
+// fdm's own numbers — the current ΣN1 burn rate through the same formula fdm.js
+// burns by (signed load sheet's burnFactor included), a 45-minute reserve held
+// back at that rate, at the current groundspeed. No new physics: if the tanks
+// or the burn change, the ring tells the truth about the new numbers. The
+// alternate list is the divert standard (nearest suitable fields), memoised
+// per ~3 NM cell like nearestSuitable; the in-reach flags are recomputed from
+// the live radius on every call.
+let _altMemo = null;
+function suitableAlts(lat, lon) {
+  const key = Math.round(lat * 20) + ',' + Math.round(lon * 20);
+  if (_altMemo && _altMemo.key === key) return _altMemo.list;
+  const list = [];
+  for (const a of World.airports) { let L = 0; for (const r of a.runways) if ((r.surface === 'A' || r.surface === 'C') && r.lengthFt * FT > L) L = r.lengthFt * FT; if (L < 1900) continue; list.push({ apt: a, distNm: haversine(lat, lon, a.lat, a.lon) / NM }); }
+  list.sort((x, y) => x.distNm - y.distNm);
+  const out = list.slice(0, 6); _altMemo = { key, list: out }; return out;
+}
+function reachInfo() {
+  const f = fdm, ll = W.geo.toLatLon(f.pos.x, f.pos.z);
+  const burnKgS = ((f.engRun[0] ? f.n1[0] : 0) + (f.engRun[1] ? f.n1[1] : 0)) * 0.0095 * (f.spec.thrust / 120000) * (f.burnFactor || 1); // kg/s — fdm.js's own burn line, factored the same way
+  const gsKt = Math.hypot(f.vel.x, f.vel.z) / KT;
+  const usableKg = Math.max(0, f.fuel - burnKgS * 2700); // the 45-minute reserve, held at the current burn rate
+  const nm = burnKgS > 0.01 && gsKt > 25 ? usableKg / burnKgS / 3600 * gsKt : 0;
+  const alts = suitableAlts(ll.lat, ll.lon).map(a => ({ icao: a.apt.icao, x: W.geo.x(a.apt.lon), z: W.geo.z(a.apt.lat), distNm: a.distNm, inReach: a.distNm <= nm }));
+  return { nm, burnKgS, fuelKg: f.fuel, gsKt, alts };
 }
 function updateDivertBtn() { const b = $('#divertBtn'); if (!b) return; const A = atc.divertApt || W.divertApt; const on = !!A;
   if (b.classList.contains('on') !== on) b.classList.toggle('on', on);
@@ -798,6 +976,13 @@ const atcCtx = {
     nav.setGhost(A === filed ? null : filed); // the original route stays on the ND as a ghost until the plan matches it again
     if (!W.charter) paSay('amend'); }, // commercial amends acknowledge the passengers — one calm line; charter amends freely, no PA
   aptByIcao: icao => World.byIcao.get(icao) || null,
+  // [Era Four 1e · The Sky Offers] offer-deck lookups: the per-flight radio-quiet
+  // setting, and nearest-suitable searches (the divert standard — longest paved
+  // runway >= 1,900 m) with exclusions, for the company alternate near the
+  // destination and the charter client's extra leg near the route.
+  offersQuiet: () => !!W.offersQuiet,
+  nearSuitable(lat, lon, excl) { const ex = new Set(excl || []); let best = null, bd = 1e18; for (const a of World.airports) { if (ex.has(a.icao)) continue; let L = 0; for (const r of a.runways) if ((r.surface === 'A' || r.surface === 'C') && r.lengthFt * FT > L) L = r.lengthFt * FT; if (L < 1900) continue; const d = haversine(lat, lon, a.lat, a.lon); if (d < bd) { bd = d; best = a; } } return best; },
+  nearDestAlt(arr, dep) { if (!arr) return null; const A = atcCtx.nearSuitable(arr.lat, arr.lon, [arr.icao, dep && dep.icao]); if (!A) return null; return haversine(arr.lat, arr.lon, A.lat, A.lon) / NM <= 150 ? A : null; }, // "near the destination" is capped honestly at 150 NM — beyond that the sky stays silent
   isCharter: () => !!W.charter,
   rescue: () => rescueDispatch(),
   weather() { const A = atc.apt(); const temp = Math.round(({ desert: 31, tropical: 29, subtropical: 26, mediterranean: 21, temperate: 13, 'temperate-green': 12, boreal: 4 })[climateFor(A.lat, A.lon)] ?? 18) - (W.wx === 'rain' ? 3 : 0);
@@ -1205,6 +1390,7 @@ function nextStep() {
     if (W.parkedAt) return { label: 'Stand up and walk out', run: () => enterFoot('arr') };
     { const fa = fails.nextAction(); if (fa) return fa; }
     if (gs < 3 && fdm.td && !W.evac && (fdm.belly || sys.fire[0].on || sys.fire[1].on || (atc.flags.emer && fails.emergency === 'mayday'))) return { label: 'Evacuate the aircraft', run: evacuate };
+    if (W.damage) return null; // [Hard landings] no gate/taxi/start steps for a damaged jet — the ECAM/evac steps above are its whole world now
     if (W.autoStart) return { label: (AUTOSTART[Math.min(W.autoStart.i, AUTOSTART.length - 1)][0]) + '…', run: null };
     if (atcStep && ['rb', 'ho', 'clr'].includes(o.id)) return atcStep;
     { const bs = W.boarding; if (bs && bs.phase === 'pending') return { label: 'Begin boarding', run: () => beginBoarding() }; if (bs && bs.phase === 'boarding') return { label: 'Finish boarding now', run: () => finishBoardingNow() }; }
@@ -1468,7 +1654,7 @@ function snapshot() {
   if (!W.ndRange && navInfo && navInfo.remainNm > ndR) { for (const s of [80, 160, 320]) { ndR = s; if (navInfo.remainNm * 1.1 <= s) break; } }
   return { fdm, e, speeds: fdm.speeds(), ap: fdm.ap, altFt: fdm.pos.y / FT, groundFt: gh / FT, raFt: fdm.ra / FT, ils: W.ils, ilsDev: dev, track: (Math.atan2(fdm.vel.x, -fdm.vel.z) * R2D + 360) % 360, route: W.route,
     airports: W.built.map(b => ({ x: b.x, z: b.z, geom: b.geom, icao: b.icao })), navaids: W.navs, traffic: traffic.list, windFrom: W.windFrom, windKt: W.windKt, localMin: W.tod, phase: W.phase,
-    nav: navInfo, navPts, navApts,
+    nav: navInfo, navPts, navApts, reach: W.started && !W.menuMode ? reachInfo() : null, // [Era Four 1e] honest fuel reach + nearest suitable alternates, for the ND ring
     ndRange: ndR, warnings: warnings(e, dev), elecEmer: sys.emerElec, fd: fdm.ap.on || !(W.ils !== W.depIls || W.cfg?.start === 'final') ? null : fdGuide(fdm, W.ils, dev, e), lat: ll.lat, lon: ll.lon };
 }
 function warnings(e, dev) {
@@ -1498,7 +1684,7 @@ function simulate(dtReal) {
   else for (let i = 0; i < steps; i++) { fdm.step(h, env); autoConfig(h); }
   if (crew.state !== 'off') { aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q); aircraft.updateMatrixWorld(true); crew.update(simDt, aircraft, fdm, ground); }
   stand7.update(simDt); sig.update(simDt); // [Home Field 1a + 1b] the conducted sequence and the load sheet tick with the sim (no-ops unless armed)
-  atc.update(simDt); fails.update(simDt); emergencyStep(simDt); updateComfort(simDt); sys.update(simDt, fdm, { gpu: gpuConnected(), oat: 24 }); autoStartStep(simDt);
+  atc.update(simDt); fails.update(simDt); emergencyStep(simDt); damageStep(simDt); updateComfort(simDt); sys.update(simDt, fdm, { gpu: gpuConnected(), oat: 24 }); autoStartStep(simDt);
   if (fingers) { if (atc.tuned && atc.tuned.kind !== 'AIR' && fingers.state !== 'idle') fingers.endThread(); // [FINGERS S1] tuning away closes the thread without ceremony
     W.fingT = (W.fingT || 0) + simDt; if (W.fingT >= 0.5) { const d = W.fingT; W.fingT = 0; fingers.tick(d); if (radioOpen) renderRadio(); } } // the engine ticks at ~2 Hz beside ATC — event-driven, zero per-frame cost
   W.simTime += simDt;
@@ -1539,7 +1725,7 @@ function handleEvents() {
   for (const ev of fdm.events) {
     switch (ev.t) {
       case 'gear': audio.gearClunk(); toast('Gear ' + (ev.v ? 'down' : 'up')); pad.rumble(0.25, 0.15, 120); break;
-      case 'touchdown': audio.touchdown(ev.v); onTouchdown(); clearDivertDisplay(); { const k = Math.min(1, Math.abs(ev.v) / 3); pad.rumble(0.3 + 0.7 * k, 0.6, 260); } break; // the divert target is reached: the amber light goes out, the arrival flow continues to this airport
+      case 'touchdown': audio.touchdown(ev.v); { const gb = fdm.td ? ground(fdm.td.x, fdm.td.z).apt : null; if (gb) anointArrival(gb); } onTouchdown(); clearDivertDisplay(); { const k = Math.min(1, Math.abs(ev.v) / 3); pad.rumble(0.3 + 0.7 * k, 0.6, 260); } break; // [Era Four 1c] touchdown anointment (fallback): any touchdown on a built field becomes an arrival there, even if the approach anointment never fired // the divert target is reached: the amber light goes out, the arrival flow continues to this airport
       case 'call': audio.call(ev.v); callout(ev.v); (W.callLog ||= []).push(ev.v); break;
       case 'retard': audio.call('RETARD'); callout('RETARD'); (W.callLog ||= []).push('RETARD'); break;
       case 'apoff': audio.apOff(); toast('Autopilot disconnected' + (ev.v === 'rollout complete' ? '' : '')); break;
@@ -1555,13 +1741,28 @@ function handleEvents() {
   if (fdm.td && !W.scored && (Math.hypot(fdm.vel.x, fdm.vel.z) < 16 * KT || W.simTime - fdm.td.t > 28)) { W.scored = true; showScore(); }
 }
 function onTouchdown() { const fpm = Math.round(-fdm.td.vs / FT * 60); callout(fpm + ' FPM');
+  applyHardLanding(fpm); // [Era Four · Hard landings] damage + fire + ARFF, scaled by this same fpm — in place of the old popup/crash outcome
   if (W.mode === 'challenge') return;
-  if (fpm > 600) { CC.v = Math.max(0, CC.v - 32); setTimeout(() => toast('The cabin gasps. That was a hard landing.', 4000), 1200); }
+  if (fpm > 600) { CC.v = Math.max(0, CC.v - 32); }
   else if (fpm > 400) CC.v = Math.max(0, CC.v - 15); else if (fpm > 260) CC.v = Math.max(0, CC.v - 5);
   else if ((fpm < 200 && CC.v > 45) || fpm < 130) { CC.v = Math.min(100, CC.v + 6); setTimeout(() => { audio.applause(6); cabinObj()?.react('clap', 6.5); toast('Applause from the cabin!', 4000); }, 2200); }
 }
 function scoreLanding() {
-  const td = fdm.td; const il = td.ils || W.ils; if (!il) return null;
+  const td = fdm.td; let il = td.ils || W.ils;
+  // [Era Four 1c] score at the field actually touched down at: if the armed ILS
+  // is missing or belongs to another airport, synthesize the actual field's ILS
+  // for the runway end whose centreline the touchdown sits closest to (thrDist
+  // kept in a sane window). The normal path — the ILS belongs to the landing
+  // field — is untouched.
+  const actual = W.arrivalApt || (td ? (ground(td.x, td.z).apt?.apt || null) : null);
+  if (actual && (!il || il.apt !== actual)) {
+    const P = aptPos(actual); let bestIl = null, bestCross = 1e18, fbIl = null, fbCross = 1e18;
+    for (const E of airportGeometry(actual).ends) { const cand = ilsFor(actual, E, P); const dev = ilsDeviation(cand, new THREE.Vector3(td.x, cand.elev, td.z)); const ac = Math.abs(dev.cross);
+      if (ac < fbCross) { fbCross = ac; fbIl = cand; }
+      if (dev.thrDist > -(cand.length || 2500) - 500 && dev.thrDist < 15000 && ac < bestCross) { bestCross = ac; bestIl = cand; } }
+    if (bestIl || fbIl) il = bestIl || fbIl;
+  }
+  if (!il) return null;
   const dev = ilsDeviation(il, new THREE.Vector3(td.x, il.elev, td.z));
   const fpm = Math.max(0, -td.vs / FT * 60); const past = -dev.thrDist; const lat = Math.abs(dev.cross); const vref = fdm.speeds().vref; const dv = td.ias - vref;
   const sRate = fpm <= 60 ? 34 : fpm <= 240 ? 40 : fpm <= 600 ? 40 * (1 - (fpm - 240) / 360) : 0;
@@ -1577,9 +1778,13 @@ function scoreLanding() {
 let lastScore = null;
 function showScore() {
   const s = scoreLanding(); if (!s) return; lastScore = s;
+  // [Era Four 1c] Fields record: the first touchdown at a field stamps it —
+  // ICAO, the date, and the field's own city/name/featured facts. A record,
+  // never a score: no counts, no percentages, nothing graded.
+  { const A = World.byIcao.get(s.apt); if (A) { const fields = store.get('fields', {}); if (!fields[A.icao]) { fields[A.icao] = { d: new Date().toISOString().slice(0, 10), city: A.city || '', name: A.name || '', featured: !!A.featured }; store.set('fields', fields); toast('First visit — ' + (A.city || A.name) + ' (' + A.icao + ') is in your Fields record.', 6000); } } }
   const log = store.get('log', []); log.unshift({ date: new Date().toISOString().slice(0, 16).replace('T', ' '), mode: W.mode, apt: s.apt, rwy: s.rwy, fpm: s.fpm, score: s.score, grade: s.grade, wx: W.wx, tod: fmtTime(W.tod) }); store.set('log', log.slice(0, 200));
   if (W.mode === 'challenge' && W.cfg.chId) { const best = store.get('best', {}); if (!best[W.cfg.chId] || best[W.cfg.chId] < s.score) { best[W.cfg.chId] = s.score; store.set('best', best); } }
-  if (W.mode !== 'challenge') { toast(`Landing ${s.grade} · ${s.score}/100 · ${s.fpm} fpm · ${s.lat} m off centreline`, 7000); return; }
+  if (W.mode !== 'challenge') { toast(`Landing ${s.grade} · ${s.score}/100 · ${s.fpm} fpm · ${s.lat} m off centreline`, 7000); if (W.damage) { const log = store.get('log', []); if (log[0] && log[0].apt === s.apt && log[0].fpm === s.fpm) { log[0].damage = W.damage.tier === 3 ? 'destructive' : W.damage.tier === 2 ? 'severe' : 'hard'; log[0].fire = !!W.damage.fire; store.set('log', log); } } return; } // [Hard landings] the landing log entry itself carries the damage outcome — the record, not a popup
   const bar = (n, v, max, t) => `<div class="b"><span>${n}</span><span class="t"><i style="width:${Math.round(v / max * 100)}%"></i></span><span>${t}</span></div>`;
   $('#resultBox').innerHTML = `<span class="eyebrow">${s.apt} · Runway ${s.rwy} · ${W.cfg.title || 'Landing'}</span>
     <div class="score"><div class="big">${s.score}</div><div><div class="gr">Grade ${s.grade}</div><div style="color:var(--mute);font:12px var(--f-mono)">${s.onRwy ? 'Touchdown on the runway' : 'Touchdown off the runway surface'}</div></div></div>
@@ -1610,6 +1815,9 @@ function frame(now) {
 }
 function renderFrame(dt) {
   aircraft.position.copy(fdm.pos); aircraft.quaternion.copy(fdm.q);
+  // [Hard landings] a damaged jet sits WRONG: bent gear lists her a little,
+  // collapsed gear drops and lists her hard — visible in every exterior view.
+  if (W.damage && fdm.onGround) { const D = W.damage; aircraft.rotateZ(D.tier === 1 ? 0.035 : 0.085); aircraft.rotateX(D.tier === 3 ? 0.02 : 0); aircraft.position.y -= D.tier === 1 ? 0.22 : 0.55; }
   const night = ATM.uNight.value;
   if (W.menuMode) { lights.strobe = !fdm.onGround || fdm.tl > 0.5; lights.nav = true; lights.beacon = true; lights.landing = night > 0.5; lights.taxi = night > 0.5; }
   else { // exterior lights follow the overhead switches; on a normal (not cold & dark) flight the first officer works the landing / nose lights until you touch them
@@ -1717,7 +1925,7 @@ function renderRest(dt, night) {
   Walkaround.frame(dt * (W.timeAccel || 1), { foot, onFoot: W.onFoot, signedIn: W.signedIn, toast }); // [Walk-around preflight] checkpoint prompts + markers on the apron (inert unless a terminal departure armed it)
   StairsBus.frame(W.paused ? 0 : dt * (W.timeAccel || 1), { camera, exposure: sky.exposure, simTime: W.simTime, admitNext: () => { const c = cabinObj(); return c ? c.admitNext() : false; }, entered: () => { const c = cabinObj(); return c ? c.boardingInfo().entered : 0; }, outCount: () => { const c = cabinObj(); return c ? c.boarders.reduce((n, p) => n + (p.state === 'gone' ? 1 : 0), 0) : 0; }, loungeDown: () => { const f = foot.parts && foot.parts.term && foot.parts.term.flightPax; return f ? f.reduce((n, p) => n + (p.bp && p.bp.state === 'gone' ? 1 : 0), 0) : 0; } }); // [Stairs + bus] bus routes, stair climbs, deplane mirror (inert unless a charter flight set it up)
   CrewTalk.frame(dt * (W.timeAccel || 1), { crew, foot, onFoot: W.onFoot, hold: !W.signedIn }); // [Crew conversations] talk prompt on the apron + the pushback interphone beats; [Nothing starts until sign-in] hold: the interphone beats wait for the captain (on-foot crew talk is not held)
-  if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live)) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: !!fdm.belly && W.simTime - W.bellyT < 120 });
+  if (!W.menuMode && (rescue.g.visible || fdm.scrape > 0 || rescue.evac || sys.fire[0].on || sys.fire[1].on || rescue.sparks.live || rescue.smoke.live || rescue.flames.live || (W.damage && W.damage.smoke))) rescue.update(dt, aircraft, { scrape: fdm.scrape, fire: [sys.fire[0].on, sys.fire[1].on], ground, foamOn: W.foam, smoulder: (!!fdm.belly && W.simTime - W.bellyT < 120) || !!W.damage }); // [Hard landings] damage smoke rides the rescue emitters
   if (!W.menuMode && !W.onFoot) { updateUI(); updateParkPrompt(); }
 }
 // boarding / deplaning music in the cabin while parked with power on; ambient music in the terminal halls
@@ -1855,13 +2063,13 @@ function updateParkPrompt() {
   const el = $('#parkPrompt'); let txt = '';
   const gs = Math.hypot(fdm.vel.x, fdm.vel.z) / KT;
   if (W.parkedAt && !W.onFoot) txt = 'Enter  Stand up and walk out with the passengers';
-  else if (fdm.onGround && gs < 4 && !W.push && W.mode !== 'challenge' && fdm.td) { const st = nearestFreeStand(120); if (st) txt = st.remote ? 'Enter  Park on the apron and shut down' : 'Enter  Park at gate ' + (st.gateName || '') + ' and shut down'; } // [Charter apron] the remote stand is not a gate
+  else if (fdm.onGround && gs < 4 && !W.push && W.mode !== 'challenge' && fdm.td && !W.damage) { const st = nearestFreeStand(120); if (st) txt = st.remote ? 'Enter  Park on the apron and shut down' : 'Enter  Park at gate ' + (st.gateName || '') + ' and shut down'; } // [Charter apron] the remote stand is not a gate · [Hard landings] a damaged jet is never offered a gate
   if (el.textContent !== txt) el.textContent = txt; el.hidden = !txt;
 }
 function parkPromptAction() {
   if (keys.ShiftLeft || keys.ShiftRight) { if (W.taxiR && W.taxiR.pts && fdm.onGround) { W.autoTaxi = { pts: W.taxiR.pts.slice(1), i: 0, speed: 9 }; if (taxiLine) taxiLine.visible = true; toast('Auto-taxi engaged'); } return; }
   if (W.parkedAt && !W.onFoot) { enterFoot('arr'); return; }
-  const gs = Math.hypot(fdm.vel.x, fdm.vel.z) / KT; if (fdm.onGround && gs < 4 && fdm.td) { const st = nearestFreeStand(120); if (st) parkAtGate(st); }
+  const gs = Math.hypot(fdm.vel.x, fdm.vel.z) / KT; if (fdm.onGround && gs < 4 && fdm.td && !W.damage) { const st = nearestFreeStand(120); if (st) parkAtGate(st); }
 }
 
 // ---------------------------------------------------------------- UI
@@ -1977,10 +2185,32 @@ function bindFCU() {
 function ffSync() { const ff = $('#ffPanel'); if (!ff) return; const show = W.mode === 'free' && !W.menuMode; ff.hidden = !show; if (!show) return;
   const t = $('#ffTod'); if (t) { t.value = Math.round(W.tod / 5) * 5; $('#ffTodv').textContent = fmtTime(W.tod); }
   $$('#ffWx button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === W.wx))); }
-function togglePause() { if (!W.started || W.menuMode) return; const p = $('#pause'); p.hidden = !p.hidden; W.paused = !p.hidden; if (!p.hidden) ffSync(); }
-function toMenu() { foot.dispose(); disposeFlightCabin(); if (paOpen) togglePA(false); svcPanel.toggle(false); stand7.disarm(); sig.disarm(); W.onFoot = false; $('#foot').hidden = true; $('#radio').hidden = true; radioOpen = false; showTaxi(null); W.push = null; W.autoTaxi = null; crew.clear(); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { } $('#pause').hidden = true; W.paused = false; $('#flight').hidden = true; $('#menu').hidden = false; W.menuMode = true; startMenuScene(); }
+function togglePause() { if (!W.started || W.menuMode) return; const p = $('#pause'); p.hidden = !p.hidden; W.paused = !p.hidden; if (!p.hidden) { ffSync(); const qp = $('#quietPanel'); if (qp && qp._sync) qp._sync(); } }
+function toMenu() { foot.dispose(); disposeFlightCabin(); if (paOpen) togglePA(false); svcPanel.toggle(false); stand7.disarm(); sig.disarm(); W.onFoot = false; $('#foot').hidden = true; $('#radio').hidden = true; radioOpen = false; showTaxi(null); W.push = null; W.autoTaxi = null; crew.clear(); try { document.exitPointerLock && document.exitPointerLock(); } catch (e) { } $('#pause').hidden = true; W.paused = false; $('#flight').hidden = true; $('#menu').hidden = false; W.menuMode = true; startMenuScene(); applyPositionToMenu(); }
 
 // ---- menu
+// [Era Four 1d — Where You Left Her] position persistence. The save stays tiny:
+// store 'pos' = { icao, at (real epoch ms), tod }. The positioning courtesy is
+// the ONE named exception to the no-teleport law: between sessions/flights it
+// repositions the jet free and unscored, and records exactly ONE binary line in
+// store 'poslog'. Nothing here ever moves a parked in-session aeroplane.
+const POS_WX = ['clear', 'scattered', 'overcast', 'rain', 'snow', 'fog'];
+let _wxDriftTouched = false; // the player picked a weather explicitly — drift never overrides that
+let _wxDriftDays = 0; // days of drift already folded into the weather default (idempotent re-entry)
+function getPos() { const p = store.get('pos', null); if (!p || !p.icao) return null; const A = World.byIcao.get(p.icao); return A ? { icao: A.icao, at: p.at || 0, tod: p.tod || null, apt: A } : null; }
+function posDays(p) { if (!p || !p.at) return 0; return Math.min(7, Math.max(0, Math.floor((Date.now() - p.at) / 86400000))); } // [Forgiveness law] drift is capped at seven in-world days
+function writePos(icao) { store.set('pos', { icao, at: Date.now(), tod: W.tod != null ? fmtTime(W.tod) : null }); }
+function recordPositioning(fromIcao, toIcao) { if (!fromIcao || !toIcao || fromIcao === toIcao) return false; const pl = store.get('poslog', []); pl.unshift({ date: new Date().toISOString().slice(0, 10), from: fromIcao, to: toIcao }); store.set('poslog', pl.slice(0, 50)); store.set('pos', { icao: toIcao, at: Date.now(), tod: null }); return true; }
+function updatePosBtn() { const bar = $('#flybar'); if (!bar) return; let b = $('#posBtn'); const P = getPos(); const show = !!(P && sel.apt && P.icao !== sel.apt.icao);
+  if (!show) { if (b) b.hidden = true; return; }
+  if (!b) { b = document.createElement('button'); b.id = 'posBtn'; b.className = 'go ghost'; b.onclick = () => { const P2 = getPos(); if (P2 && sel.apt && recordPositioning(P2.icao, sel.apt.icao)) { flySum(); toast('Positioned: the jet is now at ' + sel.apt.icao + ' — free, as always.', 4000); } }; const fb = $('#fly'); if (fb && fb.parentNode === bar) bar.insertBefore(b, fb); else bar.appendChild(b); }
+  b.hidden = false; b.textContent = `Position the jet: ${P.icao} → ${sel.apt.icao} (free)`; }
+function applyPositionToMenu() { const P = getPos(); if (!P) return; selectAirport(P.apt, true);
+  // [Drift] the departure weather DEFAULT rotates deterministically by whole
+  // days sat (capped at 7) — defaults only: an explicit pick is never touched,
+  // time-of-day never changes, and there is no mechanical effect anywhere.
+  if (!_wxDriftTouched) { const d = posDays(P), delta = d - _wxDriftDays; if (delta !== 0) { const i = POS_WX.indexOf(sel.wx || 'clear'); if (i >= 0) { sel.wx = POS_WX[(((i + delta) % POS_WX.length) + POS_WX.length) % POS_WX.length]; $$('#wxSeg button').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.v === sel.wx))); } _wxDriftDays = d; } }
+  flySum(); }
 const featured = () => World.featured.map(i => World.byIcao.get(i)).filter(Boolean);
 function drawDiagram(cv, apt, selIdent, opts = {}) {
   const c = cv.getContext('2d'); const w = cv.width, h = cv.height; c.clearRect(0, 0, w, h);
@@ -2064,7 +2294,7 @@ function buildMenu() {
     for (const A of r) { const el = document.createElement('button'); el.innerHTML = `<span class="ic">${A.icao}</span><span class="ia">${A.iata || '—'}</span><span class="nm">${A.name}<small>${A.city ? A.city + ', ' : ''}${A.country}</small></span><span class="rw">${A.runways.length} RWY</span>`; el.onclick = () => { selectAirport(A); }; box.appendChild(el); } });
   $$('#nav button').forEach(b => b.onclick = () => { $$('#nav button').forEach(x => x.setAttribute('aria-current', x === b)); $$('#sheet .sec').forEach(s => s.hidden = s.dataset.sec !== b.dataset.sec); if (b.dataset.sec === 'logbook') renderLog(); if (b.dataset.sec === 'charter') renderContracts(); });
   const seg = (id, fn) => $$(`#${id} button`).forEach(b => b.onclick = () => { $$(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', x === b)); fn(b.dataset.v); });
-  seg('startSeg', v => sel.start = v); seg('wxSeg', v => sel.wx = v);
+  seg('startSeg', v => sel.start = v); seg('wxSeg', v => { sel.wx = v; _wxDriftTouched = true; }); // [Era Four 1d] an explicit weather pick retires the drift default for the session
   { const dq = $('#destQ'), dr = $('#destRes'); // destination picker (empty = automatic)
     dq.oninput = () => { const q = dq.value.trim(); if (!q) { sel.dest = null; destInfo(); } const r = q ? search(q, 8).map(x => World.byIcao.get(x.icao) || x).filter(D => D !== sel.apt) : []; dr.replaceChildren(); dr.hidden = !r.length;
       for (const D of r) { const b = document.createElement('button'), t = document.createElement('b'), m = document.createElement('small'); t.textContent = D.icao; m.textContent = [D.iata, D.city || D.name].filter(Boolean).join(' · '); b.append(t, m); b.onclick = () => { sel.dest = D; dq.value = D.icao + ' · ' + D.name; dr.hidden = true; destInfo(); }; dr.appendChild(b); } }; }
@@ -2095,7 +2325,12 @@ function buildMenu() {
   seg('chtrStartSeg', v => chtrStart = v);
   function renderContracts() {
     const list = $('#chtrList'); if (!list) return; const used = Charter.usedIds(); list.innerHTML = '';
-    for (const C of Charter.CONTRACTS) { const A = World.byIcao.get(C.from), B = World.byIcao.get(C.to); if (!A || !B) continue; const done = used.includes(C.id); const el = document.createElement('button'); el.className = 'item'; el.dataset.contract = C.id;
+    // [Era Four 1d] the board meets you where the jet is: contracts departing
+    // the jet's position sort first (stable otherwise) under a plain note.
+    // Nothing is locked or gated — sorting and the note only.
+    const P = getPos(); const cs = [...Charter.CONTRACTS].sort((a, b) => ((b.from === (P && P.icao)) ? 1 : 0) - ((a.from === (P && P.icao)) ? 1 : 0));
+    if (P && cs.some(C => C.from === P.icao)) { const h = document.createElement('div'); h.className = 'empty'; h.id = 'chtrPosNote'; h.textContent = `Waiting for you in ${P.apt.city || P.apt.name} — contracts departing ${P.icao} are listed first.`; list.appendChild(h); }
+    for (const C of cs) { const A = World.byIcao.get(C.from), B = World.byIcao.get(C.to); if (!A || !B) continue; const done = used.includes(C.id); const el = document.createElement('button'); el.className = 'item'; el.dataset.contract = C.id;
       el.innerHTML = `<div><h3>${C.title}</h3><p>${A.iata} → ${B.iata} · ${C.party} guests · ${C.occasion}</p></div><div class="best">${done ? 'Flown' : 'Guests'}<b>${done ? '✓' : C.party}</b></div>`;
       el.onclick = () => flyCharter(C); list.appendChild(el); }
   }
@@ -2110,10 +2345,12 @@ function buildMenu() {
   for (const ch of CHALLENGES) { const A = World.byIcao.get(ch.icao); if (!A) continue; const el = document.createElement('button'); el.className = 'item';
     el.innerHTML = `<div><h3>${ch.title}</h3><p>${ch.fail === 'v1' ? 'An engine fails at V1: keep it straight, fly the ECAM, declare MAYDAY and come back. ' : ch.fail === 'gear' ? 'The gear will not extend: try the gravity extension, brace, belly landing. ' : ''}${A.name} · Runway ${ch.end} · ${fmtTime(ch.tod)} · ${ch.wx} · wind ${String(ch.windFrom).padStart(3, '0')}°/${ch.windKt} kt${ch.gusts ? ' gusting' : ''}</p></div><div class="best">Best<b>${best[ch.id] ?? '—'}</b></div>`;
     el.onclick = () => { audio.start(); go({ apt: A, end: ch.end, start: ch.start || 'final', fail: ch.fail, finalNm: ch.finalNm, tod: ch.tod, wx: ch.wx, windFrom: ch.windFrom, windKt: ch.windKt, gusts: ch.gusts, mode: 'challenge', chId: ch.id, title: ch.title }); }; chl.appendChild(el); }
-  const rl = $('#rtList');
+  const rl = $('#rtList'); const routeEls = [];
   for (const r of ROUTES) { const A = World.byIcao.get(r.from), B = World.byIcao.get(r.to); if (!A || !B) continue; r.toApt = B; const d = haversine(A.lat, A.lon, B.lat, B.lon) / NM; const el = document.createElement('button'); el.className = 'item';
     el.innerHTML = `<div><h3>${r.title}</h3><p>${A.iata} → ${B.iata} · ${Math.round(d)} nm direct · cruise ${r.alt.toLocaleString()} ft · ${r.desc}</p></div><div class="best">Arrive<b>${r.end}</b></div>`;
-    el.onclick = () => { audio.start(); go({ apt: A, end: r.end, start: 'route', route: r, tod: r.tod, wx: r.wx, windFrom: 60, windKt: 8, mode: 'route', toApt: B }); }; rl.appendChild(el); }
+    el.onclick = () => { audio.start(); go({ apt: A, end: r.end, start: 'route', route: r, tod: r.tod, wx: r.wx, windFrom: 60, windKt: 8, mode: 'route', toApt: B }); }; routeEls.push({ el, from: r.from }); }
+  { const P = getPos(); if (P) routeEls.sort((a, b) => ((b.from === P.icao) ? 1 : 0) - ((a.from === P.icao) ? 1 : 0)); } // [Era Four 1d] routes departing the jet's position list first (stable otherwise)
+  for (const x of routeEls) rl.appendChild(x.el);
   // settings
   const setSeg = (id, key) => { $$(`#${id} button`).forEach(b => { b.setAttribute('aria-pressed', String(settings[key]) === b.dataset.v); b.onclick = () => { $$(`#${id} button`).forEach(x => x.setAttribute('aria-pressed', x === b)); settings[key] = b.dataset.v; store.set('settings', settings); applySettings(key); }; }); };
   setSeg('failRandSeg', 'failRand'); { const fp = $('#failPick'); fp.innerHTML = FAILS.map(f => `<option value="${f.id}">${f.label}</option>`).join(''); $('#failNow').onclick = () => { if (!W.started || W.menuMode) return toast('Start a flight first.'); const ok = fails.trigger(fp.value); toast(ok ? 'Failure triggered: ' + FAILS.find(f => f.id === fp.value).label : 'That failure is already active.'); if (W.paused && $('#pause') && !$('#pause').hidden) togglePause(); }; }
@@ -2143,6 +2380,14 @@ function buildMenu() {
   { const t = $('#ffTod'); if (t) t.oninput = () => { setTimeOfDay(+t.value); $('#ffTodv').textContent = fmtTime(+t.value); }; }
   $$('#ffWx button').forEach(b => b.onclick = () => { setWeather(b.dataset.v, W.windFrom, W.windKt, W.gust > 0); $$('#ffWx button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); canvas.focus(); });
   $$('#ffJump button').forEach(b => b.onclick = () => { $('#pause').hidden = true; W.paused = false; startFlight({ ...W.cfg, start: b.dataset.v, tod: W.tod, wx: W.wx, windFrom: W.windFrom, windKt: W.windKt }); });
+  // [Era Four 1e · the Quiet Rule] the per-flight radio-quiet toggle, created from
+  // JS like 1d's fly-bar button so index.html stays untouched. When set, NO offer
+  // fires this flight and nothing is recorded anywhere — peace is a setting the
+  // captain owns. It resets with every flight (startFlight clears W.offersQuiet).
+  { const qp = document.createElement('div'); qp.id = 'quietPanel'; qp.innerHTML = '<span class="eyebrow">Radio · the Quiet Rule</span><div class="field"><span class="lab">Sky offers this flight — at most one, in cruise only</span><div class="seg" id="quietSeg"><button data-v="on">Offers on</button><button data-v="off">Radio quiet</button></div></div>';
+    const dlg = document.querySelector('#pause .dialog'), ffEl = $('#ffPanel'); if (dlg) { if (ffEl) dlg.insertBefore(qp, ffEl); else dlg.appendChild(qp); }
+    const syncQ = () => $$('#quietSeg button').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.v === 'off') === !!W.offersQuiet))); qp._sync = syncQ; syncQ();
+    $$('#quietSeg button').forEach(b => b.onclick = () => { W.offersQuiet = b.dataset.v === 'off'; syncQ(); toast(W.offersQuiet ? 'Radio quiet — the sky will hold its peace this flight.' : 'Offers on — the sky may speak once, in cruise.'); canvas.focus(); }); }
   $('#pHelp').onclick = () => { $('#help').hidden = false; }; $('#helpClose').onclick = () => { $('#help').hidden = true; };
   $('#pSet').onclick = () => { $('#pause').hidden = true; W.paused = false; toMenu(); $('#nav button[data-sec=settings]').click(); };
   bindFCU();
@@ -2154,6 +2399,7 @@ function buildMenu() {
   $('#pMusic').onclick = () => { settings.music = settings.music === false; store.set('settings', settings); applySettings('music'); toast('Boarding music ' + (settings.music ? 'on' : 'off')); };
   $('#pMusicVol').oninput = () => { settings.musicVol = +$('#pMusicVol').value; store.set('settings', settings); applySettings('musicVol'); }; syncMusicUI();
   selectAirport(World.byIcao.get('KTPA'), true);
+  applyPositionToMenu(); // [Era Four 1d] …unless the jet is somewhere else: then the menu opens where she sits (KTPA stays the fallback on any problem)
 }
 function syncMusicUI() { const b = $('#pMusic'), r = $('#pMusicVol'); if (b) b.setAttribute('aria-pressed', String(settings.music !== false)); if (r) r.value = settings.musicVol; for (const [id, k] of [['music', 'music'], ['termMusic', 'termMusic']]) { const el = $('#' + id); if (el) el.checked = settings[k] !== false; } const mv = $('#musicVol'); if (mv) mv.value = settings.musicVol; }
 function applySettings(key) {
@@ -2174,10 +2420,15 @@ function destInfo() { const el = $('#destInfo'); if (!el) return; const A = sel.
 function flySum() { const el = $('#flysum'); if (!el) return; const A = sel.apt; if (!A) { el.textContent = ''; return; }
   const D = sel.dest && sel.dest !== A ? sel.dest : autoDest(A);
   const head = `FLY — <b>${A.icao}${sel.end ? ' ' + sel.end : ''}${D ? ' → ' + D.icao : ''}</b>`;
-  if (!D) { el.innerHTML = head; return; }
+  // [Era Four 1d] the summary names where the aeroplane actually is, factually:
+  // here (with how long she has sat, capped at 7 days) or at another field.
+  const P = getPos(); let posTxt = '';
+  if (P) { if (P.icao === A.icao) { const d = posDays(P); posTxt = ' · your aircraft is here' + (d > 0 ? ` · sat here ${d} day${d === 1 ? '' : 's'}` : ''); } else posTxt = ` · your aircraft is at ${P.icao}${P.apt.city ? ' — ' + P.apt.city : ''}`; }
+  if (!D) { el.innerHTML = head + posTxt; updatePosBtn(); return; }
   const nm = Math.round(haversine(A.lat, A.lon, D.lat, D.lon) / 1852);
-  el.innerHTML = `${head} · ${nm} NM · ${fmtEte(Math.round(18 + nm / 450 * 60))}`;
+  el.innerHTML = `${head} · ${nm} NM · ${fmtEte(Math.round(18 + nm / 450 * 60))}${posTxt}`;
   const fb = $('#fly'); if (fb && fb.lastChild && fb.lastChild.nodeType === 3) fb.lastChild.textContent = ` FLY — ${A.icao} → ${D.icao}`;
+  updatePosBtn();
 }
 function selectAirport(A, quiet) {
   if (!A) return; sel.apt = A; const g = airportGeometry(A); destInfo();
@@ -2206,8 +2457,17 @@ function renderLog() {
   const log = store.get('log', []); const body = $('#logBody');
   const letters = Stories.lettersHtml(); // [Stories era] the Letters section lives under the flights table
   const charterBook = Charter.charterBookHtml(); // [Private charter] and the Charter Book under that (its own storage — Clear logbook never touches it, like the Letters)
-  if (!log.length && !letters && !charterBook) { body.innerHTML = '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>'; return; }
-  body.innerHTML = (!log.length ? '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' : '') + (log.length ? `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>${l.planned ? `<tr class="amendrow"><td colspan="8" style="color:var(--mute)">Planned ${l.planned} · Flown ${l.flown} · amended in the air (${(l.amends || []).join(', ')})${l.trustAmend ? ' · Trust: amended in the air, arrived as amended' : ''}</td></tr>` : ''}`).join('')}</tbody></table></div>` : '') + letters + charterBook;
+  // [Era Four 1c] the Fields record: every field ever touched down at, stamped
+  // on first visit. Factual rows only; featured fields carry their ✦ and the
+  // plain words "featured field" — no authored prose is invented for a field.
+  const fieldsMap = store.get('fields', {}); const fieldKeys = Object.keys(fieldsMap).sort();
+  const fieldsHtml = fieldKeys.length ? `<div style="margin-top:18px"><h3 style="margin:0 0 6px">Fields</h3><div style="overflow-x:auto"><table class="log"><thead><tr><th>Field</th><th>City</th><th>First visited</th><th></th></tr></thead><tbody>${fieldKeys.map(k => { const f = fieldsMap[k]; return `<tr><td>${k}</td><td>${f.city || f.name || ''}</td><td>${f.d}</td><td>${f.featured ? '✦ featured field' : ''}</td></tr>`; }).join('')}</tbody></table></div></div>` : '<div style="margin-top:18px;color:var(--mute)">Fields — land somewhere new and it will be stamped here.</div>';
+  // [Era Four 1d] the positioning courtesy's single quiet lines — one per
+  // repositioning, muted, factual, never scored or judged.
+  const poslog = store.get('poslog', []);
+  const posHtml = poslog.length ? `<div style="margin-top:14px">${poslog.map(p => `<div style="color:var(--mute)">Positioned ${p.from} → ${p.to} · ${p.date}</div>`).join('')}</div>` : '';
+  if (!log.length && !letters && !charterBook && !poslog.length) { body.innerHTML = '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' + fieldsHtml; return; }
+  body.innerHTML = (!log.length ? '<div class="empty">No flights logged yet. Land anywhere and your touchdown is scored and saved here.</div>' : '') + (log.length ? `<div style="overflow-x:auto"><table class="log"><thead><tr><th>Date</th><th>Mode</th><th>Airport</th><th>Rwy</th><th>Rate</th><th>Score</th><th>Grade</th><th>Wx · time</th></tr></thead><tbody>${log.map(l => `<tr><td>${l.date}</td><td>${l.mode}</td><td>${l.apt}</td><td>${l.rwy}</td><td>${l.fpm} fpm</td><td>${l.score}</td><td class="grade" style="color:${l.score >= 82 ? 'var(--green)' : l.score >= 55 ? 'var(--amber)' : 'var(--red)'}">${l.grade}</td><td>${l.wx} · ${l.tod}</td></tr>${l.planned ? (l.unplanned ? `<tr class="amendrow"><td colspan="8" style="color:var(--mute)">Planned ${l.planned} · Flown ${l.flown} · arrived as flown</td></tr>` : `<tr class="amendrow"><td colspan="8" style="color:var(--mute)">Planned ${l.planned} · Flown ${l.flown} · amended in the air (${(l.amends || []).join(', ')})${l.trustAmend ? ' · Trust: amended in the air, arrived as amended' : ''}</td></tr>`) : ''}`).join('')}</tbody></table></div>` : '') + letters + charterBook + fieldsHtml + posHtml;
 }
 async function go(cfg) {
   $('#menu').hidden = true; $('#flight').hidden = false; W.menuMode = false; W.paused = false;
@@ -2215,8 +2475,13 @@ async function go(cfg) {
   await startFlight(cfg); canvas.focus();
 }
 async function startMenuScene() {
-  const A = World.byIcao.get('KTPA'); W.menuMode = true;
-  await startFlight({ apt: A, end: '19L', start: 'runway', tod: 1075, wx: 'scattered', windFrom: 200, windKt: 6, menu: true });
+  // [Era Four 1d] the menu scene follows the jet when it can: the position
+  // airport on its longest runway end. KTPA/'19L' remains the fallback for a
+  // missing position or any failure in resolving the field.
+  const P = getPos(); const A = (P && P.apt) || World.byIcao.get('KTPA'); W.menuMode = true;
+  let end = '19L';
+  if (A.icao !== 'KTPA') { try { const E0 = airportGeometry(A).ends.filter(e => e.ident).sort((a, b) => b.length - a.length)[0]; if (E0) end = E0.ident; } catch (e) { } }
+  await startFlight({ apt: A, end, start: 'runway', tod: 1075, wx: 'scattered', windFrom: 200, windKt: 6, menu: true });
   W.menuMode = true; setView('orbit'); orbit.yaw = 205; orbit.pitch = 9; orbit.dist = 58;
   $('#menu').hidden = false; $('#flight').hidden = true;
 }
@@ -2286,7 +2551,12 @@ window.__sim = {
   stairsbus: () => StairsBus.state(), // [Stairs + bus] bus/stairs/walker state for tests
   stand7: () => stand7.state(), // [Home Field 1a] the conducted ramp sequence at KTPA Stand 7
   signature: () => sig.state(), // [Home Field 1b] the load sheet: units, needle, signature, Trust stamps, FDM binding
-  amend: () => ({ amendApt: atc.amendApt?.icao || null, amendedFrom: atc.amendedFrom?.icao || null, pick: atc.amendPick ? atc.amendPick.map(x => x.apt.icao) : null, offerState: atc.offerState, offerApt: atc.offerApt?.icao || null, ghost: nav.ghost?.icao || null, record: W.amend ? { filed: W.amend.filed.icao, list: W.amend.list.map(a => ({ ...a })) } : null }), // [Era Four 1a] amend state + offer state + the planned-vs-flown record, for the harness
+  amend: () => ({ amendApt: atc.amendApt?.icao || null, amendedFrom: atc.amendedFrom?.icao || null, pick: atc.amendPick ? atc.amendPick.map(x => x.apt.icao) : null, offerState: atc.offerState, offerApt: atc.offerApt?.icao || null, offerKind: atc.offerKind || null, offersQuiet: !!W.offersQuiet, ghost: nav.ghost?.icao || null, record: W.amend ? { filed: W.amend.filed.icao, list: W.amend.list.map(a => ({ ...a })) } : null }), // [Era Four 1a] amend state + offer state + the planned-vs-flown record, for the harness
+  arrive: () => ({ unplanned: W.unplanned ? { ...W.unplanned } : null, arrivalApt: W.arrivalApt?.icao || null, fields: store.get('fields', {}), parkedAt: W.parkedAt ? (W.parkedAt.gateName || null) : null, synthStand: !!W._synthStand, primaryCls: W.primary?.b?.ground?.cls || null }), // [Era Four 1c] unplanned-arrival record, Fields stamps and parking state, for the harness
+  persist: () => ({ pos: store.get('pos', null), poslog: store.get('poslog', []), sel: sel.apt ? sel.apt.icao : null, selEnd: sel.end, flysum: ($('#flysum') && $('#flysum').textContent) || '', posBtn: $('#posBtn') ? { hidden: $('#posBtn').hidden, text: $('#posBtn').textContent } : null, wx: sel.wx || 'clear', chtrFirst: ($('#chtrList .item') && $('#chtrList .item').dataset.contract) || null, chtrNote: ($('#chtrPosNote') && $('#chtrPosNote').textContent) || null, rtFirst: ($('#rtList .item h3') && $('#rtList .item h3').textContent) || null, stand: W.stand ? W.stand.gateName : null }), // [Era Four 1d] saved position, courtesy log, menu selection + flybar state, for the harness
+  damage: () => (W.damage ? { ...W.damage, trucks: rescue.trucks.map(t => ({ parked: t.parked, d: Math.round(t.obj.position.distanceTo(fdm.pos)) })), fireSys: [sys.fire[0].on, sys.fire[1].on], evac: !!W.evac, tripDone: W.tripDone, resultHidden: $('#result').hidden, crashed: fdm.crashed, gearDamage: fdm.gearDamage } : null), // [Hard landings] damage tier, responder staging, fire state and the no-popup verdict, for the harness
+  hardLand(fpm) { // [Hard landings] harness driver: arm the NEXT touchdown's sink rate is NOT faked here — this only reports the tier a given fpm would earn; the checks fly/craft real touchdowns through fdm.td
+    return hardTierFor(fpm); },
   taxiLineVis: () => !!(taxiLine && taxiLine.visible), // [Playtest fixes Nov 14] test hook: is the magenta taxi route line rendering?
   footState() { return { onFoot: W.onFoot, tag: W.onFoot ? foot.zoneTag() : '', prompt: foot.prompt, boarding: !!foot.boarding, boarded: !!foot.boardingDone, pos: foot.pos.toArray().map(v => +v.toFixed(2)) }; },
   footWalk(which, sec = 90) { foot.autoWalk(which === 'out' ? foot.routeOut : foot.routeToCockpit); const n = Math.round(sec * 30); let i = 0; for (; i < n && foot.auto; i++) foot.update(1 / 30, { fwd: 0, side: 0, dyaw: 0, dpitch: 0 }, sky.exposure); return { steps: i, done: !foot.auto, tag: foot.zoneTag(), distSeat: +foot.pos.distanceTo(foot.seat).toFixed(2) }; },
@@ -2308,6 +2578,7 @@ window.__sim = {
     const base = o.hall ? Math.atan2(-t.zAxis.x, -t.zAxis.z) : 0; if (o.yaw != null) foot.yaw = base + o.yaw; if (o.pitch != null) foot.pitch = o.pitch; foot.bodyYaw = o.body != null ? base + o.body : foot.yaw; if (o.dist) foot.camDist = o.dist;
     foot.vel.set(0, 0, 0); foot.camE = 9; for (let i = 0; i < (o.steps ?? 12); i++) foot.update(1 / 30, { fwd: o.fwd || 0, side: 0, run: !!o.run, dyaw: 0, dpitch: 0 }, sky.exposure); return { ...this.footCam(), tag: foot.zoneTag(), cam: camera.position.toArray().map(v => +v.toFixed(2)) }; },
   radio(v) { toggleRadio(v); return atc.options().map(o => o.id); },
+  reach: () => reachInfo(), setOffersQuiet: v => { W.offersQuiet = !!v; return W.offersQuiet; }, // [Era Four 1e] honest reach + the radio-quiet setting, for the harness
   fingersState() { return fingers ? fingers.snapshot() : null; }, // [FINGERS S1] harness hooks: state, the in-range list, hail + free-typed say
   fingersList() { return fingers ? fingers.inRange().map(a => ({ cs: a.cs || null, kind: a.kind, phase: a.phase, type: a.type && a.type[0], distNm: +a.distNm.toFixed(1), clock: a.clock, dAltFt: Math.round(a.dAltFt), busy: !!a.busyNearField })) : []; },
   fingersHail(i = 0) { if (!fingers) return null; const a = fingers.inRange()[i]; return a ? fingers.hail(a) : { ok: false, why: 'no-range' }; },

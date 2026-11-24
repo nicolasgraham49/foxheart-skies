@@ -435,7 +435,7 @@ export function buildAirport(apt, opts) {
     // reads alive from the first frame. R() is consumed exactly as before, so every
     // other airport's scenery stream is untouched.
     const homeRow = apt.icao === 'KTPA' && (i === 6 || i === 8);
-    if (full && sceneryN < sceneryCap && ((R() < 0.72 && i % 7 !== 3) || homeRow) && !(apt.icao === 'KTPA' && i === 7)) { sceneryN++; st.used = true; const p = { x: standP.x - nx * 2, z: standP.z - nz * 2, rot: Math.atan2(nx, nz), liv: (R() * TRAFFIC_LIVERIES.length) | 0, var: pickTrafficVariant(R()), s: apt.large && R() < 0.3 ? 1.35 : 1 }; st.parkS = p.s; parked.push(p); }
+    if (full && sceneryN < sceneryCap && ((R() < 0.72 && i % 7 !== 3) || homeRow) && !(apt.icao === 'KTPA' && i === 7)) { sceneryN++; st.used = true; const p = { x: standP.x - nx * 2, z: standP.z - nz * 2, rot: Math.atan2(nx, nz), liv: (R() * TRAFFIC_LIVERIES.length) | 0, var: pickTrafficVariant(R()), s: (apt.large && R() < 0.3, 1) }; st.parkS = p.s; parked.push(p); } // [Scale fix Nov 23] p.s is always 1 now (see the parked literal): the old 1.35 factor at large airports inflated the narrowbody traffic mesh 35% past its own class (50.9 m long / 46.7 m span vs the player's same-class 37.7 m / 36.1 m)
   }
   if (full && parked.length) {
     // parked fleet: one InstancedMesh trio (body / livery parts / glass) per airframe variant;

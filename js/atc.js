@@ -180,7 +180,7 @@ export class ATC {
   setup(o) {
     this.o = o; this.dep = o.dep; this.arr = o.arr || o.dep; this.stopAtis(); this.log = []; this.queue = []; this.tx = null; this.gapT = 0;
     this.hold = false; this.rb = null; this.ho = null; this.alt = null; this.hdgA = null; this.spdA = null; this.flags = {}; this.heard = {}; this.contacted = new Set(); this.personas = {}; this.lastInstr = null; this.taxiRoute = null; this.exitName = null; this.minAgl = 1e9; this.chatT = 14; this.chatLog = []; this.phT = 0; this.divertApt = null; this.divertedFrom = null;
-    this.amendApt = null; this.amendedFrom = null; this.amendPick = null; this.offerState = 'armed'; this.offerApt = null; // [Era Four 1a · Amend] the re-plan verb's state + the one scripted offer (Quiet Rule)
+    this.amendApt = null; this.amendedFrom = null; this.amendPick = null; this.offerState = 'armed'; this.offerApt = null; this.offerKind = null; // [Era Four 1a · Amend] the re-plan verb's state + the one scripted offer (Quiet Rule) · [1e] offerKind names which authored entry fired ('corridor' | 'company' | 'relay' | 'extra')
     let sq; do { sq = String(2 + (Math.random() * 5 | 0)) + [0, 0, 0].map(() => Math.random() * 8 | 0).join(''); } while (/^(2000|7000|1200)$/.test(sq)); this.squawk = sq;
     const dep = this.dep, arr = this.arr, d = gcNm(dep.lat, dep.lon, arr.lat, arr.lon), crs = gcBrg(dep.lat, dep.lon, arr.lat, arr.lon);
     let cr = Math.max(8000, Math.min(37000, Math.round(d * 1.4 / 10) * 1000)); if (((cr / 1000) % 2 === 1) !== (crs < 180)) cr += cr >= 37000 ? -1000 : 1000; // semicircular rule: eastbound odd, westbound even
@@ -637,8 +637,8 @@ export class ATC {
       case 'amend': return this.requestAmendPick();
       case 'amend_back': this.amendPick = null; this.emit(); return;
       case 'offer_accept': { const A = this.offerApt; this.offerState = 'done'; this.offerApt = null; if (A) this.requestAmend(A); this.emit(); return; }
-      case 'offer_decline': this.offerState = 'done'; this.offerApt = null; this.me(this.curK(), M('Staying with the plan, thank you, ', CS, '.')); this.emit(); return; // declining leaves no trace — no record, no repeat
-      case 'offer_quiet': this.offerState = 'quiet'; this.offerApt = null; this.emit(); return; // the Quiet Rule: silencing is free and is never recorded
+      case 'offer_decline': this.offerState = 'done'; this.offerApt = null; this.offerKind = null; this.me(this.curK(), M('Staying with the plan, thank you, ', CS, '.')); this.emit(); return; // declining leaves no trace — no record, no repeat
+      case 'offer_quiet': this.offerState = 'quiet'; this.offerApt = null; this.offerKind = null; this.emit(); return; // the Quiet Rule: silencing is free and is never recorded
       case 'ils': { const re = c.arrEnd(), lgI2 = this.pilotLangFor(this.arr), CPI = this.CPL(lgI2), RI = this.rwyL(re.ident, lgI2); this.me('APP', this.tagL(lgI2 === 'es' ? M(this.fac('APP').name, ', ', CPI, ', solicito aproximación I L S a la pista ', this.rwyEsM(re.ident), '.') : lgI2 === 'ko' ? M(this.fac('APP').name, ', ', CPI, ', I L S 활주로 ', RI, ' 접근을 요청합니다.') : lgI2 === 'ja' ? M(this.fac('APP').name, '、', CPI, '、I L S 滑走路 ', RI, ' アプローチをリクエストします。') : M(this.fac('APP').name, ', ', CS, ', request the I L S runway ', this.rwyM(re.ident), '.'), lgI2)); this.atc('APP', M(CS, ', roger, expect vectors for the I L S runway ', this.rwyM(re.ident), '.'), 1.6, null, { reply: true }); this.flags.ilsReq = true; return; }
     }
   }
@@ -874,7 +874,16 @@ export class ATC {
       // [Era Four 1a · the Quiet Rule] the one scripted offer: settled cruise only,
       // well out from the destination, nothing else pending (follow() reaches here
       // only on a quiet frequency). Seeded on the Tampa–Miami corridor in 1a.
-      if (this.offerState === 'armed' && this.dep && this.dep.icao === 'KTPA' && this.arr && this.arr.icao === 'KMIA' && !this.amendApt && !this.divertApt && !this.amendPick && !this.flags.desc && this.t - this.phT > 45 && s.distArrNm > 55 && s.altFt > this.bottom + 1500) this.fireOffer();
+      // [Era Four 1e · The Sky Offers] the SAME gates now guard the whole authored
+      // deck: the corridor keeps its 1a offer verbatim; any other route longer
+      // than ~120 NM draws its one authored entry (fireDeckOffer). The per-flight
+      // radio-quiet setting silences everything — no offer fires, nothing is
+      // recorded. Once offerState leaves 'armed' it never re-arms this flight:
+      // at most one offer per flight is structural, not a counter.
+      if (this.offerState === 'armed' && this.dep && this.arr && !this.amendApt && !this.divertApt && !this.amendPick && !this.flags.desc && this.t - this.phT > 45 && s.distArrNm > 55 && s.altFt > this.bottom + 1500 && !(c.offersQuiet && c.offersQuiet())) {
+        if (this.dep.icao === 'KTPA' && this.arr.icao === 'KMIA') this.fireOffer();
+        else if (gcNm(this.dep.lat, this.dep.lon, this.arr.lat, this.arr.lon) > 120) this.fireDeckOffer();
+      }
     }
     // approach: vectors, then the ILS clearance; tower handoff once established
     if (p === 'app' && !this.rb) {
@@ -1090,6 +1099,37 @@ export class ATC {
     this.atc('CTR', M(CS, ', amended clearance approved, direct ', fix ? [fix.id, twyS(fix.id)] : this.city(A), ' when ready, expect the I L S at ', this.city(A), '.'), 1.2, null,
       { reply: true, rb: { label: 'amended to ' + A.icao, m: M('Amended to ', this.city(A), ', direct when ready, ', CS, '.'), mEs: M('Destino cambiado a ', this.city(A), ', directo cuando estemos listos, ', CPS, '.'), fcu: { hdg: brg }, then: () => this.assignHdg(null) } });
   }
+  // [Era Four 1c · Arrive Anywhere] arriveHere(A): the captain is landing at a
+  // field that is not the current arrival target, so that field BECOMES the
+  // arrival — silently. No transmissions, no amend record, no PA: this is not
+  // a re-plan the captain asked ATC for, it is the arrival flow catching up
+  // with where the aeroplane actually is. State re-arm mirrors restoreDivert
+  // (setArr + appAlt/bottom + arrival flags + ctrApt), with phase handling for
+  // wherever the flight currently is: enroute phases take the quiet CTR
+  // handoff to the new field; an approach/tower phase is left alone (the
+  // vacate trigger now measures distance to the new arr); on the ground the
+  // flow goes straight to to_gnd with the exit named, so the pilot's GND
+  // taxi request works at the field he actually landed at.
+  arriveHere(A) {
+    const c = this.o?.ctx; if (!c || !A) return false;
+    if (A === this.arr) { // already the target (the approach anointment got here first): the only
+      // repair left is the ground phase — if the aeroplane is down while the flow is still in an
+      // enroute phase, put it on the ground flow so the GND taxi request works here too.
+      const s0 = this.ctxS();
+      if (s0.onGround && !ARR_TWR.has(this.phase) && !['app', 'to_gnd', 'taxi_in', 'parked', 'emer_gnd'].includes(this.phase)) { const ex = c.exitInfo ? c.exitInfo() : { name: null }; this.exitName = ex.name; this.rb = null; this.ho = { to: 'GND', from: 'TWR', apt: A, t: this.t, n: 0, skipBye: true, quiet: true }; this.setPhase('to_gnd'); this.emit(); return true; }
+      return false; }
+    c.setArr && c.setArr(A); this.arr = A;
+    this.appAlt = Math.max(2000, r100(A.elevFt + 3000));
+    this.bottom = Math.min(this.cruise, Math.round((A.elevFt + (this.ta(A) >= 10000 ? 11000 : 7000)) / 1000) * 1000);
+    this.rb = null;
+    Object.assign(this.flags, { appClr: false, desc: false, vecT: 0, advise: false, gaCmd: false, twrCall: false, vacate: false });
+    this.ctrApt = A;
+    const s = this.ctxS();
+    if (s.onGround) { const ex = c.exitInfo ? c.exitInfo() : { name: null }; this.exitName = ex.name; this.ho = { to: 'GND', from: 'TWR', apt: A, t: this.t, n: 0, skipBye: true, quiet: true }; this.setPhase('to_gnd'); }
+    else if (ARR_TWR.has(this.phase) || this.phase === 'app') { /* already in the arrival flow: leave the phase — distance checks now read the new arr */ }
+    else if (!['taxi_in', 'parked', 'to_gnd', 'emer_gnd'].includes(this.phase)) { this.ho = { to: 'CTR', from: 'CTR', apt: A, t: this.t, n: 0, skipBye: true, quiet: true }; this.flags.sector = true; this.setPhase('to_ctr'); }
+    this.emit(); return true;
+  }
   // [Era Four 1a · the Quiet Rule] exactly one scripted offer per flight, on the
   // Tampa–Miami corridor in this slice: Center relays a company suggestion during
   // settled cruise (follow() only calls this on a quiet frequency). Accepting runs
@@ -1100,10 +1140,45 @@ export class ATC {
     const charter = !!(c.isCharter && c.isCharter());
     const A = c.aptByIcao && c.aptByIcao(charter ? 'KORL' : 'KSFB');
     if (!A || A === this.arr) { this.offerState = 'done'; return; }
-    this.offerApt = A; this.offerState = 'sent';
+    this.offerKind = 'corridor'; this.offerApt = A; this.offerState = 'sent';
     const msg = charter
       ? M(CS, ', company relay for you. Your client\'s meeting has moved to Orlando — ', this.city(A), ' is ready when you are. Amend if you wish, or stay with the plan; entirely your call.')
       : M(CS, ', company message. Miami arrivals are backing up; company offers ', this.city(A), ' instead — a gate and coaches for your passengers are arranged. Amend if you wish, or stay with Miami; entirely your call.');
+    this.atc('CTR', msg, 0.8, () => { if (this.offerState === 'sent' && !this.amendApt && !this.divertApt) { this.offerState = 'pending'; this.emit(); } });
+  }
+  // [Era Four 1e · The Sky Offers] the authored deck beyond the corridor. The
+  // deck grows at authoring speed, not systems speed: these are WRITTEN entries,
+  // one per kind, voiced once — there is no template generator behind them.
+  // Which entry a flight draws is deterministic (a hash of dep+arr+mode), so
+  // the same flight always hears the same offer. Targets come from the sim's
+  // own suitability machinery (the divert standard), never invented: a company
+  // alternate near the destination (congestion/company framing — the sim's
+  // weather is global, so no per-airport destination weather is claimed), a
+  // medical relay at the nearest suitable field, or a client's extra leg at a
+  // suitable field near the route. Accepting runs the 1a amend; declining or
+  // quieting leaves no trace, exactly as the corridor offer always has.
+  fireDeckOffer() {
+    const c = this.o.ctx, CS = this.CSm();
+    const charter = !!(c.isCharter && c.isCharter());
+    let h = 0; const seed = this.dep.icao + '>' + this.arr.icao + '>' + (charter ? 'charter' : 'commercial');
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    let A = null, kind = null, msg = null;
+    if (!charter) {
+      kind = 'company';
+      A = c.nearDestAlt ? c.nearDestAlt(this.arr, this.dep) : null;
+      if (A) msg = M(CS, ', company message. ', this.city(this.arr), ' arrivals are backing up; company suggests ', this.city(A), ' (', A.icao, ') instead — a gate and coaches for your passengers are arranged. Amend if you wish, or stay with ', this.city(this.arr), '; entirely your call.');
+    } else if (h % 2 === 0) {
+      kind = 'relay';
+      const dv = c.divert && c.divert();
+      A = dv && dv.apt && dv.apt !== this.arr ? dv.apt : null;
+      if (A) msg = M(CS, ', Center relay for you. A patient at ', this.city(A), ' (', A.icao, ') is waiting to be collected, and your aeroplane is the closest that can help — ', this.city(A), ' is ready when you are. Amend if you wish, or stay with the plan; entirely your call.');
+    } else {
+      kind = 'extra';
+      A = c.nearSuitable ? c.nearSuitable((this.dep.lat + this.arr.lat) / 2, (this.dep.lon + this.arr.lon) / 2, [this.dep.icao, this.arr.icao]) : null;
+      if (A) msg = M(CS, ', company relay for you. Your client\'s plans have changed — they would like an extra stop at ', this.city(A), ' (', A.icao, ') on the way. Amend if you wish, or stay with the plan; entirely your call.');
+    }
+    if (!A || A === this.arr) { this.offerState = 'done'; return; } // no honest target: the sky stays silent rather than inventing one
+    this.offerKind = kind; this.offerApt = A; this.offerState = 'sent';
     this.atc('CTR', msg, 0.8, () => { if (this.offerState === 'sent' && !this.amendApt && !this.divertApt) { this.offerState = 'pending'; this.emit(); } });
   }
   cancelEmer() {

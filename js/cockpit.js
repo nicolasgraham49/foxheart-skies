@@ -131,6 +131,19 @@ export class Displays {
     c.save(); c.beginPath(); c.arc(cx, cy, R + 2, Math.PI * 1.08, Math.PI * 1.92); c.lineTo(cx, cy); c.closePath(); c.rect(0, 380, 512, 132); c.clip();
     // range rings
     c.strokeStyle = 'rgba(255,255,255,0.5)'; c.lineWidth = 1.5; c.setLineDash([6, 8]); c.beginPath(); c.arc(cx, cy, R / 2, Math.PI, 2 * Math.PI); c.stroke(); c.setLineDash([]);
+    // [Era Four 1e · The Sky Offers] the honest reach ring: how far the fuel in
+    // the tanks actually reaches from here — computed in main.js from the fdm's
+    // own burn model (signed load's burn factor included), a 45-minute reserve
+    // held back, at the current groundspeed. The nearest suitable alternates
+    // ride along: filled when the tanks reach them, hollow and dim when they
+    // don't. The display never promises more than the fuel carries.
+    if (S.reach && S.reach.nm > 1) { const rr = S.reach.nm * 1852 * sc;
+      c.strokeStyle = 'rgba(120,220,160,0.55)'; c.lineWidth = 1.5; c.setLineDash([10, 7]); c.beginPath(); c.arc(cx, cy, rr, 0, 7); c.stroke(); c.setLineDash([]);
+      if (rr <= R) tryLabel('RCH ' + Math.round(S.reach.nm), cx + 4, cy - rr - 6, 'rgba(120,220,160,0.9)', 11);
+      for (const a of S.reach.alts) { const [x, y] = P(a.x, a.z); if (Math.hypot(x - cx, y - cy) > R || y > cy) continue;
+        if (a.inReach) { c.fillStyle = 'rgba(120,220,160,0.95)'; c.beginPath(); c.arc(x, y, 4, 0, 7); c.fill(); }
+        else { c.strokeStyle = 'rgba(210,210,210,0.4)'; c.lineWidth = 1.5; c.beginPath(); c.arc(x, y, 3.5, 0, 7); c.stroke(); }
+        tryLabel(a.icao, x + 7, y + 3, a.inReach ? 'rgba(120,220,160,0.95)' : 'rgba(210,210,210,0.45)', 11); } }
     // every airport in range as a dot (navmap feed from main.js): the quiet
     // alternates a pilot glances at; built airports are skipped here — they
     // get real runways + a label in the airport pass below
